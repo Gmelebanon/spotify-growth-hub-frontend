@@ -69,10 +69,8 @@ const releases = [
 
 export default function LoginPage() {
   const router = useRouter();
-
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [remember] = useState(true);
 
   useEffect(() => {
     if (isLoggedIn()) {
@@ -83,7 +81,7 @@ export default function LoginPage() {
   }, [router]);
 
   const handleLogin = () => {
-    const success = loginUser(username, password, remember);
+    const success = loginUser(username, password, true);
 
     if (success) {
       document.cookie =
@@ -95,76 +93,71 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#050707] px-6 py-10 text-white">
-      <div className="mx-auto max-w-[1300px]">
-        <div className="relative mb-12">
-          <header className="text-center">
-            <div className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-[#00ff99]">
-              NERD MUSIC
-            </div>
-            <h1 className="text-5xl font-bold tracking-[-0.06em] md:text-7xl">
-              Latest Releases
-            </h1>
-          </header>
-
-          <div className="mt-6 flex justify-center gap-3 md:absolute md:right-0 md:top-0 md:mt-0">
-            <input
-              type="text"
-              placeholder="Username"
-              className="h-10 w-36 rounded-lg bg-[#151b1b] px-3 text-sm outline-none ring-1 ring-white/10 focus:ring-[#00ff99]"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-
-            <input
-              type="password"
-              placeholder="Password"
-              className="h-10 w-36 rounded-lg bg-[#151b1b] px-3 text-sm outline-none ring-1 ring-white/10 focus:ring-[#00ff99]"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleLogin();
-              }}
-            />
-
-            <button
-              onClick={handleLogin}
-              className="h-10 rounded-lg bg-[#00ff99] px-5 text-sm font-bold text-black transition hover:opacity-90"
-            >
-              Login
-            </button>
-          </div>
+    <main className="min-h-screen bg-[#020505] text-white">
+      <nav className="sticky top-0 z-20 flex items-center justify-between border-b border-white/10 bg-[#050707]/90 px-10 py-4 backdrop-blur-xl">
+        <div className="text-sm font-black uppercase tracking-[0.3em] text-[#00ff99]">
+          NERD MUSIC
         </div>
 
-        <section className="grid grid-cols-2 gap-5 md:grid-cols-3 lg:grid-cols-5">
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="Username"
+            className="h-11 w-40 rounded-xl border border-white/10 bg-[#111818] px-4 text-sm text-white outline-none placeholder:text-zinc-400 focus:border-[#00ff99]"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            className="h-11 w-40 rounded-xl border border-white/10 bg-[#111818] px-4 text-sm text-white outline-none placeholder:text-zinc-400 focus:border-[#00ff99]"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleLogin();
+            }}
+          />
+
+          <button
+            onClick={handleLogin}
+            className="h-11 rounded-xl bg-[#00ff99] px-7 text-sm font-black text-black transition hover:bg-[#20ffad]"
+          >
+            Login
+          </button>
+        </div>
+      </nav>
+
+      <section className="mx-auto max-w-[1500px] px-10 pb-16 pt-20">
+        <h1 className="mb-12 text-[64px] font-black leading-none tracking-[-0.06em] md:text-[76px]">
+          Latest Releases
+        </h1>
+
+        <div className="grid grid-cols-2 gap-6 md:grid-cols-3 xl:grid-cols-5">
           {releases.map((release) => (
             <a
               key={`${release.artist}-${release.title}`}
               href={release.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block text-inherit no-underline"
+              className="group block rounded-2xl border border-white/10 bg-[#0b1111] p-3 shadow-[0_0_40px_rgba(0,255,153,0.03)] transition duration-300 hover:-translate-y-1 hover:border-[#00ff99]/40 hover:bg-[#101818]"
             >
-              <div className="rounded-[20px] border border-white/10 bg-[#101414] p-3 transition hover:-translate-y-1.5 hover:border-[#00ff99]/40 hover:bg-[#151b1b]">
-                <img
-                  src={release.image}
-                  alt={`${release.artist} - ${release.title}`}
-                  className="aspect-square w-full rounded-[14px] bg-zinc-900 object-cover"
-                />
+              <img
+                src={release.image}
+                alt={`${release.artist} - ${release.title}`}
+                className="aspect-square w-full rounded-xl object-cover"
+              />
 
-                <div className="px-1 pb-1 pt-4 text-center">
-                  <div className="mb-1 text-sm font-bold">
-                    {release.artist}
-                  </div>
-                  <div className="text-xs text-[#a8b3b3]">
-                    {release.title}
-                  </div>
+              <div className="px-2 pb-2 pt-4">
+                <div className="text-lg font-black">{release.artist}</div>
+                <div className="mt-1 text-sm text-zinc-300">
+                  {release.title}
                 </div>
               </div>
             </a>
           ))}
-        </section>
-      </div>
+        </div>
+      </section>
     </main>
   );
 }
