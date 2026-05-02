@@ -1,35 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const protectedRoutes = [
-  "/dashboard",
-  "/accounts",
-  "/ads",
-  "/ai",
-  "/curation",
-  "/manual-import",
-  "/playlist-manager",
-  "/playlists",
-  "/production",
-  "/settings",
-  "/song-metrics",
-  "/trades",
-];
-
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const isProtectedRoute = protectedRoutes.some((route) =>
-    pathname.startsWith(route)
-  );
+  const publicRoutes = ["/login"];
 
-  if (!isProtectedRoute) {
-    return NextResponse.next();
-  }
-
+  const isPublicRoute = publicRoutes.includes(pathname);
   const authToken = request.cookies.get("auth_token")?.value;
 
-  if (!authToken) {
+  if (!authToken && !isPublicRoute) {
     return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  if (authToken && pathname === "/login") {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   return NextResponse.next();
@@ -37,17 +21,12 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/dashboard/:path*",
-    "/accounts/:path*",
-    "/ads/:path*",
-    "/ai/:path*",
-    "/curation/:path*",
-    "/manual-import/:path*",
-    "/playlist-manager/:path*",
-    "/playlists/:path*",
-    "/production/:path*",
-    "/settings/:path*",
-    "/song-metrics/:path*",
-    "/trades/:path*",
+    /*
+     * Protect all pages except:
+     * - api routes
+     * - Next static files
+     * - images/icons
+     */
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\..*).*)",
   ],
 };
