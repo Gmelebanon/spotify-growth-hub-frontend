@@ -13,6 +13,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isLoggedIn()) {
+      document.cookie =
+        "auth_token=logged_in; path=/; max-age=86400; SameSite=Lax; Secure";
       router.push("/dashboard");
     }
   }, [router]);
@@ -21,6 +23,10 @@ export default function LoginPage() {
     const success = loginUser(username, password, remember);
 
     if (success) {
+      const maxAge = remember ? 60 * 60 * 24 * 30 : 60 * 60 * 24;
+
+      document.cookie = `auth_token=logged_in; path=/; max-age=${maxAge}; SameSite=Lax; Secure`;
+
       router.push("/dashboard");
     } else {
       alert("Wrong username or password");
