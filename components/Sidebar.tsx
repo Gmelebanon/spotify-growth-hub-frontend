@@ -1,32 +1,38 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const primaryNavItems = [
-  { label: "Dashboard", href: "/dashboard" },
-  { label: "Playlists", href: "/playlists" },
-  { label: "Playlist Manager", href: "/playlist-manager" },
-  { label: "Curation", href: "/curation" },
+  { label: "Dashboard", href: "/dashboard", icon: "▦" },
+  { label: "Playlists", href: "/playlists", icon: "≡" },
+  { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
+  { label: "Curation", href: "/curation", icon: "◇" },
+];
 
-  // ✅ NEW TABS
-  { label: "Ads", href: "/ads" },
-  { label: "Production", href: "/production" },
+const middleNavItems = [
+  { label: "Ads", href: "/ads", icon: "◉" },
+  { label: "Production", href: "/production", icon: "▶" },
 ];
 
 const secondaryNavItems = [
-  { label: "Song Metrics", href: "/song-metrics" },
-  { label: "Trades", href: "/trades" },
-  { label: "AI", href: "/ai" },
-  { label: "Settings", href: "/settings" },
+  { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
+  { label: "Trades", href: "/trades", icon: "↔" },
+  { label: "AI", href: "/ai", icon: "✦" },
+  { label: "Settings", href: "/settings", icon: "⚙" },
 ];
 
 function NavLink({
   href,
   label,
+  icon,
+  collapsed,
 }: {
   href: string;
   label: string;
+  icon: string;
+  collapsed: boolean;
 }) {
   const pathname = usePathname();
   const isActive = pathname === href || pathname.startsWith(`${href}/`);
@@ -34,53 +40,100 @@ function NavLink({
   return (
     <Link
       href={href}
-      className={`rounded-xl px-4 py-3 transition ${
+      title={collapsed ? label : undefined}
+      className={`flex items-center rounded-xl transition ${
+        collapsed ? "justify-center px-0 py-3" : "gap-3 px-3 py-3"
+      } ${
         isActive
           ? "bg-zinc-900 text-green-400"
-          : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+          : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
       }`}
     >
-      <div className="text-sm font-semibold">{label}</div>
+      <span className="flex h-5 w-5 items-center justify-center text-base leading-none text-current">
+        {icon}
+      </span>
+
+      {!collapsed && (
+        <span className="text-sm font-semibold leading-none">{label}</span>
+      )}
     </Link>
   );
 }
 
 function Divider() {
-  return <div className="my-4 h-px bg-green-500/30" />;
+  return <div className="my-4 h-px bg-green-500/40" />;
 }
 
 export default function Sidebar() {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
-    <aside className="flex min-h-screen w-[240px] flex-col border-r border-zinc-900 bg-black px-4 py-8">
-      <div className="mb-8 px-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-white">
-          Nerd Engine
-        </h1>
+    <aside
+      className={`flex min-h-screen flex-col border-r border-zinc-900 bg-black py-7 transition-all duration-300 ${
+        collapsed ? "w-[72px] px-3" : "w-[210px] px-3"
+      }`}
+    >
+      <div
+        className={`mb-8 flex items-center ${
+          collapsed ? "justify-center" : "justify-between px-2"
+        }`}
+      >
+        {!collapsed && (
+          <h1 className="text-[18px] font-semibold tracking-tight text-white">
+            Nerd Engine
+          </h1>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setCollapsed((value) => !value)}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-white"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? "→" : "←"}
+        </button>
       </div>
 
       <nav className="flex flex-col">
-        {/* PRIMARY */}
         <div className="flex flex-col gap-2">
-          {primaryNavItems.slice(0, 4).map((item) => (
-            <NavLink key={item.href} href={item.href} label={item.label} />
+          {primaryNavItems.map((item) => (
+            <NavLink
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              icon={item.icon}
+              collapsed={collapsed}
+            />
           ))}
         </div>
 
         <Divider />
 
-        {/* ADS + PRODUCTION */}
         <div className="flex flex-col gap-2">
-          <NavLink href="/ads" label="Ads" />
-          <NavLink href="/production" label="Production" />
+          {middleNavItems.map((item) => (
+            <NavLink
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              icon={item.icon}
+              collapsed={collapsed}
+            />
+          ))}
         </div>
 
-        {/* ✅ GREEN DIVIDER UNDER PRODUCTION */}
         <Divider />
 
-        {/* SECONDARY */}
         <div className="flex flex-col gap-2">
-          {secondaryNavItems.map((item) => (
-            <NavLink key={item.href} href={item.href} label={item.label} />
+          {secondaryNavItems.map((item, index) => (
+            <div key={item.href}>
+              {item.label === "Settings" && <Divider />}
+              <NavLink
+                href={item.href}
+                label={item.label}
+                icon={item.icon}
+                collapsed={collapsed}
+              />
+            </div>
           ))}
         </div>
       </nav>
