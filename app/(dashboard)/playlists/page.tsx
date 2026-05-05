@@ -466,7 +466,7 @@ export default function PlaylistsPage() {
             onChange={(event) => {
               const value = Number(event.target.value);
               setAccountFilter(value);
-              setActiveAccountId(value === ALL_ACCOUNTS_ID ? null : value);
+              setActiveAccountId(value === ALL_ACCOUNTS_ID ? 0 : value);
             }}
             className="h-10 w-[180px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
           >

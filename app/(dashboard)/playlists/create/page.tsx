@@ -60,7 +60,7 @@ export default function CreatePlaylistPage() {
     return [];
   }, [accountsQuery.data]);
 
-  const selectedAccount = accounts.find((a) => String(a.id) === accountId);
+  const selectedAccount = accounts.find((a: Account) => String(a.id) === accountId);
 
   const downloadTemplate = () => {
     const csv = "Account,Title,Description,Spotify_link_1,Spotify_link_2\n";
@@ -231,7 +231,7 @@ export default function CreatePlaylistPage() {
                   className="h-12 w-full rounded-xl border border-zinc-700 bg-black px-4 text-sm text-white outline-none focus:border-green-500"
                 >
                   <option value="">Select account</option>
-                  {accounts.map((acc) => (
+                  {accounts.map((acc: Account) => (
                     <option key={acc.id} value={acc.id}>
                       {acc.display_name || acc.name || `Account ${acc.id}`}
                     </option>
