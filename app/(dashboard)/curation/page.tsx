@@ -11,15 +11,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
 import { getAccounts } from "@/lib/api/accounts";
-import { type CurationTrack as ApiCurationTrack } from "@/lib/api/curation";
+import { type CurationTrack } from "@/lib/api/curation";
 import { useActiveAccountStore } from "@/lib/store/activeAccount";
-
-type CurationTrack = ApiCurationTrack & {
-  id: string;
-  title: string;
-  artist: string;
-  spotify_id?: string | null;
-};
 
 type AccountItem = {
   id: number;
@@ -34,6 +27,7 @@ type ImportedLinkWithId = {
   track_count: number;
   accountName?: string;
   tracks: CurationTrack[];
+  mergedTracks?: CurationTrack[];
 };
 
 type SavedCuration = {
@@ -65,7 +59,9 @@ type SpaceApartSettings = Record<string, number>;
 const DUPLICATE_SPACE_KEY = "__all_duplicate_groups__";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://127.0.0.1:8000";
 
 const LINK_COLORS = [
   "bg-green-400",
@@ -90,6 +86,171 @@ function savedCurationsStorageKey(accountId: number | null) {
   return `nerd-engine-saved-curations-${accountId ?? "none"}`;
 }
 
+function normalizeSavedCuration(item: any): SavedCuration | null {
+  if (!item) return null;
+
+  const tracks = Array.isArray(item.tracks) ? item.tracks : [];
+  const id = String(item.id ?? item.curation_id ?? `saved-${Date.now()}`);
+  const name = String(item.name ?? item.title ?? "Untitled Curation");
+
+  return {
+    id,
+    name,
+    tracks,
+    trackCount: Number(item.trackCount ?? item.track_count ?? tracks.length) || 0,
+    createdAt: item.createdAt ?? item.created_at ?? new Date().toISOString(),
+  };
+}
+
+async function fetchSavedCurationsFromDatabase(accountId: number | null) {
+  const url = new URL(`${API_BASE_URL}/api/curations`);
+  if (accountId) url.searchParams.set("account_id", String(accountId));
+
+  const response = await fetch(url.toString());
+  if (!response.ok) throw new Error("Could not load saved curations.");
+
+  const payload = await response.json();
+  const items = Array.isArray(payload) ? payload : payload.items ?? [];
+
+  return items
+    .map((item: any) => normalizeSavedCuration(item))
+    .filter(Boolean) as SavedCuration[];
+}
+
+async function saveCurationToDatabase(payload: {
+  id?: string;
+  name: string;
+  account_id: number | null;
+  tracks: CurationTrack[];
+}) {
+  const response = await fetch(`${API_BASE_URL}/api/curations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Could not save curation.");
+  }
+
+  return response.json();
+}
+
+async function updateCurationInDatabase(
+  id: string,
+  payload: { name: string; account_id: number | null; tracks: CurationTrack[] },
+) {
+  const response = await fetch(`${API_BASE_URL}/api/curations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Could not update curation.");
+  }
+
+  return response.json();
+}
+
+async function deleteCurationFromDatabase(id: string) {
+  const response = await fetch(`${API_BASE_URL}/api/curations/${id}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok && response.status !== 404) {
+    const text = await response.text();
+    throw new Error(text || "Could not delete curation.");
+  }
+}
+
+function normalizeSavedMasterPlaylist(
+  item: any,
+  index: number,
+): SavedMasterPlaylist | null {
+  if (!item) return null;
+
+  const id = String(
+    item.id ?? item.playlist_id ?? item.spotify_id ?? `master-${index}`,
+  );
+  const name = String(
+    item.name ??
+      item.title ??
+      item.playlist_name ??
+      `Master Playlist ${index + 1}`,
+  );
+
+  return {
+    id,
+    name,
+    tracks:
+      Number(item.tracks ?? item.trackCount ?? item.tracks_count ?? 0) || 0,
+    createdAt: item.createdAt ?? item.created_at ?? undefined,
+  };
+}
+
+function extractArrayFromPossibleStorageValue(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.playlists)) return value.playlists;
+  if (Array.isArray(value?.savedMasterPlaylists)) return value.savedMasterPlaylists;
+  if (Array.isArray(value?.masterPlaylists)) return value.masterPlaylists;
+  if (Array.isArray(value?.saved)) return value.saved;
+  return [];
+}
+
+function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
+  if (typeof window === "undefined") return [];
+
+  const preferredKeys = [
+    "nerd-engine-master-playlists",
+    "nerd-engine-saved-master-playlists",
+    "nerd-engine-playlist-manager-master-playlists",
+    "playlist-manager-master-playlists",
+    "masterPlaylists",
+    "savedMasterPlaylists",
+  ];
+
+  const allKeys = Array.from({ length: window.localStorage.length })
+    .map((_, index) => window.localStorage.key(index))
+    .filter(Boolean) as string[];
+
+  const keys = Array.from(
+    new Set([
+      ...preferredKeys,
+      ...allKeys.filter((key) =>
+        /master|playlist-manager|saved.*playlist/i.test(key),
+      ),
+    ]),
+  );
+
+  const collected: SavedMasterPlaylist[] = [];
+  const seen = new Set<string>();
+
+  keys.forEach((key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw);
+      const array = extractArrayFromPossibleStorageValue(parsed);
+
+      array.forEach((item: any, index: number) => {
+        const normalized = normalizeSavedMasterPlaylist(item, index);
+        if (!normalized || seen.has(normalized.id)) return;
+        seen.add(normalized.id);
+        collected.push(normalized);
+      });
+    } catch {
+      // Ignore malformed saved data and try the next key.
+    }
+  });
+
+  return collected;
+}
+
 function trackKey(track: CurationTrack) {
   return `${track.title.toLowerCase()}__${track.artist.toLowerCase()}`;
 }
@@ -112,7 +273,8 @@ function ensureImportedLinkIds(
   const seen = new Set<string>();
 
   return items.map((item, index) => {
-    const candidate = "id" in item && typeof item.id === "string" ? item.id : "";
+    const candidate =
+      "id" in item && typeof item.id === "string" ? item.id : "";
     let id = candidate || `${makeImportedLinkId()}-${index}`;
 
     while (seen.has(id)) {
@@ -308,7 +470,58 @@ function buildMergedTracks(
   typedTracks: CurationTrack[],
   importedLinks: ImportedLinkWithId[],
 ): CurationTrack[] {
-  return [...typedTracks, ...importedLinks.flatMap((item) => item.tracks)];
+  return [
+    ...typedTracks,
+    ...importedLinks.flatMap((item) => item.mergedTracks ?? item.tracks),
+  ];
+}
+
+function shuffleTracksList<T>(items: T[]): T[] {
+  const output = [...items];
+  for (let index = output.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [output[index], output[randomIndex]] = [output[randomIndex], output[index]];
+  }
+  return output;
+}
+
+function interleaveByRatio(
+  first: CurationTrack[],
+  second: CurationTrack[],
+  firstRatio: number,
+  secondRatio: number,
+): CurationTrack[] {
+  const firstQueue = [...first];
+  const secondQueue = [...second];
+  const output: CurationTrack[] = [];
+  const safeFirstRatio = Math.max(1, firstRatio || 1);
+  const safeSecondRatio = Math.max(1, secondRatio || 1);
+
+  while (firstQueue.length > 0 || secondQueue.length > 0) {
+    for (
+      let index = 0;
+      index < safeFirstRatio && firstQueue.length > 0;
+      index += 1
+    ) {
+      output.push(firstQueue.shift() as CurationTrack);
+    }
+
+    for (
+      let index = 0;
+      index < safeSecondRatio && secondQueue.length > 0;
+      index += 1
+    ) {
+      output.push(secondQueue.shift() as CurationTrack);
+    }
+  }
+
+  return output;
+}
+
+function ResultDot({ colorClass }: { colorClass: string }) {
+  return (
+    <span className={`mr-3 h-2.5 w-2.5 shrink-0 rounded-full ${colorClass}`} />
+  );
 }
 
 function removeTrackFromTextarea(raw: string, track: CurationTrack) {
@@ -330,7 +543,9 @@ function removeTrackFromImportedLinks(
 
   return importedLinks
     .map((item) => {
-      const nextTracks = item.tracks.filter((entry) => trackKey(entry) !== target);
+      const nextTracks = item.tracks.filter(
+        (entry) => trackKey(entry) !== target,
+      );
 
       return {
         ...item,
@@ -373,14 +588,12 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
     const normalizedTitle = normalizeTitleForGroup(track.title);
     if (!normalizedTitle) return;
 
-    const current =
-      map.get(normalizedTitle) ??
-      {
-        tracksByIdentity: new Map<string, CurationTrack>(),
-        originalIndexes: [],
-        exactTitles: new Set<string>(),
-        artists: new Set<string>(),
-      };
+    const current = map.get(normalizedTitle) ?? {
+      tracksByIdentity: new Map<string, CurationTrack>(),
+      originalIndexes: [],
+      exactTitles: new Set<string>(),
+      artists: new Set<string>(),
+    };
 
     const identity = trackIdentity(track);
 
@@ -405,13 +618,18 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
         tracks: uniqueTracks,
         originalIndexes: group.originalIndexes,
         riskType:
-          group.exactTitles.size === 1 && group.artists.size > 1 ? "exact" : "similar",
+          group.exactTitles.size === 1 && group.artists.size > 1
+            ? "exact"
+            : "similar",
       } satisfies DuplicateGroup;
     })
     .filter((group) => group.tracks.length > 1);
 }
 
-function findTrackIndexByIdentity(tracks: CurationTrack[], target: CurationTrack) {
+function findTrackIndexByIdentity(
+  tracks: CurationTrack[],
+  target: CurationTrack,
+) {
   const targetIdentity = trackIdentity(target);
   return tracks.findIndex((track) => trackIdentity(track) === targetIdentity);
 }
@@ -504,6 +722,55 @@ function SideSection({
     return map;
   }, [importedLinks]);
 
+  const [ratioOne, setRatioOne] = useState("3");
+  const [ratioTwo, setRatioTwo] = useState("1");
+
+  const randomShuffleTracks = () => {
+    setImportedLinks((prev) =>
+      prev.map((item) => ({
+        ...item,
+        tracks: shuffleTracksList(item.tracks),
+        mergedTracks: undefined,
+      })),
+    );
+  };
+
+  const ratioShuffleTracks = () => {
+    setImportedLinks((prev) => {
+      if (prev.length < 2) return prev;
+
+      const first = prev[0];
+      const second = prev[1];
+      const mixed = interleaveByRatio(
+        first.tracks,
+        second.tracks,
+        Number(ratioOne),
+        Number(ratioTwo),
+      );
+
+      return prev.map((item, index) => {
+        if (index === 0) {
+          return {
+            ...item,
+            mergedTracks: mixed,
+          };
+        }
+
+        if (index === 1) {
+          return {
+            ...item,
+            mergedTracks: [],
+          };
+        }
+
+        return {
+          ...item,
+          mergedTracks: undefined,
+        };
+      });
+    });
+  };
+
   return (
     <div className="rounded-2xl bg-[linear-gradient(180deg,rgba(39,39,42,0.35),rgba(9,9,11,0.9))] p-4">
       <div className="mb-4 flex items-start justify-between gap-4">
@@ -546,7 +813,9 @@ function SideSection({
       ) : null}
 
       <div className="mt-4 rounded-2xl border border-zinc-800 bg-black p-4">
-        <div className="mb-3 text-sm font-semibold text-white">Imported Links</div>
+        <div className="mb-3 text-sm font-semibold text-white">
+          Imported Links
+        </div>
 
         {importedLinks.length === 0 ? (
           <div className="text-sm text-zinc-500">No imported links yet.</div>
@@ -595,10 +864,14 @@ function SideSection({
       </div>
 
       <div className="mt-4 rounded-2xl border border-zinc-800 bg-black p-4">
-        <div className="mb-3 text-sm font-semibold text-white">Tracks In List</div>
+        <div className="mb-3 text-sm font-semibold text-white">
+          Tracks In List
+        </div>
 
         {tracks.length === 0 ? (
-          <div className="text-sm text-zinc-500">No tracks in this list yet.</div>
+          <div className="text-sm text-zinc-500">
+            No tracks in this list yet.
+          </div>
         ) : (
           <div className="scrollbar-spotify max-h-[280px] space-y-2 overflow-y-auto pr-1">
             {tracks.map((track, index) => {
@@ -627,6 +900,38 @@ function SideSection({
             })}
           </div>
         )}
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-900 pt-3">
+          <button
+            type="button"
+            onClick={randomShuffleTracks}
+            disabled={tracks.length === 0}
+            className="text-sm font-semibold text-green-400 transition hover:text-green-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Random Shuffle
+          </button>
+
+          <div className="flex items-center gap-2">
+            <input
+              value={ratioOne}
+              onChange={(event) => setRatioOne(event.target.value)}
+              className="h-8 w-12 rounded-lg border border-zinc-800 bg-black px-2 text-center text-xs font-semibold text-white outline-none focus:border-green-500"
+            />
+            <input
+              value={ratioTwo}
+              onChange={(event) => setRatioTwo(event.target.value)}
+              className="h-8 w-12 rounded-lg border border-zinc-800 bg-black px-2 text-center text-xs font-semibold text-white outline-none focus:border-green-500"
+            />
+            <button
+              type="button"
+              onClick={ratioShuffleTracks}
+              disabled={importedLinks.length < 2}
+              className="text-sm font-semibold text-green-400 transition hover:text-green-300 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Shuffle
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -686,8 +991,12 @@ function DuplicateGroupCard({
 
       <div className="space-y-2">
         {group.tracks.map((track) => {
-          const calculatedIndex = findTrackIndexByIdentity(displayedTracks, track);
-          const displayNumber = calculatedIndex >= 0 ? calculatedIndex + 1 : "?";
+          const calculatedIndex = findTrackIndexByIdentity(
+            displayedTracks,
+            track,
+          );
+          const displayNumber =
+            calculatedIndex >= 0 ? calculatedIndex + 1 : "?";
 
           return (
             <div
@@ -753,23 +1062,13 @@ function DuplicateGroupCard({
 function SavedCurationsCard({
   savedCurations,
   selectedCurationId,
-  curationName,
-  setCurationName,
-  saveCuration,
-  updateCuration,
   loadCuration,
   deleteCuration,
-  canSave,
 }: {
   savedCurations: SavedCuration[];
   selectedCurationId: string;
-  curationName: string;
-  setCurationName: (value: string) => void;
-  saveCuration: () => void;
-  updateCuration: () => void;
   loadCuration: (id: string) => void;
   deleteCuration: (id: string) => void;
-  canSave: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -787,120 +1086,78 @@ function SavedCurationsCard({
           </p>
         </div>
 
-        <span className="text-sm font-semibold text-zinc-400">{open ? "-" : "+"}</span>
+        <span className="text-sm font-semibold text-zinc-400">
+          {open ? "-" : "+"}
+        </span>
       </button>
 
       {open ? (
-        <>
-          <div className="mt-5 flex gap-3">
-            <input
-              value={curationName}
-              onChange={(e) => setCurationName(e.target.value)}
-              placeholder="Curation name..."
-              className="h-12 flex-1 rounded-xl border border-zinc-800 bg-black px-4 text-white placeholder:text-zinc-500 outline-none focus:border-green-500"
-            />
-
-            <button
-              onClick={saveCuration}
-              disabled={!canSave}
-              className="h-12 rounded-xl bg-green-600 px-6 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              Save Curation
-            </button>
-
-            <button
-              onClick={updateCuration}
-              disabled={!selectedCurationId || !canSave}
-              className="h-12 rounded-xl border border-zinc-700 bg-zinc-900 px-6 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              Save Changes
-            </button>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {savedCurations.length === 0 ? (
-              <div className="rounded-2xl border border-zinc-800 bg-black px-4 py-3 text-sm text-zinc-500">
-                No saved curations yet.
-              </div>
-            ) : (
-              savedCurations.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-zinc-800 bg-black px-4 py-4"
-                >
-                  <div className="text-sm font-semibold text-white">{item.name}</div>
-                  <div className="mt-1 text-xs text-zinc-500">
-                    {item.trackCount} tracks
-                  </div>
-                  <div className="text-xs text-zinc-500">
-                    {new Date(item.createdAt).toLocaleString()}
-                  </div>
-
-                  <div className="mt-4 flex gap-2">
-                    <button
-                      onClick={() => loadCuration(item.id)}
-                      className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-300"
-                    >
-                      Load
-                    </button>
-
-                    <button
-                      onClick={() => deleteCuration(item.id)}
-                      className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300"
-                    >
-                      Delete
-                    </button>
-                  </div>
+        <div className="mt-5 flex flex-wrap gap-3">
+          {savedCurations.length === 0 ? (
+            <div className="rounded-2xl border border-zinc-800 bg-black px-4 py-3 text-sm text-zinc-500">
+              No saved curations yet.
+            </div>
+          ) : (
+            savedCurations.map((item) => (
+              <div
+                key={item.id}
+                className={`rounded-2xl border bg-black px-4 py-4 ${
+                  selectedCurationId === item.id
+                    ? "border-green-500/50"
+                    : "border-zinc-800"
+                }`}
+              >
+                <div className="text-sm font-semibold text-white">
+                  {item.name}
                 </div>
-              ))
-            )}
-          </div>
-        </>
+                <div className="mt-1 text-xs text-zinc-500">
+                  {item.trackCount} tracks
+                </div>
+                <div className="text-xs text-zinc-500">
+                  {new Date(item.createdAt).toLocaleString()}
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => loadCuration(item.id)}
+                    className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-300"
+                  >
+                    Load
+                  </button>
+
+                  <button
+                    onClick={() => deleteCuration(item.id)}
+                    className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       ) : null}
     </div>
   );
 }
-function ResultDot({ colorClass }: { colorClass: string }) {
-  return (
-    <span
-      className={`mr-3 h-2.5 w-2.5 shrink-0 rounded-full ${colorClass}`}
-    />
-  );
-}
-function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
-  try {
-    const raw =
-      window.localStorage.getItem("master_playlists") ||
-      window.localStorage.getItem("nerd-engine-playlist-manager-global");
-
-    if (!raw) return [];
-
-    const parsed = JSON.parse(raw);
-
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-
-    if (Array.isArray(parsed.savedMasterPlaylists)) {
-      return parsed.savedMasterPlaylists;
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
-}
 
 export default function CurationPage() {
   const router = useRouter();
-  const activeAccountId = useActiveAccountStore((state) => state.activeAccountId);
+  const activeAccountId = useActiveAccountStore(
+    (state) => state.activeAccountId,
+  );
+  const activeAccount = useActiveAccountStore((state) => state.activeAccount);
 
   const [sourceText, setSourceText] = useState("");
   const [myTracksText, setMyTracksText] = useState("");
   const [sourceLinkInput, setSourceLinkInput] = useState("");
   const [myTracksLinkInput, setMyTracksLinkInput] = useState("");
-  const [sourceImportedLinks, setSourceImportedLinks] = useState<ImportedLinkWithId[]>([]);
-  const [myImportedLinks, setMyImportedLinks] = useState<ImportedLinkWithId[]>([]);
+  const [sourceImportedLinks, setSourceImportedLinks] = useState<
+    ImportedLinkWithId[]
+  >([]);
+  const [myImportedLinks, setMyImportedLinks] = useState<ImportedLinkWithId[]>(
+    [],
+  );
 
   const [sourceRatio, setSourceRatio] = useState("3");
   const [myRatio, setMyRatio] = useState("1");
@@ -909,13 +1166,17 @@ export default function CurationPage() {
   const [curationName, setCurationName] = useState("");
   const [savedCurations, setSavedCurations] = useState<SavedCuration[]>([]);
   const [selectedCurationId, setSelectedCurationId] = useState("");
-  const [curationBaseResult, setCurationBaseResult] = useState<CurationTrack[]>([]);
-  const [spaceApartSettings, setSpaceApartSettings] = useState<SpaceApartSettings>({});
+  const [curationBaseResult, setCurationBaseResult] = useState<CurationTrack[]>(
+    [],
+  );
+  const [spaceApartSettings, setSpaceApartSettings] =
+    useState<SpaceApartSettings>({});
   const [spaceApartModes, setSpaceApartModes] = useState<SpaceApartModes>({});
   const [selectedMasterPlaylistId, setSelectedMasterPlaylistId] = useState("");
-  const [savedMasterPlaylists, setSavedMasterPlaylists] = useState<SavedMasterPlaylist[]>([]);
+  const [savedMasterPlaylists, setSavedMasterPlaylists] = useState<
+    SavedMasterPlaylist[]
+  >([]);
   const [sendStatus, setSendStatus] = useState("");
-  const [previewOpen, setPreviewOpen] = useState(false);
 
   const accountsQuery = useQuery<AccountItem[]>({
     queryKey: ["accounts"],
@@ -923,47 +1184,64 @@ export default function CurationPage() {
     retry: false,
   });
 
-  const accounts = useMemo(() => accountsQuery.data ?? [], [accountsQuery.data]);
-  const activeAccount = useMemo(
-    () => accounts.find((account) => account.id === activeAccountId) ?? null,
-    [accounts, activeAccountId],
+  const accounts = useMemo(
+    () => accountsQuery.data ?? [],
+    [accountsQuery.data],
   );
 
   useEffect(() => {
-    if (!activeAccountId) {
-      setSavedCurations([]);
-      setSelectedCurationId("");
-      return;
-    }
+    let cancelled = false;
 
-    try {
-      const raw = window.localStorage.getItem(savedCurationsStorageKey(activeAccountId));
-      setSavedCurations(raw ? JSON.parse(raw) : []);
+    const load = async () => {
       setSelectedCurationId("");
-    } catch {
-      setSavedCurations([]);
-      setSelectedCurationId("");
-    }
+
+      try {
+        const items = await fetchSavedCurationsFromDatabase(activeAccountId);
+        if (!cancelled) {
+          setSavedCurations(items);
+          if (activeAccountId) {
+            window.localStorage.setItem(
+              savedCurationsStorageKey(activeAccountId),
+              JSON.stringify(items),
+            );
+          }
+        }
+        return;
+      } catch {
+        // Fall back to localStorage when backend is not available locally.
+      }
+
+      try {
+        const raw = window.localStorage.getItem(
+          savedCurationsStorageKey(activeAccountId),
+        );
+        if (!cancelled) setSavedCurations(raw ? JSON.parse(raw) : []);
+      } catch {
+        if (!cancelled) setSavedCurations([]);
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeAccountId]);
 
   useEffect(() => {
     const refreshSavedMasters = () => {
       const items = loadSavedMasterPlaylists();
       setSavedMasterPlaylists(items);
-
-      if (items.length > 0 && !selectedMasterPlaylistId) {
-        setSelectedMasterPlaylistId(items[0].id);
-      }
+      setSelectedMasterPlaylistId((current) => current || items[0]?.id || "");
     };
 
     refreshSavedMasters();
-
     window.addEventListener("storage", refreshSavedMasters);
 
     return () => {
       window.removeEventListener("storage", refreshSavedMasters);
     };
-  }, [selectedMasterPlaylistId]);
+  }, []);
 
   const persistSavedCurations = (next: SavedCuration[]) => {
     setSavedCurations(next);
@@ -1002,7 +1280,12 @@ export default function CurationPage() {
   );
 
   const displayedCurationResult = useMemo(
-    () => enforceGroupSpacing(curationBaseResult, duplicateGroups, spaceApartSettings),
+    () =>
+      enforceGroupSpacing(
+        curationBaseResult,
+        duplicateGroups,
+        spaceApartSettings,
+      ),
     [curationBaseResult, duplicateGroups, spaceApartSettings],
   );
 
@@ -1019,7 +1302,9 @@ export default function CurationPage() {
   const sourceImportMutation = useMutation({
     mutationFn: (link: string) => importSpotifyLinkAllAccounts(accounts, link),
     onSuccess: (payload) => {
-      setSourceImportedLinks((prev) => ensureImportedLinkIds([...prev, payload]));
+      setSourceImportedLinks((prev) =>
+        ensureImportedLinkIds([...prev, payload]),
+      );
       setSourceLinkInput("");
     },
   });
@@ -1099,35 +1384,54 @@ export default function CurationPage() {
     setCurationBaseResult(output);
   };
 
- const saveCuration = () => {
-  if (curationBaseResult.length === 0) {
-    setSendStatus("Run curation first before saving.");
-    return;
-  }
+  const saveCuration = async () => {
+    if (displayedCurationResult.length === 0) {
+      setSendStatus("Run curation first before saving.");
+      return;
+    }
 
-  const name = window.prompt("Save curation name");
-  if (!name?.trim()) return;
+    let name = curationName.trim();
 
-  const newSavedCuration = {
-    id: `saved-${Date.now()}`,
-    name: name.trim(),
-    tracks: curationBaseResult,
-    createdAt: new Date().toISOString(),
+    if (!name) {
+      const requestedName = window.prompt("Enter curation name");
+      name = requestedName?.trim() || "";
+    }
+
+    if (!name) return;
+
+    const newSavedCuration: SavedCuration = {
+      id: `saved-${Date.now()}`,
+      name,
+      tracks: displayedCurationResult,
+      trackCount: displayedCurationResult.length,
+      createdAt: new Date().toISOString(),
+    };
+
+    const updated = [newSavedCuration, ...savedCurations];
+    persistSavedCurations(updated);
+    setSelectedCurationId(newSavedCuration.id);
+    setCurationName(name);
+    setSendStatus("Curation saved.");
+
+    try {
+      const saved = await saveCurationToDatabase({
+        id: newSavedCuration.id,
+        name,
+        account_id: activeAccountId,
+        tracks: displayedCurationResult,
+      });
+      const normalized = normalizeSavedCuration(saved.item ?? saved);
+      if (normalized) {
+        const synced = [normalized, ...savedCurations.filter((item) => item.id !== normalized.id)];
+        persistSavedCurations(synced);
+        setSelectedCurationId(normalized.id);
+      }
+    } catch (error) {
+      setSendStatus("Saved locally. Database save failed.");
+    }
   };
 
-  const existing = JSON.parse(
-    window.localStorage.getItem("saved-curations") || "[]",
-  );
-
-  const updated = [newSavedCuration, ...existing];
-
-  window.localStorage.setItem("saved-curations", JSON.stringify(updated));
-  setSavedCurations(updated);
-  setSelectedCurationId(newSavedCuration.id);
-  setSendStatus("Curation saved.");
-};
-
-  const updateCuration = () => {
+  const updateCuration = async () => {
     if (!selectedCurationId || displayedCurationResult.length === 0) return;
 
     let name = curationName.trim();
@@ -1153,6 +1457,16 @@ export default function CurationPage() {
 
     persistSavedCurations(next);
     setCurationName(name);
+
+    try {
+      await updateCurationInDatabase(selectedCurationId, {
+        name,
+        account_id: activeAccountId,
+        tracks: displayedCurationResult,
+      });
+    } catch {
+      setSendStatus("Updated locally. Database update failed.");
+    }
   };
 
   const loadCuration = (id: string) => {
@@ -1166,13 +1480,19 @@ export default function CurationPage() {
     setSpaceApartModes({});
   };
 
-  const deleteCuration = (id: string) => {
+  const deleteCuration = async (id: string) => {
     const next = savedCurations.filter((item) => item.id !== id);
     persistSavedCurations(next);
 
     if (selectedCurationId === id) {
       setSelectedCurationId("");
       setCurationName("");
+    }
+
+    try {
+      await deleteCurationFromDatabase(id);
+    } catch {
+      setSendStatus("Deleted locally. Database delete failed.");
     }
   };
 
@@ -1183,7 +1503,9 @@ export default function CurationPage() {
     }
 
     const selectedMasterPlaylist =
-      savedMasterPlaylists.find((item) => item.id === selectedMasterPlaylistId) ?? null;
+      savedMasterPlaylists.find(
+        (item) => item.id === selectedMasterPlaylistId,
+      ) ?? null;
 
     window.localStorage.setItem(
       "nerd-engine-playlist-manager-curation-draft",
@@ -1204,32 +1526,16 @@ export default function CurationPage() {
     router.push("/playlist-manager");
   };
 
-  const previewSummary = useMemo(() => {
-    if (!previewOpen) return null;
-
-    return {
-      leads: Math.max(0, Number(leadsCount) || 0),
-      sourceRatio: Math.max(1, Number(sourceRatio) || 1),
-      myRatio: Math.max(1, Number(myRatio) || 1),
-      totalTracks: displayedCurationResult.length,
-      duplicatesCount: duplicateGroups.length,
-    };
-  }, [
-    previewOpen,
-    leadsCount,
-    sourceRatio,
-    myRatio,
-    displayedCurationResult.length,
-    duplicateGroups.length,
-  ]);
-
   return (
     <div className="min-h-screen bg-black px-8 py-10 text-white">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-semibold tracking-tight">Curation Engine</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">
+            Curation Engine
+          </h1>
           <p className="mt-2 text-sm text-zinc-500">
-            Build your final sequence by mixing source playlist tracks with your own track pool.
+            Build your final sequence by mixing source playlist tracks with your
+            own track pool.
           </p>
           <p className="mt-2 text-sm text-zinc-600">
             Active Account: All Accounts
@@ -1237,10 +1543,6 @@ export default function CurationPage() {
         </div>
 
         <div className="w-full max-w-[320px]">
-          <label className="mb-2 block text-xs uppercase tracking-wide text-zinc-500">
-            Saved Curation
-          </label>
-
           <select
             value={selectedCurationId}
             onChange={(e) => loadCuration(e.target.value)}
@@ -1286,37 +1588,57 @@ export default function CurationPage() {
         <div className="mt-6 flex flex-col items-start justify-between gap-5 lg:flex-row lg:items-end">
           <div className="flex gap-4">
             <div>
-              <label className="mb-2 block text-sm text-zinc-400">Source Ratio</label>
+              <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Leads
+              </label>
               <input
-                value={sourceRatio}
-                onChange={(e) => setSourceRatio(e.target.value)}
-                className="h-11 w-[90px] rounded-xl border border-zinc-800 bg-black px-4 text-white outline-none transition focus:border-green-500"
+                inputMode="numeric"
+                value={leadsCount}
+                onChange={(e) => setLeadsCount(e.target.value)}
+                className="h-11 w-[110px] rounded-xl border border-zinc-800 bg-black px-4 text-sm font-medium text-white outline-none transition focus:border-green-500"
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm text-zinc-400">My Ratio</label>
+              <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Source Ratio
+              </label>
+              <input
+                value={sourceRatio}
+                onChange={(e) => setSourceRatio(e.target.value)}
+                className="h-11 w-[90px] rounded-xl border border-zinc-800 bg-black px-4 text-sm font-medium text-white outline-none transition focus:border-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                My Ratio
+              </label>
               <input
                 value={myRatio}
                 onChange={(e) => setMyRatio(e.target.value)}
-                className="h-11 w-[90px] rounded-xl border border-zinc-800 bg-black px-4 text-white outline-none transition focus:border-green-500"
+                className="h-11 w-[90px] rounded-xl border border-zinc-800 bg-black px-4 text-sm font-medium text-white outline-none transition focus:border-green-500"
               />
             </div>
           </div>
 
           <button
             onClick={runCuration}
-            className="inline-flex h-14 items-center justify-center rounded-2xl bg-green-600 px-8 text-base font-semibold text-white transition hover:bg-green-500"
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500"
           >
             Run Curation
           </button>
         </div>
 
         <div className="mt-6 rounded-2xl border border-zinc-800 bg-black p-4">
-          <div className="mb-3 text-sm font-semibold text-white">Curation Result</div>
+          <div className="mb-3 text-sm font-semibold text-white">
+            Curation Result
+          </div>
 
           {displayedCurationResult.length === 0 ? (
-            <div className="text-sm text-zinc-500">Run curation to generate a result.</div>
+            <div className="text-sm text-zinc-500">
+              Run curation to generate a result.
+            </div>
           ) : (
             <div className="scrollbar-spotify max-h-[420px] space-y-2 overflow-y-auto pr-1">
               {displayedCurationResult.map((track, index) => {
@@ -1390,30 +1712,50 @@ export default function CurationPage() {
         ) : null}
 
         <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
-          <h3 className="mb-4 text-lg font-semibold text-white">Curate & Send</h3>
+          <h3 className="mb-5 text-lg font-semibold text-white">
+            Save &amp; Send
+          </h3>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[180px_260px_140px_170px]">
-            <div>
-              <label className="mb-2 block text-xs uppercase tracking-wide text-zinc-500">
-                Leads
-              </label>
-              <input
-                type="number"
-                min={0}
-                value={leadsCount}
-                onChange={(e) => setLeadsCount(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
-              />
+          <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-end">
+            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="w-full max-w-[320px]">
+                <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Curation Name
+                </label>
+                <input
+                  value={curationName}
+                  onChange={(e) => setCurationName(e.target.value)}
+                  placeholder="Curation name..."
+                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-green-500"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={saveCuration}
+                disabled={displayedCurationResult.length === 0}
+                className="h-11 rounded-xl bg-green-600 px-6 text-sm font-semibold text-white transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Save Curation
+              </button>
+
+              <button
+                type="button"
+                onClick={updateCuration}
+                disabled={
+                  !selectedCurationId || displayedCurationResult.length === 0
+                }
+                className="h-11 rounded-xl border border-zinc-700 bg-zinc-900 px-6 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Save Changes
+              </button>
             </div>
 
-            <div>
-              <label className="mb-2 block text-xs uppercase tracking-wide text-zinc-500">
-                Master Playlists Saved
-              </label>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <select
                 value={selectedMasterPlaylistId}
                 onChange={(e) => setSelectedMasterPlaylistId(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
+                className="h-11 min-w-[260px] rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
               >
                 <option value="">Select saved master playlist</option>
                 {savedMasterPlaylists.map((playlist) => (
@@ -1422,130 +1764,28 @@ export default function CurationPage() {
                   </option>
                 ))}
               </select>
+
+              <button
+                type="button"
+                onClick={sendToPlaylistManager}
+                className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500"
+              >
+                Send {displayedCurationResult.length} tracks
+              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setPreviewOpen((prev) => !prev)}
-              className={`mt-6 inline-flex h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold transition ${
-                previewOpen
-                  ? "bg-green-600 text-white hover:bg-green-500"
-                  : "border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
-              }`}
-            >
-              Preview
-            </button>
-
-            <button
-              type="button"
-              onClick={sendToPlaylistManager}
-              className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition hover:bg-green-500"
-            >
-              Send {displayedCurationResult.length} tracks
-            </button>
           </div>
 
-          <div className="mt-4 text-xs text-zinc-500">
-            {sendStatus ||
-              "Leads sets how many tracks play first before ratio-based curation starts."}
-          </div>
+          {sendStatus ? (
+            <div className="mt-4 text-xs text-zinc-500">{sendStatus}</div>
+          ) : null}
         </div>
-
-        {previewOpen ? (
-          <div className="mt-6 rounded-2xl border border-zinc-800 bg-black p-5">
-            <div className="mb-4 text-sm font-semibold text-white">Final Playlist Structure</div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">Leads</div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {previewSummary?.leads ?? 0}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Source Ratio
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {previewSummary?.sourceRatio ?? 0}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  My Ratio
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {previewSummary?.myRatio ?? 0}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Total Tracks
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {previewSummary?.totalTracks ?? 0}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-green-400">
-                  Duplicate Groups
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {previewSummary?.duplicatesCount ?? 0}
-                </div>
-              </div>
-            </div>
-
-            <div className="scrollbar-spotify mt-5 max-h-[420px] space-y-2 overflow-y-auto pr-1">
-              {displayedCurationResult.map((track, index) => {
-                const key = trackKey(track);
-                const isSource = sourceTrackKeys.has(key);
-                const isMine = myTrackKeys.has(key);
-                const isDuplicate = duplicateTrackKeys.has(key);
-
-                const dotClass = isDuplicate
-                  ? "bg-green-400"
-                  : isSource
-                    ? "bg-red-400"
-                    : isMine
-                      ? "bg-yellow-300"
-                      : "bg-zinc-400";
-
-                const borderClass = isDuplicate
-                  ? "border-green-500/40"
-                  : "border-zinc-800";
-
-                return (
-                  <div
-                    key={`preview-${trackIdentity(track)}-${index}`}
-                    className={`flex items-center rounded-lg border bg-black px-3 py-3 text-sm text-zinc-300 ${borderClass}`}
-                  >
-                    <ResultDot colorClass={dotClass} />
-                    <span>
-                      {index + 1}. {formatTrackLine(track)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <SavedCurationsCard
         savedCurations={savedCurations}
         selectedCurationId={selectedCurationId}
-        curationName={curationName}
-        setCurationName={setCurationName}
-        saveCuration={saveCuration}
-        updateCuration={updateCuration}
         loadCuration={loadCuration}
         deleteCuration={deleteCuration}
-        canSave={displayedCurationResult.length > 0}
       />
     </div>
   );

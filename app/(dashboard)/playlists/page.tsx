@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import {
   useMutation,
   useQueries,
@@ -13,74 +13,167 @@ import { getAccounts } from "@/lib/api/accounts";
 import { getPlaylists, syncAllPlaylistsForAccount } from "@/lib/api/playlists";
 import { useActiveAccountStore } from "@/lib/store/activeAccount";
 
-type SortField =
-  | "playlist"
-  | "genre"
-  | "account"
-  | "followers"
-  | "tracks"
-  | "growth24h"
-  | "growth7d"
-  | "growth30d";
-
-type SortOrder = "asc" | "desc";
-
 type AccountRow = {
   id: number;
-  display_name?: string;
+  display_name?: string | null;
+  name?: string | null;
 };
 
 type PlaylistRow = {
-  id: number;
-  account_id?: number;
+  id: number | string;
+  account_id?: number | null;
   name: string;
-  followers: number;
-  tracks_count?: number;
-  growth?: number;
-  growth_24h?: number;
-  growth_7d?: number;
-  growth_30d?: number;
+  followers?: number | null;
+  saves?: number | null;
+  tracks_count?: number | null;
+  total_tracks?: number | null;
+  track_count?: number | null;
   genre?: string | null;
+  spotify_id?: string | null;
+  spotify_url?: string | null;
+  playlist_url?: string | null;
+  external_url?: string | null;
+  url?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_update?: string | null;
+  growth?: number | null;
+  growth_24h?: number | null;
+  growth_7d?: number | null;
+  growth_30d?: number | null;
+  today?: number | null;
+  today_minus_1?: number | null;
+  today_minus_2?: number | null;
+  today_minus_3?: number | null;
+  today_minus_4?: number | null;
+  [key: string]: unknown;
+};
+
+type CreatePlaylistPayload = {
+  account_id: number;
+  name: string;
+  import_tracks_url?: string;
+};
+
+type CreatedPlaylistDetails = {
+  name: string;
+  accountName: string;
+  tracks: number;
+  id: string;
+  link: string;
 };
 
 const ALL_ACCOUNTS_ID = -1;
-const GENRES_STORAGE_KEY = "playlist-page-genres-v2";
-const PLAYLIST_GENRES_STORAGE_KEY = "playlist-page-playlist-genres-v2";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 
-function playlistGenreKey(playlist: PlaylistRow) {
+function playlistKey(playlist: PlaylistRow) {
   return `${playlist.account_id ?? "unknown"}-${playlist.id}`;
 }
 
-function getGrowth24h(playlist: PlaylistRow) {
-  return playlist.growth_24h ?? playlist.growth ?? 0;
+function getAccountName(accounts: AccountRow[], accountId?: number | null) {
+  if (!accountId) return "—";
+  const account = accounts.find((item) => item.id === accountId);
+  return account?.display_name || account?.name || "—";
 }
 
-function getGrowth7d(playlist: PlaylistRow) {
-  return playlist.growth_7d ?? 0;
+function truncatePlaylistTitle(title: string) {
+  return title.length > 40 ? `${title.slice(0, 40)}...` : title;
 }
 
-function getGrowth30d(playlist: PlaylistRow) {
-  return playlist.growth_30d ?? 0;
+function getTrackCount(playlist: PlaylistRow) {
+  return (
+    playlist.tracks_count ?? playlist.total_tracks ?? playlist.track_count ?? 0
+  );
+}
+
+function getPlaylistId(playlist: PlaylistRow) {
+  return String(playlist.spotify_id || playlist.id);
+}
+
+function getPlaylistUrl(playlist: PlaylistRow) {
+  return (
+    playlist.spotify_url ||
+    playlist.playlist_url ||
+    playlist.external_url ||
+    playlist.url ||
+    `https://open.spotify.com/playlist/${getPlaylistId(playlist)}`
+  );
+}
+
+function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const possibleKeys = [
+    dayOffset === 0 ? "today" : `today_minus_${dayOffset}`,
+    dayOffset === 0 ? "growth_24h" : `growth_day_${dayOffset}`,
+    dayOffset === 0 ? "growth" : `day_${dayOffset}`,
+    `growth_minus_${dayOffset}`,
+    `followers_growth_${dayOffset}`,
+  ].filter(Boolean) as string[];
+
+  for (const key of possibleKeys) {
+    const value = playlist[key];
+    if (typeof value === "number") return value;
+    if (
+      typeof value === "string" &&
+      value.trim() !== "" &&
+      !Number.isNaN(Number(value))
+    ) {
+      return Number(value);
+    }
+  }
+
+  return 0;
 }
 
 function formatGrowth(value: number) {
-  if (value > 0) return `+${value}`;
-  return `${value}`;
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function growthColor(value: number) {
+  if (value <= 0) return "text-red-400";
+  if (value <= 3) return "text-white";
+  return "text-green-400";
+}
+
+function formatDayLabel(dayOffset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - dayOffset);
+  return `${date.getDate()}/${date.getMonth() + 1}`;
+}
+
+function safeCsv(value: unknown) {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
+  return text;
 }
 
 export default function PlaylistsPage() {
   const queryClient = useQueryClient();
-
-  const activeAccountId = useActiveAccountStore((s) => s.activeAccountId);
-  const setActiveAccountId = useActiveAccountStore((s) => s.setActiveAccountId);
+  const activeAccountId = useActiveAccountStore(
+    (state) => state.activeAccountId,
+  );
+  const setActiveAccountId = useActiveAccountStore(
+    (state) => state.setActiveAccountId,
+  );
 
   const [search, setSearch] = useState("");
-  const [sortField, setSortField] = useState<SortField>("followers");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
-  const [genres, setGenres] = useState<string[]>(["Pop", "House", "Techno"]);
-  const [playlistGenres, setPlaylistGenres] = useState<Record<string, string>>({});
-  const [genreFilter, setGenreFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState<number>(ALL_ACCOUNTS_ID);
+  const [genreFilter, setGenreFilter] = useState("all");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [sortField, setSortField] = useState("playlist");
+  const [adsGenres, setAdsGenres] = useState<Record<string, string>>({});
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createAccountId, setCreateAccountId] = useState<number | "">("");
+  const [createName, setCreateName] = useState("");
+  const [importTracksUrl, setImportTracksUrl] = useState("");
+  const [createdPlaylist, setCreatedPlaylist] =
+    useState<CreatedPlaylistDetails | null>(null);
+
+  const dayColumns = useMemo(
+    () => Array.from({ length: 30 }, (_, index) => index),
+    [],
+  );
 
   const accountsQuery = useQuery<AccountRow[]>({
     queryKey: ["accounts"],
@@ -96,166 +189,203 @@ export default function PlaylistsPage() {
   }, [activeAccountId, accounts, setActiveAccountId]);
 
   useEffect(() => {
-    try {
-      const storedGenres = window.localStorage.getItem(GENRES_STORAGE_KEY);
-      const storedPlaylistGenres = window.localStorage.getItem(PLAYLIST_GENRES_STORAGE_KEY);
+    if (accounts.length > 0 && createAccountId === "") {
+      setCreateAccountId(accounts[0].id);
+    }
+  }, [accounts, createAccountId]);
 
-      if (storedGenres) setGenres(JSON.parse(storedGenres));
-      if (storedPlaylistGenres) setPlaylistGenres(JSON.parse(storedPlaylistGenres));
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(ADS_DATA_STORAGE_KEY);
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved) as Record<string, { genre?: string }>;
+      const nextGenres: Record<string, string> = {};
+
+      Object.entries(parsed).forEach(([key, value]) => {
+        if (value?.genre && value.genre !== "Genre") {
+          nextGenres[key] = value.genre;
+        }
+      });
+
+      setAdsGenres(nextGenres);
     } catch {
-      setGenres(["Pop", "House", "Techno"]);
-      setPlaylistGenres({});
+      setAdsGenres({});
     }
   }, []);
 
-  useEffect(() => {
-    window.localStorage.setItem(GENRES_STORAGE_KEY, JSON.stringify(genres));
-  }, [genres]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      PLAYLIST_GENRES_STORAGE_KEY,
-      JSON.stringify(playlistGenres),
-    );
-  }, [playlistGenres]);
-
-  const singleAccountPlaylistsQuery = useQuery({
-    queryKey: ["playlists", activeAccountId],
-    queryFn: () => getPlaylists(activeAccountId as number),
-    enabled: !!activeAccountId && activeAccountId !== ALL_ACCOUNTS_ID,
-  });
-
-  const allAccountPlaylistQueries = useQueries({
+  const playlistQueries = useQueries({
     queries: accounts.map((account) => ({
       queryKey: ["playlists", account.id],
       queryFn: () => getPlaylists(account.id),
-      enabled: activeAccountId === ALL_ACCOUNTS_ID,
+      enabled: accounts.length > 0,
     })),
   });
 
-  const playlistsData = useMemo(() => {
-    if (activeAccountId === ALL_ACCOUNTS_ID) {
-      return allAccountPlaylistQueries.flatMap((query, index) => {
-        const account = accounts[index];
-
-        return ((query.data ?? []) as PlaylistRow[]).map((playlist) => ({
-          ...playlist,
-          account_id: playlist.account_id ?? account?.id,
-        }));
-      });
-    }
-
-    return ((singleAccountPlaylistsQuery.data ?? []) as PlaylistRow[]).map(
-      (playlist) => ({
+  const playlists = useMemo(() => {
+    return playlistQueries.flatMap((query, index) => {
+      const account = accounts[index];
+      return ((query.data ?? []) as PlaylistRow[]).map((playlist) => ({
         ...playlist,
-        account_id: playlist.account_id ?? activeAccountId ?? undefined,
-      }),
-    );
-  }, [
-    activeAccountId,
-    accounts,
-    allAccountPlaylistQueries,
-    singleAccountPlaylistsQuery.data,
-  ]);
+        account_id: playlist.account_id ?? account?.id,
+      }));
+    });
+  }, [accounts, playlistQueries]);
 
   const isLoading =
-    activeAccountId === ALL_ACCOUNTS_ID
-      ? allAccountPlaylistQueries.some((query) => query.isLoading)
-      : singleAccountPlaylistsQuery.isLoading;
-
+    accountsQuery.isLoading || playlistQueries.some((query) => query.isLoading);
   const isError =
-    activeAccountId === ALL_ACCOUNTS_ID
-      ? allAccountPlaylistQueries.some((query) => query.isError)
-      : singleAccountPlaylistsQuery.isError;
+    accountsQuery.isError || playlistQueries.some((query) => query.isError);
 
-  const syncAllMutation = useMutation({
-    mutationFn: async () => {
-      if (activeAccountId === ALL_ACCOUNTS_ID) {
-        for (const account of accounts) {
-  await syncAllPlaylistsForAccount(account.id, 500, 0);
-}
-        return;
-      }
-
-      await syncAllPlaylistsForAccount(activeAccountId as number, 500, 0);
-    },
-    onSuccess: async () => {
-      if (activeAccountId === ALL_ACCOUNTS_ID) {
-        await Promise.all(
-          accounts.map((account) =>
-            queryClient.invalidateQueries({
-              queryKey: ["playlists", account.id],
-            }),
-          ),
-        );
-        return;
-      }
-
-      await queryClient.invalidateQueries({
-        queryKey: ["playlists", activeAccountId],
-      });
-    },
-  });
-
-  const getAccountName = (accountId?: number) => {
-    if (!accountId) return "—";
-    return accounts.find((account) => account.id === accountId)?.display_name || "—";
+  const getGenre = (playlist: PlaylistRow) => {
+    return adsGenres[playlistKey(playlist)] || playlist.genre || "—";
   };
 
-  const filtered = useMemo(() => {
-    let data = playlistsData;
+  const genreOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        playlists
+          .map((playlist) => getGenre(playlist))
+          .filter((genre) => genre && genre !== "—"),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+  }, [playlists, adsGenres]);
 
-    if (search) {
-      data = data.filter((p) =>
-        p.name.toLowerCase().includes(search.toLowerCase()),
-      );
+  const filtered = useMemo(() => {
+    let data = playlists;
+
+    if (accountFilter !== ALL_ACCOUNTS_ID) {
+      data = data.filter((playlist) => playlist.account_id === accountFilter);
     }
 
     if (genreFilter !== "all") {
-      data = data.filter((p) => playlistGenres[playlistGenreKey(p)] === genreFilter);
+      data = data.filter((playlist) => getGenre(playlist) === genreFilter);
     }
 
-    if (accountFilter !== ALL_ACCOUNTS_ID) {
-      data = data.filter((p) => p.account_id === accountFilter);
+    const cleanSearch = search.trim().toLowerCase();
+    if (cleanSearch) {
+      data = data.filter((playlist) =>
+        playlist.name.toLowerCase().includes(cleanSearch),
+      );
     }
 
     return [...data].sort((a, b) => {
-      const dir = sortOrder === "asc" ? 1 : -1;
-
-      if (sortField === "playlist") {
-        return a.name.localeCompare(b.name) * dir;
-      }
+      const direction = sortOrder === "asc" ? 1 : -1;
 
       if (sortField === "genre") {
-        const genreA = playlistGenres[playlistGenreKey(a)] || "";
-        const genreB = playlistGenres[playlistGenreKey(b)] || "";
-        return genreA.localeCompare(genreB) * dir;
+        return getGenre(a).localeCompare(getGenre(b)) * direction;
       }
 
       if (sortField === "account") {
-        return getAccountName(a.account_id).localeCompare(getAccountName(b.account_id)) * dir;
+        return (
+          getAccountName(accounts, a.account_id).localeCompare(
+            getAccountName(accounts, b.account_id),
+          ) * direction
+        );
       }
 
-      if (sortField === "followers") return (a.followers - b.followers) * dir;
-      if (sortField === "tracks") return ((a.tracks_count ?? 0) - (b.tracks_count ?? 0)) * dir;
-      if (sortField === "growth24h") return (getGrowth24h(a) - getGrowth24h(b)) * dir;
-      if (sortField === "growth7d") return (getGrowth7d(a) - getGrowth7d(b)) * dir;
-      if (sortField === "growth30d") return (getGrowth30d(a) - getGrowth30d(b)) * dir;
+      if (sortField === "followers") {
+        return ((a.followers ?? 0) - (b.followers ?? 0)) * direction;
+      }
 
-      return 0;
+      if (sortField.startsWith("day-")) {
+        const day = Number(sortField.replace("day-", ""));
+        return (getGrowthValue(a, day) - getGrowthValue(b, day)) * direction;
+      }
+
+      return a.name.localeCompare(b.name) * direction;
     });
   }, [
-    playlistsData,
-    search,
-    sortField,
-    sortOrder,
-    playlistGenres,
-    genreFilter,
     accountFilter,
+    genreFilter,
+    playlists,
+    search,
+    sortOrder,
+    sortField,
+    adsGenres,
     accounts,
   ]);
 
-  const toggleSort = (field: SortField) => {
+  const createPlaylistMutation = useMutation({
+    mutationFn: async (payload: CreatePlaylistPayload) => {
+      const response = await fetch(`${API_BASE_URL}/api/playlists/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Failed to create playlist");
+      }
+
+      return response.json();
+    },
+    onSuccess: async (data: any) => {
+      const accountName = getAccountName(accounts, Number(createAccountId));
+      const details: CreatedPlaylistDetails = {
+        name: data?.name || createName,
+        accountName,
+        tracks: data?.tracks_count ?? data?.track_count ?? data?.tracks ?? 0,
+        id: String(data?.spotify_id || data?.id || "—"),
+        link:
+          data?.spotify_url ||
+          data?.playlist_url ||
+          data?.external_url ||
+          data?.url ||
+          (data?.spotify_id
+            ? `https://open.spotify.com/playlist/${data.spotify_id}`
+            : "—"),
+      };
+
+      setCreatedPlaylist(details);
+      setShowCreateModal(false);
+      setCreateName("");
+      setImportTracksUrl("");
+
+      await Promise.all(
+        accounts.map((account) =>
+          queryClient.invalidateQueries({
+            queryKey: ["playlists", account.id],
+          }),
+        ),
+      );
+    },
+  });
+
+  const syncAllMutation = useMutation({
+    mutationFn: async () => {
+      if (accountFilter === ALL_ACCOUNTS_ID) {
+        for (const account of accounts) {
+          await syncAllPlaylistsForAccount(account.id, 500, 0);
+        }
+        return;
+      }
+
+      await syncAllPlaylistsForAccount(accountFilter, 500, 0);
+    },
+    onSuccess: async () => {
+      await Promise.all(
+        accounts.map((account) =>
+          queryClient.invalidateQueries({
+            queryKey: ["playlists", account.id],
+          }),
+        ),
+      );
+    },
+  });
+
+  const handleCreatePlaylist = () => {
+    if (!createAccountId || !createName.trim()) return;
+
+    createPlaylistMutation.mutate({
+      account_id: Number(createAccountId),
+      name: createName.trim(),
+      import_tracks_url: importTracksUrl.trim() || undefined,
+    });
+  };
+
+  const handleSort = (field: string) => {
     if (sortField === field) {
       setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
       return;
@@ -265,236 +395,367 @@ export default function PlaylistsPage() {
     setSortOrder("asc");
   };
 
-  const arrowFor = (field: SortField) => {
-    if (sortField !== field) return "";
+  const sortIndicator = (field: string) => {
+    if (sortField !== field) return "↕";
     return sortOrder === "asc" ? "↑" : "↓";
   };
 
-  const headerClass = (field: SortField) =>
-  `cursor-pointer font-semibold ${
-    sortField === field ? "text-green-400" : "text-zinc-400"
-  }`;
+  const downloadCsv = () => {
+    const headers = [
+      "Playlist",
+      "Genre",
+      "Account",
+      "Followers",
+      ...dayColumns.map((day) => formatDayLabel(day)),
+    ];
 
-  const handleAddGenre = (playlist: PlaylistRow) => {
-    const name = window.prompt("Enter new genre name");
-    if (!name) return;
+    const rows = filtered.map((playlist) => [
+      playlist.name,
+      getGenre(playlist),
+      getAccountName(accounts, playlist.account_id),
+      playlist.followers ?? 0,
+      ...dayColumns.map((day) => getGrowthValue(playlist, day)),
+    ]);
 
-    const cleaned = name.trim();
-    if (!cleaned) return;
+    const csv = [headers, ...rows]
+      .map((row) => row.map(safeCsv).join(","))
+      .join("\n");
 
-    const exists = genres.some(
-      (genre) => genre.toLowerCase() === cleaned.toLowerCase(),
-    );
-
-    if (!exists) {
-      setGenres([...genres, cleaned]);
-    }
-
-    setPlaylistGenres({
-      ...playlistGenres,
-      [playlistGenreKey(playlist)]: cleaned,
-    });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "playlists-30-day-growth.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleGenreChange = async (p: PlaylistRow, value: string) => {
-  const API_BASE_URL =
-    process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-
-  let finalGenre = value;
-
-  if (value === "__add__") {
-    const name = window.prompt("Enter genre");
-    if (!name) return;
-
-    finalGenre = name.trim();
-    if (!finalGenre) return;
-
-    const exists = genres.some(
-      (genre) => genre.toLowerCase() === finalGenre.toLowerCase(),
-    );
-
-    if (!exists) {
-      setGenres([...genres, finalGenre]);
-    }
-  }
-
-  setPlaylistGenres({
-    ...playlistGenres,
-    [playlistGenreKey(p)]: finalGenre,
-  });
-
-  await fetch(`${API_BASE_URL}/api/playlists/${p.id}/genre`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      genre: finalGenre || null,
-    }),
-  });
-};
-
   return (
-    <div className="min-h-screen bg-black px-8 py-10 text-white">
-      <div className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+    <div className="h-screen overflow-hidden bg-black px-6 py-8 text-white">
+      <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
-          <p className="mt-2 text-sm text-zinc-500">
-            Browse, switch accounts, sync data, and open details.
+          <h1 className="text-3xl font-semibold tracking-tight">Playlists</h1>
+          <p className="mt-1 text-xs text-zinc-500">
+            Monitor playlist genres, accounts, followers, and 30-day growth.
           </p>
         </div>
 
-        <div className="flex items-end gap-3">
-          <div>
-            <label className="mb-2 block text-xs text-zinc-400">ACTIVE ACCOUNT</label>
-            <select
-              value={activeAccountId ?? ""}
-              onChange={(e) => {
-                const value = Number(e.target.value);
-                setActiveAccountId(value);
-                setAccountFilter(value);
-              }}
-              className="h-11 w-[220px] rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm text-white"
-            >
-              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search playlist..."
+            className="h-10 w-[240px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+          />
 
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            value={genreFilter}
+            onChange={(event) => setGenreFilter(event.target.value)}
+            className="h-10 w-[160px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+          >
+            <option value="all">All Genres</option>
+            {genreOptions.map((genre) => (
+              <option key={genre} value={genre}>
+                {genre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={accountFilter}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              setAccountFilter(value);
+              setActiveAccountId(value === ALL_ACCOUNTS_ID ? null : value);
+            }}
+            className="h-10 w-[180px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+          >
+            <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.display_name ||
+                  account.name ||
+                  `Account ${account.id}`}
+              </option>
+            ))}
+          </select>
+
+          <Link
+            href="/playlists/create"
+            className="flex h-10 items-center rounded-xl border border-green-500 bg-black px-5 text-sm font-bold text-green-400 transition hover:bg-green-500/10"
+          >
+            Create
+          </Link>
 
           <button
+            type="button"
             onClick={() => syncAllMutation.mutate()}
-            disabled={!activeAccountId || syncAllMutation.isPending}
-            className="h-11 rounded-xl bg-green-600 px-5 text-sm font-semibold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={syncAllMutation.isPending || accounts.length === 0}
+            className="h-10 rounded-xl bg-green-500 px-4 text-sm font-bold text-black transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {syncAllMutation.isPending ? "Syncing..." : "Sync All"}
           </button>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-950">
-        <div className="flex flex-col gap-4 border-b border-zinc-800 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
-          <h2 className="text-xl font-semibold">Library</h2>
-
-          <div className="flex flex-wrap gap-3">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search playlist..."
-              className="h-10 w-[260px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white"
-            />
-
-            <select
-              value={genreFilter}
-              onChange={(e) => setGenreFilter(e.target.value)}
-              className="h-10 w-[160px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white"
-            >
-              <option value="all">All Genres</option>
-              {genres.map((genre) => (
-                <option key={genre} value={genre}>
-                  {genre}
-                </option>
+      <div className="w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+        <div className="max-h-[calc(100vh-165px)] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-black [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-500">
+          <div className="w-full min-w-0">
+            <div className="sticky top-0 z-20 grid grid-cols-[minmax(220px,2fr)_80px_110px_65px_repeat(30,minmax(22px,1fr))] border-b border-zinc-800 bg-zinc-950 px-3 py-3 text-[9px] font-bold uppercase tracking-wide text-zinc-400">
+              <button
+                type="button"
+                onClick={() => handleSort("playlist")}
+                className="text-left text-green-400 hover:text-green-300"
+              >
+                Playlist A&gt;Z {sortIndicator("playlist")}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSort("genre")}
+                className="text-left hover:text-green-400"
+              >
+                Genre {sortIndicator("genre")}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSort("account")}
+                className="text-left hover:text-green-400"
+              >
+                Account {sortIndicator("account")}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSort("followers")}
+                className="text-left hover:text-green-400"
+              >
+                Followers {sortIndicator("followers")}
+              </button>
+              {dayColumns.map((day) => (
+                <button
+                  type="button"
+                  key={`header-day-${day}`}
+                  onClick={() => handleSort(`day-${day}`)}
+                  className="text-center hover:text-green-400"
+                >
+                  {formatDayLabel(day)} {sortIndicator(`day-${day}`)}
+                </button>
               ))}
-            </select>
+            </div>
 
-          
+            {isLoading ? (
+              <div className="px-4 py-10 text-sm text-zinc-500">
+                Loading playlists...
+              </div>
+            ) : isError ? (
+              <div className="px-4 py-10 text-sm text-red-400">
+                Failed to load playlists. Make sure the backend is running.
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="px-4 py-10 text-sm text-zinc-500">
+                No playlists found.
+              </div>
+            ) : (
+              <div className="divide-y divide-zinc-900">
+                {filtered.map((playlist, index) => (
+                  <div
+                    key={`${playlist.account_id ?? "account"}-${playlist.id}-${index}`}
+                    className="grid grid-cols-[minmax(220px,2fr)_80px_110px_65px_repeat(30,minmax(22px,1fr))] items-center px-3 py-3 text-[11px] transition hover:bg-zinc-900/70"
+                  >
+                    <a
+                      href={getPlaylistUrl(playlist)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={playlist.name}
+                      className="truncate pr-3 font-semibold text-white hover:text-green-400"
+                    >
+                      {truncatePlaylistTitle(playlist.name)}
+                    </a>
+
+                    <div className="truncate pr-3 text-zinc-300">
+                      {getGenre(playlist)}
+                    </div>
+                    <div className="truncate pr-3 text-zinc-300">
+                      {getAccountName(accounts, playlist.account_id)}
+                    </div>
+                    <div className="font-semibold text-white">
+                      {playlist.followers ?? 0}
+                    </div>
+
+                    {dayColumns.map((day) => {
+                      const value = getGrowthValue(playlist, day);
+                      return (
+                        <div
+                          key={`${playlist.account_id ?? "account"}-${playlist.id}-growth-${day}`}
+                          className={`text-center font-semibold ${growthColor(value)}`}
+                        >
+                          {formatGrowth(value)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-
-        <div className="grid grid-cols-[minmax(240px,1fr)_130px_140px_100px_100px_100px_110px_100px] border-b border-zinc-800 px-5 py-3 text-xs">
-  <div className={headerClass("playlist")} onClick={() => toggleSort("playlist")}>
-    Playlist A&gt;Z {arrowFor("playlist")}
-  </div>
-
-  <div className={headerClass("genre")} onClick={() => toggleSort("genre")}>
-    Genre {arrowFor("genre")}
-  </div>
-
-  <div className={headerClass("account")} onClick={() => toggleSort("account")}>
-    Account {arrowFor("account")}
-  </div>
-
-  <div className={headerClass("growth24h")} onClick={() => toggleSort("growth24h")}>
-    24 H {arrowFor("growth24h")}
-  </div>
-
-  <div className={headerClass("growth7d")} onClick={() => toggleSort("growth7d")}>
-    7 D {arrowFor("growth7d")}
-  </div>
-
-  <div className={headerClass("growth30d")} onClick={() => toggleSort("growth30d")}>
-    30 D {arrowFor("growth30d")}
-  </div>
-
-  <div className={headerClass("followers")} onClick={() => toggleSort("followers")}>
-    Followers {arrowFor("followers")}
-  </div>
-
-  <div className={headerClass("tracks")} onClick={() => toggleSort("tracks")}>
-    Tracks {arrowFor("tracks")}
-  </div>
-</div>
-
-        {isLoading ? (
-          <div className="px-5 py-8 text-sm text-zinc-400">Loading playlists...</div>
-        ) : isError ? (
-          <div className="px-5 py-8 text-sm text-red-400">
-            Failed to load playlists.
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="px-5 py-8 text-sm text-zinc-400">
-            No playlists found.
-          </div>
-        ) : (
-          <div>
-            {filtered.map((p) => (
-              <div
-                key={`${p.account_id}-${p.id}`}
-                className="grid grid-cols-[minmax(240px,1fr)_130px_140px_100px_100px_100px_110px_100px] border-b border-zinc-900 px-5 py-4 text-sm"
-              >
-                <Link
-                  href={`/playlists/${p.id}`}
-                  className="truncate text-white hover:text-green-400"
-                >
-                  {p.name}
-                </Link>
-
-                <div>
-                  <select
-                    value={playlistGenres[playlistGenreKey(p)] || ""}
-                    onChange={(e) => handleGenreChange(p, e.target.value)}
-                    className="h-8 w-[110px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                  >
-                    <option value="">Select</option>
-
-                    {genres.map((genre) => (
-                      <option key={genre} value={genre}>
-                        {genre}
-                      </option>
-                    ))}
-
-                    <option value="__add__">+ Add Genre</option>
-                  </select>
-                </div>
-
-                <div className="truncate text-xs text-zinc-400">
-                  {getAccountName(p.account_id)}
-                </div>
-
-                <div className="text-green-400">{formatGrowth(getGrowth24h(p))}</div>
-                <div className="text-green-400">{formatGrowth(getGrowth7d(p))}</div>
-                <div className="text-green-400">{formatGrowth(getGrowth30d(p))}</div>
-                <div>{p.followers}</div>
-                <div>{p.tracks_count ?? 0}</div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
+
+      {showCreateModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onMouseDown={() => setShowCreateModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Create Playlist</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Create a playlist in the selected Spotify account.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-2xl font-bold text-red-500 hover:text-red-400"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                  Account
+                </span>
+                <select
+                  value={createAccountId}
+                  onChange={(event) =>
+                    setCreateAccountId(Number(event.target.value))
+                  }
+                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+                >
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.display_name ||
+                        account.name ||
+                        `Account ${account.id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                  Playlist Name
+                </span>
+                <input
+                  value={createName}
+                  onChange={(event) => setCreateName(event.target.value)}
+                  placeholder="Enter playlist name"
+                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                  Import Tracks Optional
+                </span>
+                <input
+                  value={importTracksUrl}
+                  onChange={(event) => setImportTracksUrl(event.target.value)}
+                  placeholder="Paste Spotify playlist link to copy tracks from"
+                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+                />
+              </label>
+
+              {createPlaylistMutation.error instanceof Error && (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                  {createPlaylistMutation.error.message}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleCreatePlaylist}
+                disabled={
+                  !createAccountId ||
+                  !createName.trim() ||
+                  createPlaylistMutation.isPending
+                }
+                className="h-11 w-full rounded-xl bg-green-500 text-sm font-bold text-black transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {createPlaylistMutation.isPending ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {createdPlaylist && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onMouseDown={() => setCreatedPlaylist(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Playlist Created</h2>
+              <button
+                type="button"
+                onClick={() => setCreatedPlaylist(null)}
+                className="text-2xl font-bold text-red-500 hover:text-red-400"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between gap-4 border-b border-zinc-800 pb-2">
+                <span className="text-zinc-500">Name</span>
+                <span className="text-right font-semibold">
+                  {createdPlaylist.name}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4 border-b border-zinc-800 pb-2">
+                <span className="text-zinc-500">Account Name</span>
+                <span className="font-semibold">
+                  {createdPlaylist.accountName}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4 border-b border-zinc-800 pb-2">
+                <span className="text-zinc-500"># Tracks</span>
+                <span className="font-semibold">{createdPlaylist.tracks}</span>
+              </div>
+              <div className="flex justify-between gap-4 border-b border-zinc-800 pb-2">
+                <span className="text-zinc-500">ID</span>
+                <span className="max-w-[300px] truncate font-semibold">
+                  {createdPlaylist.id}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-zinc-500">Link</span>
+                {createdPlaylist.link && createdPlaylist.link !== "—" ? (
+                  <a
+                    href={createdPlaylist.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="max-w-[300px] truncate font-semibold text-green-400 hover:underline"
+                  >
+                    {createdPlaylist.link}
+                  </a>
+                ) : (
+                  <span className="font-semibold">—</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

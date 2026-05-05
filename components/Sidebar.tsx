@@ -6,13 +6,13 @@ import { usePathname } from "next/navigation";
 
 const primaryNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: "▦" },
-  { label: "Playlists", href: "/playlists", icon: "≡" },
+  { label: "Daily Growth", href: "/playlists", icon: "≡" },
   { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
   { label: "Curation", href: "/curation", icon: "◇" },
 ];
 
 const middleNavItems = [
-  { label: "Ads", href: "/ads", icon: "◉" },
+  { label: "Playlists", href: "/ads", icon: "◉" },
   { label: "Production", href: "/production", icon: "▶" },
 ];
 
