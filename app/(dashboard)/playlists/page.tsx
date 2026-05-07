@@ -10,13 +10,25 @@ import {
 } from "@tanstack/react-query";
 
 import { getAccounts } from "@/lib/api/accounts";
-import { getPlaylists, syncAllPlaylistsForAccount } from "@/lib/api/playlists";
+import { syncAllPlaylistsForAccount } from "@/lib/api/playlists";
 import { useActiveAccountStore } from "@/lib/store/activeAccount";
 
 type AccountRow = {
   id: number;
   display_name?: string | null;
   name?: string | null;
+};
+
+type DailyHistoryItem = {
+  date: string;
+  followers?: number | null;
+  growth?: number | null;
+};
+
+type DailyGrowthItem = {
+  date?: string;
+  label?: string;
+  growth?: number | null;
 };
 
 type PlaylistRow = {
@@ -46,6 +58,8 @@ type PlaylistRow = {
   today_minus_2?: number | null;
   today_minus_3?: number | null;
   today_minus_4?: number | null;
+  daily_history?: DailyHistoryItem[];
+  daily_growth?: DailyGrowthItem[];
   [key: string]: unknown;
 };
 
@@ -68,6 +82,31 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 
+async function fetchPlaylistsWithHistory(
+  accountId: number,
+): Promise<PlaylistRow[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/accounts/${accountId}/playlists?ts=${Date.now()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(
+      message || `Failed to load playlists for account ${accountId}`,
+    );
+  }
+
+  const payload = await response.json();
+  const items = Array.isArray(payload)
+    ? payload
+    : payload.items || payload.playlists || [];
+
+  return items as PlaylistRow[];
+}
+
 function playlistKey(playlist: PlaylistRow) {
   return `${playlist.account_id ?? "unknown"}-${playlist.id}`;
 }
@@ -78,8 +117,8 @@ function getAccountName(accounts: AccountRow[], accountId?: number | null) {
   return account?.display_name || account?.name || "—";
 }
 
-function truncatePlaylistTitle(title: string) {
-  return title.length > 40 ? `${title.slice(0, 40)}...` : title;
+function truncatePlaylistTitle(title: string, maxLength = 35) {
+  return title.length > maxLength ? `${title.slice(0, maxLength)}...` : title;
 }
 
 function getTrackCount(playlist: PlaylistRow) {
@@ -102,7 +141,65 @@ function getPlaylistUrl(playlist: PlaylistRow) {
   );
 }
 
+function formatDayLabel(dayOffset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - dayOffset);
+  return `${date.getDate()}/${date.getMonth() + 1}`;
+}
+
+function normalizeHistoryLabel(value?: string | null) {
+  if (!value) return "";
+
+  const clean = String(value).trim();
+
+  // Already returned by backend as "5/5".
+  if (/^\d{1,2}\/\d{1,2}$/.test(clean)) return clean;
+
+  // ISO date like 2026-05-05 or full ISO datetime.
+  const parsed = new Date(clean);
+  if (!Number.isNaN(parsed.getTime())) {
+    return `${parsed.getDate()}/${parsed.getMonth() + 1}`;
+  }
+
+  return clean;
+}
+
+function getNumericValue(value: unknown) {
+  if (typeof value === "number") return value;
+  if (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    !Number.isNaN(Number(value))
+  ) {
+    return Number(value);
+  }
+  return null;
+}
+
 function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const label = formatDayLabel(dayOffset);
+
+  // First use backend-calculated daily_growth. This is the table value.
+  const fromDailyGrowth = playlist.daily_growth?.find(
+    (item) =>
+      normalizeHistoryLabel(item.label) === label ||
+      normalizeHistoryLabel(item.date) === label,
+  );
+
+  if (fromDailyGrowth) {
+    return Number(fromDailyGrowth.growth ?? 0);
+  }
+
+  // Then use saved database daily_history if daily_growth is missing.
+  const fromHistory = playlist.daily_history?.find(
+    (item) => normalizeHistoryLabel(item.date) === label,
+  );
+
+  if (fromHistory) {
+    return Number(fromHistory.growth ?? 0);
+  }
+
+  // Final fallback for older API fields.
   const possibleKeys = [
     dayOffset === 0 ? "today" : `today_minus_${dayOffset}`,
     dayOffset === 0 ? "growth_24h" : `growth_day_${dayOffset}`,
@@ -112,15 +209,8 @@ function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
   ].filter(Boolean) as string[];
 
   for (const key of possibleKeys) {
-    const value = playlist[key];
-    if (typeof value === "number") return value;
-    if (
-      typeof value === "string" &&
-      value.trim() !== "" &&
-      !Number.isNaN(Number(value))
-    ) {
-      return Number(value);
-    }
+    const value = getNumericValue(playlist[key]);
+    if (value !== null) return value;
   }
 
   return 0;
@@ -134,12 +224,6 @@ function growthColor(value: number) {
   if (value <= 0) return "text-red-400";
   if (value <= 3) return "text-white";
   return "text-green-400";
-}
-
-function formatDayLabel(dayOffset: number) {
-  const date = new Date();
-  date.setDate(date.getDate() - dayOffset);
-  return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
 function safeCsv(value: unknown) {
@@ -217,7 +301,7 @@ export default function PlaylistsPage() {
   const playlistQueries = useQueries({
     queries: accounts.map((account) => ({
       queryKey: ["playlists", account.id],
-      queryFn: () => getPlaylists(account.id),
+      queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: accounts.length > 0,
     })),
   });
@@ -463,7 +547,7 @@ export default function PlaylistsPage() {
 
           <select
             value={accountFilter}
-            onChange={(event) => {
+            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
               const value = Number(event.target.value);
               setAccountFilter(value);
               setActiveAccountId(value === ALL_ACCOUNTS_ID ? 0 : value);
@@ -491,7 +575,7 @@ export default function PlaylistsPage() {
             type="button"
             onClick={() => syncAllMutation.mutate()}
             disabled={syncAllMutation.isPending || accounts.length === 0}
-            className="h-10 rounded-xl bg-green-500 px-4 text-sm font-bold text-black transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-10 rounded-xl bg-green-500 px-4 text-sm font-bold text-white transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {syncAllMutation.isPending ? "Syncing..." : "Sync All"}
           </button>
@@ -561,15 +645,13 @@ export default function PlaylistsPage() {
                     key={`${playlist.account_id ?? "account"}-${playlist.id}-${index}`}
                     className="grid grid-cols-[minmax(220px,2fr)_80px_110px_65px_repeat(30,minmax(22px,1fr))] items-center px-3 py-3 text-[11px] transition hover:bg-zinc-900/70"
                   >
-                    <a
-                      href={getPlaylistUrl(playlist)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={playlist.name}
+                    <Link
+                      href={`/playlists/${playlist.id}`}
                       className="truncate pr-3 font-semibold text-white hover:text-green-400"
+                      title={playlist.name}
                     >
-                      {truncatePlaylistTitle(playlist.name)}
-                    </a>
+                      {truncatePlaylistTitle(playlist.name, 35)}
+                    </Link>
 
                     <div className="truncate pr-3 text-zinc-300">
                       {getGenre(playlist)}

@@ -95,6 +95,8 @@ type AddTrackMode = "current" | "all";
 
 const STORAGE_KEY = "nerd-engine-playlist-manager-global";
 const CURATION_DRAFT_KEY = "nerd-engine-playlist-manager-curation-draft";
+const PLAYLIST_MANAGER_USER_KEY = "global";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const emptyState = (): PlaylistManagerState => ({
   savedMasterPlaylists: [],
@@ -138,7 +140,7 @@ function normalizeState(raw: Partial<PlaylistManagerState>): PlaylistManagerStat
   };
 }
 
-function loadState(): PlaylistManagerState {
+function loadStateFromLocalStorage(): PlaylistManagerState {
   if (typeof window === "undefined") return emptyState();
 
   try {
@@ -150,12 +152,52 @@ function loadState(): PlaylistManagerState {
   }
 }
 
-function saveState(state: PlaylistManagerState) {
+function saveStateToLocalStorage(state: PlaylistManagerState) {
+  if (typeof window === "undefined") return;
+
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   window.localStorage.setItem(
     "master_playlists",
     JSON.stringify(state.savedMasterPlaylists),
   );
+}
+
+async function loadStateFromDatabase(): Promise<PlaylistManagerState | null> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/playlist-manager-state?user_key=${encodeURIComponent(
+      PLAYLIST_MANAGER_USER_KEY,
+    )}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to load playlist manager state.");
+  }
+
+  const data = await response.json();
+
+  if (!data?.state) return null;
+
+  return normalizeState(data.state);
+}
+
+async function saveStateToDatabase(state: PlaylistManagerState) {
+  const response = await fetch(`${API_BASE_URL}/api/playlist-manager-state`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_key: PLAYLIST_MANAGER_USER_KEY,
+      state,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to save playlist manager state.");
+  }
+
+  return response.json();
 }
 
 function extractSpotifyTrackId(input: string) {
@@ -304,14 +346,43 @@ export default function PlaylistManagerPage() {
   });
 
   useEffect(() => {
-    const loaded = loadState();
-    setState(loaded);
-    setHydrated(true);
+    let cancelled = false;
+
+    async function hydrateState() {
+      const localState = loadStateFromLocalStorage();
+
+      try {
+        const databaseState = await loadStateFromDatabase();
+        const loaded = databaseState ?? localState;
+
+        if (cancelled) return;
+
+        setState(loaded);
+        saveStateToLocalStorage(loaded);
+      } catch {
+        if (cancelled) return;
+        setState(localState);
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    }
+
+    hydrateState();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const persistState = (nextState: PlaylistManagerState) => {
     setState(nextState);
-    saveState(nextState);
+    saveStateToLocalStorage(nextState);
+
+    saveStateToDatabase(nextState).catch(() => {
+      setPageMessage(
+        "Saved locally, but database save failed. Check backend connection.",
+      );
+    });
   };
 
   const allPlaylists = useMemo<FlatPlaylistItem[]>(() => {
@@ -390,7 +461,8 @@ export default function PlaylistManagerPage() {
             ],
           };
 
-          saveState(nextState);
+          saveStateToLocalStorage(nextState);
+          saveStateToDatabase(nextState).catch(() => undefined);
           return nextState;
         });
       } catch {
@@ -548,7 +620,8 @@ export default function PlaylistManagerPage() {
     }
 
     try {
-      saveState(state);
+      saveStateToLocalStorage(state);
+      await saveStateToDatabase(state);
 
       await replacePlaylistTracks(
         state.masterPlaylistAccountId,
