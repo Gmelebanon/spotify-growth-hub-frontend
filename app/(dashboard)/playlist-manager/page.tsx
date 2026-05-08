@@ -656,16 +656,17 @@ export default function PlaylistManagerPage() {
       try {
         const draft = JSON.parse(raw) as CurationDraft;
         const targetMasterId = draft.target_master_playlist_id;
-        const tracks = (draft.tracks ?? []).map(normalizeDraftTrack);
-
-        if (!targetMasterId || tracks.length === 0) return;
-
-        setState((current) => {
-          const existingSameDraft = current.masterCurationBoxes.some(
-            (box) =>
-              box.masterPlaylistId === targetMasterId &&
-              box.createdAt === (draft.created_at || ""),
-          );
+       const tracks = (draft.tracks ?? []).map((track) => ({
+  id: String(track.id ?? track.spotify_id ?? crypto.randomUUID()),
+  spotify_id: track.spotify_id,
+  title: track.title ?? track.name ?? "Untitled Track",
+  name: track.name ?? track.title ?? "Untitled Track",
+  artist: track.artist ?? track.artist_name ?? "",
+  artist_name: track.artist_name ?? track.artist ?? "",
+  album_name: track.album_name ?? "",
+  image_url: track.image_url ?? null,
+  spotify_url: track.spotify_url ?? null,
+}));
 
           if (existingSameDraft) return current;
 
