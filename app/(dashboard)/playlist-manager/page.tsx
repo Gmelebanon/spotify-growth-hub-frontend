@@ -229,6 +229,39 @@ function extractSpotifyPlaylistId(input: string) {
   return null;
 }
 
+
+function normalizeDraftTrack(track: Partial<TrackItem> | Record<string, unknown>): TrackItem {
+  const source = track as Record<string, unknown>;
+
+  const id =
+    String(source.id ?? source.spotify_id ?? source.spotifyId ?? source.uri ?? `draft-${Date.now()}-${Math.random()}`);
+
+  const title =
+    String(source.title ?? source.name ?? source.track_name ?? source.trackName ?? "Untitled Track");
+
+  const artist =
+    String(source.artist ?? source.artist_name ?? source.artistName ?? "");
+
+  const imageUrlValue =
+    source.image_url ?? source.imageUrl ?? source.album_image_url ?? source.albumImageUrl ?? null;
+
+  const spotifyUrlValue =
+    source.spotify_url ?? source.spotifyUrl ?? source.external_url ?? source.externalUrl ?? null;
+
+  return {
+    id,
+    spotify_id: source.spotify_id ? String(source.spotify_id) : undefined,
+    title,
+    name: title,
+    artist,
+    artist_name: artist,
+    album_name: source.album_name ? String(source.album_name) : undefined,
+    image_url: imageUrlValue ? String(imageUrlValue) : null,
+    spotify_url: spotifyUrlValue ? String(spotifyUrlValue) : null,
+  };
+}
+
+
 function normalizeTextForMatch(value: string) {
   return value
     .trim()
