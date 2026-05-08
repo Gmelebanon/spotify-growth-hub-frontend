@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { getAccounts } from "@/lib/api/accounts";
@@ -18,12 +18,23 @@ type PlaylistItem = {
   tracks_count?: number;
   image_url?: string | null;
   spotify_url?: string | null;
+  spotify_id?: string | null;
+  spotify_playlist_id?: string | null;
   account_id?: number;
 };
 
 type FlatPlaylistItem = PlaylistItem & {
   accountId: number;
   accountName: string;
+};
+
+type SpotifyPlaylistMetadata = {
+  spotify_id?: string | null;
+  name?: string | null;
+  image_url?: string | null;
+  spotify_url?: string | null;
+  owner_name?: string | null;
+  tracks_count?: number | null;
 };
 
 type AddedTrack = {
@@ -54,6 +65,7 @@ type MasterCurationBox = {
 
 type SyncedPlaylistItem = {
   id: string;
+  masterPlaylistId?: string | null;
   playlistId: number;
   accountId: number;
   name: string;
@@ -122,7 +134,9 @@ function formatDateTime(value: string | null | undefined) {
   return date.toLocaleString();
 }
 
-function normalizeState(raw: Partial<PlaylistManagerState>): PlaylistManagerState {
+function normalizeState(
+  raw: Partial<PlaylistManagerState>,
+): PlaylistManagerState {
   const base = emptyState();
   return {
     ...base,
@@ -133,7 +147,9 @@ function normalizeState(raw: Partial<PlaylistManagerState>): PlaylistManagerStat
     masterCurationBoxes: Array.isArray(raw.masterCurationBoxes)
       ? raw.masterCurationBoxes
       : [],
-    syncedPlaylists: Array.isArray(raw.syncedPlaylists) ? raw.syncedPlaylists : [],
+    syncedPlaylists: Array.isArray(raw.syncedPlaylists)
+      ? raw.syncedPlaylists
+      : [],
     masterPlaylistSyncHistory: Array.isArray(raw.masterPlaylistSyncHistory)
       ? raw.masterPlaylistSyncHistory
       : [],
@@ -221,102 +237,272 @@ function extractSpotifyPlaylistId(input: string) {
   return null;
 }
 
+function normalizeTextForMatch(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+}
+
 function findPlaylistByLink(playlists: FlatPlaylistItem[], value: string) {
   const clean = value.trim();
   const spotifyPlaylistId = extractSpotifyPlaylistId(clean);
+  const normalizedClean = normalizeTextForMatch(clean);
 
   return playlists.find((playlist) => {
     const spotifyUrl = playlist.spotify_url || "";
+    const spotifyId =
+      playlist.spotify_id || playlist.spotify_playlist_id || extractSpotifyPlaylistId(spotifyUrl);
+
     return (
-      (spotifyPlaylistId ? spotifyUrl.includes(spotifyPlaylistId) : false) ||
+      (spotifyPlaylistId
+        ? spotifyUrl.includes(spotifyPlaylistId) || spotifyId === spotifyPlaylistId
+        : false) ||
       String(playlist.id) === clean ||
-      playlist.name.toLowerCase() === clean.toLowerCase()
+      normalizeTextForMatch(playlist.name) === normalizedClean
     );
   });
 }
 
-async function parseTrackInput(value: string): Promise<AddedTrack | null> {
-  const clean = value.trim();
-  if (!clean) return null;
-
-  const spotifyTrackId = extractSpotifyTrackId(clean);
-
-  if (spotifyTrackId) {
-    try {
-      const response = await fetch(
-        `https://open.spotify.com/oembed?url=${encodeURIComponent(
-          `https://open.spotify.com/track/${spotifyTrackId}`,
-        )}`,
-      );
-
-      if (!response.ok) throw new Error("Spotify lookup failed");
-
-      const data = await response.json();
-
-      return {
-        id: spotifyTrackId,
-        spotify_id: spotifyTrackId,
-        title: String(data.title || "Spotify Track"),
-        artist: String(data.author_name || "Unknown Artist"),
-        createdAt: new Date().toISOString(),
-      };
-    } catch {
-      return {
-        id: spotifyTrackId,
-        spotify_id: spotifyTrackId,
-        title: "Spotify Track",
-        artist: spotifyTrackId,
-        createdAt: new Date().toISOString(),
-      };
-    }
-  }
-
-  const parts = clean.split(" - ").map((item) => item.trim()).filter(Boolean);
-
-  if (parts.length >= 2) {
-    return {
-      id: makeId("manual-track"),
-      spotify_id: null,
-      title: parts[0],
-      artist: parts.slice(1).join(" - "),
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  return null;
+function normalizeCsvHeader(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
 }
 
-function normalizeDraftTrack(track: NonNullable<CurationDraft["tracks"]>[number]): AddedTrack {
-  const spotifyId = track.spotify_id || track.id || makeId("draft-track");
+function detectCsvDelimiter(content: string) {
+  const firstLine = content.replace(/^\uFEFF/, "").split(/\r?\n/)[0] || "";
+  const options = [",", ";", "\t"];
+  return options.reduce((best, option) => {
+    const count = firstLine.split(option).length;
+    return count > firstLine.split(best).length ? option : best;
+  }, ",");
+}
+
+function parseCsvRecords(content: string) {
+  const delimiter = detectCsvDelimiter(content);
+  const records: string[][] = [];
+  let row: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  const text = content.replace(/^\uFEFF/, "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === '"' && nextChar === '"' && inQuotes) {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === delimiter && !inQuotes) {
+      row.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && nextChar === "\n") index += 1;
+      row.push(current.trim());
+      current = "";
+      if (row.some((value) => value.trim())) records.push(row);
+      row = [];
+      continue;
+    }
+
+    current += char;
+  }
+
+  row.push(current.trim());
+  if (row.some((value) => value.trim())) records.push(row);
+  return records;
+}
+
+function parseCsvContent(content: string) {
+  const records = parseCsvRecords(content);
+  if (records.length < 2) return [];
+  const headers = records[0].map(normalizeCsvHeader);
+  return records.slice(1).map((values) => {
+    const row: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      const fallbackHeader = `column_${index + 1}`;
+      row[header || fallbackHeader] = values[index] || "";
+      row[fallbackHeader] = values[index] || "";
+    });
+    return { row, values };
+  });
+}
+
+function escapeCsvValue(value: string | number | null | undefined) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function findPlaylistForCsv(
+  playlists: FlatPlaylistItem[],
+  value: string,
+  accountName?: string,
+) {
+  const clean = value.trim();
+  if (!clean) return null;
+  const accountClean = accountName ? normalizeTextForMatch(accountName) : "";
+  const candidates = accountClean
+    ? playlists.filter((playlist) =>
+        normalizeTextForMatch(playlist.accountName).includes(accountClean) ||
+        accountClean.includes(normalizeTextForMatch(playlist.accountName)),
+      )
+    : playlists;
+  return (
+    findPlaylistByLink(candidates, clean) ??
+    findPlaylistByLink(playlists, clean)
+  );
+}
+function stableExternalPlaylistNumber(value: string) {
+  const key = extractSpotifyPlaylistId(value) || normalizeTextForMatch(value);
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return -1 * (hash || Date.now());
+}
+
+function findAccountIdByCsvName(accounts: AccountItem[], accountName: string) {
+  const clean = normalizeTextForMatch(accountName);
+  if (!clean) return 0;
+
+  const account = accounts.find((item) => {
+    const accountDisplayName = normalizeTextForMatch(item.display_name || "");
+    return (
+      accountDisplayName === clean ||
+      accountDisplayName.includes(clean) ||
+      clean.includes(accountDisplayName)
+    );
+  });
+
+  return account?.id || 0;
+}
+
+function buildCsvPlaylistName(
+  fallbackName: string,
+  matchedPlaylist: FlatPlaylistItem | null,
+  accountName: string,
+  urlOrName: string,
+) {
+  const cleanFallback = fallbackName.trim();
+  const cleanAccount = normalizeTextForMatch(accountName);
+  const matchedName = matchedPlaylist?.name?.trim() || "";
+  const spotifyId = extractSpotifyPlaylistId(urlOrName);
+
+  // Real backend playlist name always wins when available.
+  if (matchedName && normalizeTextForMatch(matchedName) !== cleanAccount) {
+    return matchedName;
+  }
+
+  // Column C / explicit names win, but never use the account name as playlist title.
+  if (cleanFallback && normalizeTextForMatch(cleanFallback) !== cleanAccount) {
+    return cleanFallback;
+  }
+
+  // If the CSV cell is only a Spotify URL and it is not matched in backend yet,
+  // show a neutral playlist title instead of repeating the account name.
+  if (spotifyId) {
+    return `Playlist ${spotifyId.slice(0, 8)}`;
+  }
+
+  return cleanFallback || "Imported Playlist";
+}
+
+function makeExternalPlaylistFromCsv(
+  value: string,
+  fallbackName: string,
+  accountId: number,
+  accountName: string,
+  matchedPlaylist: FlatPlaylistItem | null = null,
+): FlatPlaylistItem | null {
+  const clean = value.trim();
+  const playlistId = extractSpotifyPlaylistId(clean);
+  const name = buildCsvPlaylistName(fallbackName, matchedPlaylist, accountName, clean || fallbackName);
+
+  if (!name && !playlistId) return null;
+
+  const stableId = matchedPlaylist?.id ?? stableExternalPlaylistNumber(clean || name);
+
   return {
-    id: spotifyId,
-    spotify_id: track.spotify_id || track.id || null,
-    title: track.title || track.name || "Untitled Track",
-    artist: track.artist || track.artist_name || "Unknown Artist",
-    createdAt: new Date().toISOString(),
+    id: stableId,
+    playlistId: stableId,
+    accountId: matchedPlaylist?.accountId ?? accountId,
+    accountName: matchedPlaylist?.accountName ?? (accountName || "CSV Account"),
+    name,
+    image_url: matchedPlaylist?.image_url ?? null,
+    spotify_url: clean,
+    spotify_id: playlistId || matchedPlaylist?.spotify_id || null,
+    spotify_playlist_id: playlistId || matchedPlaylist?.spotify_playlist_id || null,
+    tracks_count: matchedPlaylist?.tracks_count ?? 0,
   };
 }
 
-function insertAtPosition(tracks: AddedTrack[], track: AddedTrack, placement: string) {
-  const next = [...tracks];
-  const parsed = Number(placement);
-
-  if (!placement.trim() || !Number.isFinite(parsed) || parsed <= 0) {
-    next.push(track);
-    return next;
+function getCsvValue(row: Record<string, string>, values: string[], keys: string[], fallbackIndex: number) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value && value.trim()) return value.trim();
   }
 
-  const index = Math.min(Math.max(parsed - 1, 0), next.length);
-  next.splice(index, 0, track);
-  return next;
+  return (values[fallbackIndex] || "").trim();
 }
 
-function reorderTracks(tracks: AddedTrack[], fromIndex: number, toIndex: number) {
-  const next = [...tracks];
-  const [moved] = next.splice(fromIndex, 1);
-  next.splice(toIndex, 0, moved);
-  return next;
+function splitCsvPlaylistReferences(value: string) {
+  const clean = value.trim();
+  if (!clean) return [];
+
+  const spotifyUrls = clean.match(/https?:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+(?:\?[^,\s;]*)?/g);
+  if (spotifyUrls?.length) return spotifyUrls;
+
+  const spotifyUris = clean.match(/spotify:playlist:[A-Za-z0-9]+/g);
+  if (spotifyUris?.length) return spotifyUris;
+
+  return [clean];
 }
+
+function getSyncedCsvValues(row: Record<string, string>, values: string[]) {
+  const byPosition = values
+    .slice(3)
+    .flatMap(splitCsvPlaylistReferences)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const byHeader = Object.entries(row)
+    .filter(([key]) => key.startsWith("synced_playlists") || key.startsWith("synced_playlist"))
+    .flatMap(([, value]) => splitCsvPlaylistReferences(value))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set([...byPosition, ...byHeader]));
+}
+
 
 export default function PlaylistManagerPage() {
   const [state, setState] = useState<PlaylistManagerState>(() => emptyState());
@@ -329,6 +515,7 @@ export default function PlaylistManagerPage() {
   const [placementNumber, setPlacementNumber] = useState("");
   const [addTrackMode, setAddTrackMode] = useState<AddTrackMode>("current");
   const [trackDragIndex, setTrackDragIndex] = useState<number | null>(null);
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const accountsQuery = useQuery<AccountItem[]>({
     queryKey: ["accounts"],
@@ -411,13 +598,28 @@ export default function PlaylistManagerPage() {
 
     return (
       state.masterCurationBoxes
-        .filter((box) => box.masterPlaylistId === state.selectedSavedMasterPlaylistId)
+        .filter(
+          (box) => box.masterPlaylistId === state.selectedSavedMasterPlaylistId,
+        )
         .sort(
           (a, b) =>
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
         )[0] ?? null
     );
   }, [state.masterCurationBoxes, state.selectedSavedMasterPlaylistId]);
+
+  const visibleSyncedPlaylists = useMemo(() => {
+    if (!state.selectedSavedMasterPlaylistId) return [];
+    return state.syncedPlaylists.filter(
+      (playlist) =>
+        !playlist.masterPlaylistId ||
+        playlist.masterPlaylistId === state.selectedSavedMasterPlaylistId,
+    );
+  }, [state.syncedPlaylists, state.selectedSavedMasterPlaylistId]);
+
+  const visibleSelectedCount = visibleSyncedPlaylists.filter(
+    (playlist) => playlist.checked,
+  ).length;
 
   useEffect(() => {
     if (!hydrated) return;
@@ -473,7 +675,9 @@ export default function PlaylistManagerPage() {
     return () => window.clearInterval(interval);
   }, [hydrated]);
 
-  const syncMasterMetaFromSelection = (master: SavedMasterPlaylistOption | null) => {
+  const syncMasterMetaFromSelection = (
+    master: SavedMasterPlaylistOption | null,
+  ) => {
     if (!master) {
       return {
         masterPlaylistId: null,
@@ -492,7 +696,8 @@ export default function PlaylistManagerPage() {
   };
 
   const handleSelectMaster = (id: string) => {
-    const master = state.savedMasterPlaylists.find((item) => item.id === id) ?? null;
+    const master =
+      state.savedMasterPlaylists.find((item) => item.id === id) ?? null;
     persistState({
       ...state,
       selectedSavedMasterPlaylistId: master?.id ?? null,
@@ -511,26 +716,28 @@ export default function PlaylistManagerPage() {
     const selected = findPlaylistByLink(allPlaylists, importPlaylistLink);
 
     if (!selected) {
-      setPageMessage("Playlist was not found in synced accounts. Sync accounts first, then paste the Spotify playlist link again.");
+      setPageMessage(
+        "Playlist was not found in synced accounts. Sync accounts first, then paste the Spotify playlist link again.",
+      );
       return;
     }
 
     if (importMode === "master") {
       const existing = state.savedMasterPlaylists.find(
-        (item) => item.playlistId === selected.id && item.accountId === selected.accountId,
+        (item) =>
+          item.playlistId === selected.id &&
+          item.accountId === selected.accountId,
       );
 
-      const master: SavedMasterPlaylistOption =
-        existing ??
-        {
-          id: makeId("master-playlist"),
-          playlistId: selected.id,
-          accountId: selected.accountId,
-          name: selected.name,
-          imageUrl: selected.image_url ?? null,
-          tracks: selected.tracks_count ?? 0,
-          createdAt: new Date().toISOString(),
-        };
+      const master: SavedMasterPlaylistOption = existing ?? {
+        id: makeId("master-playlist"),
+        playlistId: selected.id,
+        accountId: selected.accountId,
+        name: selected.name,
+        imageUrl: selected.image_url ?? null,
+        tracks: selected.tracks_count ?? 0,
+        createdAt: new Date().toISOString(),
+      };
 
       const savedMasterPlaylists = existing
         ? state.savedMasterPlaylists
@@ -547,8 +754,15 @@ export default function PlaylistManagerPage() {
     }
 
     if (importMode === "synced") {
+      if (!state.selectedSavedMasterPlaylistId) {
+        setPageMessage("Select or import a master playlist first.");
+        return;
+      }
       const exists = state.syncedPlaylists.some(
-        (item) => item.playlistId === selected.id && item.accountId === selected.accountId,
+        (item) =>
+          item.masterPlaylistId === state.selectedSavedMasterPlaylistId &&
+          item.playlistId === selected.id &&
+          item.accountId === selected.accountId,
       );
 
       if (exists) {
@@ -560,6 +774,7 @@ export default function PlaylistManagerPage() {
             ...state.syncedPlaylists,
             {
               id: makeId("synced-playlist"),
+              masterPlaylistId: state.selectedSavedMasterPlaylistId,
               playlistId: selected.id,
               accountId: selected.accountId,
               name: selected.name,
@@ -577,6 +792,290 @@ export default function PlaylistManagerPage() {
     setImportPlaylistLink("");
   };
 
+  const handleDownloadCsvTemplate = () => {
+    const template = [
+      [
+        "account_name",
+        "Masterplaylist_url",
+        "Master Playlist",
+        "Synced Playlists",
+        "Synced Playlists",
+        "Synced Playlists",
+        "Synced Playlists",
+      ]
+        .map(escapeCsvValue)
+        .join(","),
+      [
+        "Kim Kay",
+        "https://open.spotify.com/playlist/master_playlist_id",
+        "Techno Main",
+        "https://open.spotify.com/playlist/synced_playlist_id_1",
+        "https://open.spotify.com/playlist/synced_playlist_id_2",
+        "",
+        "",
+      ]
+        .map(escapeCsvValue)
+        .join(","),
+    ].join("\n");
+    downloadTextFile("playlist_manager_template.csv", template);
+  };
+
+  const handleImportCsvFile = async (file: File | null) => {
+    if (!file) return;
+
+    const metadataCache = new Map<string, Promise<SpotifyPlaylistMetadata | null>>();
+
+    const fetchPlaylistMetadata = async (
+      value: string,
+      accountId: number,
+    ): Promise<SpotifyPlaylistMetadata | null> => {
+      const spotifyId = extractSpotifyPlaylistId(value);
+      if (!spotifyId || !accountId) return null;
+
+      const cacheKey = `${accountId}:${spotifyId}`;
+      const cached = metadataCache.get(cacheKey);
+      if (cached) return cached;
+
+      const promise = fetch(
+        `${API_BASE_URL}/api/spotify/playlists/${encodeURIComponent(
+          spotifyId,
+        )}/metadata?account_id=${encodeURIComponent(String(accountId))}`,
+      )
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return (await response.json()) as SpotifyPlaylistMetadata;
+        })
+        .catch(() => null);
+
+      metadataCache.set(cacheKey, promise);
+      return promise;
+    };
+
+    const enrichPlaylistFromSpotify = async (
+      playlist: FlatPlaylistItem | null,
+      value: string,
+      accountId: number,
+      accountName: string,
+    ): Promise<FlatPlaylistItem | null> => {
+      if (!playlist) return null;
+      const spotifyId = extractSpotifyPlaylistId(value);
+      if (!spotifyId) return playlist;
+
+      const metadata = await fetchPlaylistMetadata(value, accountId);
+      if (!metadata) return playlist;
+
+      const metadataName = metadata.name?.trim();
+      const fallbackNameLooksGenerated = /^Playlist\s+[A-Za-z0-9]+$/i.test(
+        playlist.name || "",
+      );
+      const playlistNameLooksLikeAccount =
+        normalizeTextForMatch(playlist.name || "") ===
+        normalizeTextForMatch(accountName || "");
+
+      return {
+        ...playlist,
+        name:
+          metadataName && (fallbackNameLooksGenerated || playlistNameLooksLikeAccount)
+            ? metadataName
+            : metadataName || playlist.name,
+        image_url: metadata.image_url ?? playlist.image_url ?? null,
+        spotify_url: metadata.spotify_url ?? playlist.spotify_url ?? value,
+        spotify_id: metadata.spotify_id ?? playlist.spotify_id ?? spotifyId,
+        spotify_playlist_id:
+          metadata.spotify_id ?? playlist.spotify_playlist_id ?? spotifyId,
+        tracks_count: metadata.tracks_count ?? playlist.tracks_count ?? 0,
+      };
+    };
+
+    try {
+      const content = await file.text();
+      const parsedRows = parseCsvContent(content);
+      if (parsedRows.length === 0) {
+        setPageMessage("CSV is empty or missing rows.");
+        return;
+      }
+
+      let importedMasters = 0;
+      let importedSynced = 0;
+      let skipped = 0;
+      const nextState: PlaylistManagerState = {
+        ...state,
+        savedMasterPlaylists: [...state.savedMasterPlaylists],
+        syncedPlaylists: [...state.syncedPlaylists],
+      };
+
+      for (const { row, values } of parsedRows) {
+        const accountName = getCsvValue(
+          row,
+          values,
+          ["account_name", "account_nam", "account", "accountname"],
+          0,
+        );
+        const csvAccountId = findAccountIdByCsvName(accounts, accountName);
+        const masterUrl = getCsvValue(
+          row,
+          values,
+          [
+            "masterplaylist_url",
+            "master_playlist_url",
+            "masterplaylisturl",
+            "master_url",
+            "master_link",
+            "masterplaylistlink",
+          ],
+          1,
+        );
+        const masterName = getCsvValue(
+          row,
+          values,
+          [
+            "master_playlist",
+            "masterplaylist",
+            "master_playlist_name",
+            "masterplaylist_name",
+            "name",
+            "title",
+          ],
+          2,
+        );
+
+        const matchedMaster =
+          findPlaylistForCsv(allPlaylists, masterUrl, accountName) ||
+          findPlaylistForCsv(allPlaylists, masterName, accountName);
+        const rawMasterPlaylist =
+          makeExternalPlaylistFromCsv(
+            masterUrl || masterName,
+            masterName,
+            csvAccountId,
+            accountName,
+            matchedMaster,
+          ) || matchedMaster;
+        const masterPlaylist = await enrichPlaylistFromSpotify(
+          rawMasterPlaylist,
+          masterUrl || masterName,
+          rawMasterPlaylist?.accountId ?? csvAccountId,
+          accountName,
+        );
+
+        if (!masterPlaylist) {
+          skipped += 1;
+          continue;
+        }
+
+        const masterDisplayName =
+          masterPlaylist.name ||
+          buildCsvPlaylistName(
+            masterName,
+            matchedMaster,
+            accountName,
+            masterUrl || masterName,
+          );
+
+        let master = nextState.savedMasterPlaylists.find(
+          (item) =>
+            item.playlistId === masterPlaylist.id &&
+            item.accountId === masterPlaylist.accountId,
+        );
+        if (!master) {
+          master = {
+            id: makeId("master-playlist"),
+            playlistId: masterPlaylist.id,
+            accountId: masterPlaylist.accountId,
+            name: masterDisplayName,
+            imageUrl: masterPlaylist.image_url ?? null,
+            tracks: masterPlaylist.tracks_count ?? 0,
+            createdAt: new Date().toISOString(),
+          };
+          nextState.savedMasterPlaylists.unshift(master);
+          importedMasters += 1;
+        } else {
+          master = {
+            ...master,
+            name: masterDisplayName || master.name,
+            imageUrl: masterPlaylist.image_url ?? master.imageUrl ?? null,
+            tracks: masterPlaylist.tracks_count ?? master.tracks ?? 0,
+          };
+          nextState.savedMasterPlaylists = nextState.savedMasterPlaylists.map((item) =>
+            item.id === master?.id ? master : item,
+          );
+        }
+
+        for (const syncedValue of getSyncedCsvValues(row, values)) {
+          const syncedSpotifyId = extractSpotifyPlaylistId(syncedValue);
+          const masterSpotifyId = extractSpotifyPlaylistId(masterUrl);
+          if (
+            syncedSpotifyId &&
+            masterSpotifyId &&
+            syncedSpotifyId === masterSpotifyId
+          ) {
+            continue;
+          }
+
+          const matchedSynced = findPlaylistForCsv(
+            allPlaylists,
+            syncedValue,
+            accountName,
+          );
+          const rawSyncedPlaylist =
+            makeExternalPlaylistFromCsv(
+              syncedValue,
+              matchedSynced?.name || "",
+              csvAccountId || masterPlaylist.accountId,
+              accountName,
+              matchedSynced,
+            ) || matchedSynced;
+          const syncedPlaylist = await enrichPlaylistFromSpotify(
+            rawSyncedPlaylist,
+            syncedValue,
+            rawSyncedPlaylist?.accountId ?? masterPlaylist.accountId,
+            accountName,
+          );
+
+          if (!syncedPlaylist) {
+            skipped += 1;
+            continue;
+          }
+          const exists = nextState.syncedPlaylists.some(
+            (item) =>
+              item.masterPlaylistId === master?.id &&
+              item.playlistId === syncedPlaylist.id &&
+              item.accountId === syncedPlaylist.accountId,
+          );
+          if (exists) continue;
+          nextState.syncedPlaylists.push({
+            id: makeId("synced-playlist"),
+            masterPlaylistId: master.id,
+            playlistId: syncedPlaylist.id,
+            accountId: syncedPlaylist.accountId,
+            name: syncedPlaylist.name,
+            imageUrl: syncedPlaylist.image_url ?? null,
+            checked: false,
+            lastSyncedAt: null,
+          });
+          importedSynced += 1;
+        }
+
+        if (!nextState.selectedSavedMasterPlaylistId) {
+          nextState.selectedSavedMasterPlaylistId = master.id;
+          Object.assign(nextState, syncMasterMetaFromSelection(master));
+        }
+      }
+
+      persistState(nextState);
+      setPageMessage(
+        importedMasters === 0 && importedSynced === 0
+          ? `CSV imported, but no usable rows were found. Skipped: ${skipped}. Make sure columns are: account_name, Masterplaylist_url, Master Playlist, then synced playlist URLs.`
+          : `CSV imported. Masters: ${importedMasters}, synced playlists: ${importedSynced}, skipped: ${skipped}.`,
+      );
+    } catch (error) {
+      setPageMessage(
+        error instanceof Error ? error.message : "CSV import failed.",
+      );
+    } finally {
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
+  };
+
   const updateSelectedCurationTracks = (tracks: AddedTrack[]) => {
     if (!selectedCurationBox) return;
 
@@ -591,7 +1090,9 @@ export default function PlaylistManagerPage() {
   const handleRemoveTrack = (trackIndex: number) => {
     if (!selectedCurationBox) return;
 
-    const tracks = selectedCurationBox.tracks.filter((_, index) => index !== trackIndex);
+    const tracks = selectedCurationBox.tracks.filter(
+      (_, index) => index !== trackIndex,
+    );
     updateSelectedCurationTracks(tracks);
   };
 
@@ -632,7 +1133,9 @@ export default function PlaylistManagerPage() {
       await saveStateToDatabase(state);
 
       if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) {
-        setPageMessage("Playlist Manager saved. This master playlist has 0 curation tracks.");
+        setPageMessage(
+          "Playlist Manager saved. This master playlist has 0 curation tracks.",
+        );
         return;
       }
 
@@ -649,7 +1152,9 @@ export default function PlaylistManagerPage() {
 
       setPageMessage("Playlist order saved to Spotify and Playlist Manager.");
     } catch (error) {
-      setPageMessage(error instanceof Error ? error.message : "Save order failed.");
+      setPageMessage(
+        error instanceof Error ? error.message : "Save order failed.",
+      );
     }
   };
 
@@ -657,7 +1162,9 @@ export default function PlaylistManagerPage() {
     const parsed = await parseTrackInput(addTrackInput);
 
     if (!parsed) {
-      setPageMessage("Paste a Spotify track link or type Song Name - Artist Name.");
+      setPageMessage(
+        "Paste a Spotify track link or type Song Name - Artist Name.",
+      );
       return;
     }
 
@@ -774,7 +1281,9 @@ export default function PlaylistManagerPage() {
   };
 
   const handleSyncAllSelected = async () => {
-    const selected = state.syncedPlaylists.filter((playlist) => playlist.checked);
+    const selected = visibleSyncedPlaylists.filter(
+      (playlist) => playlist.checked,
+    );
 
     if (selected.length === 0) {
       setPageMessage("Select at least one synced playlist first.");
@@ -809,7 +1318,9 @@ export default function PlaylistManagerPage() {
           })),
         );
 
-        const index = updatedSynced.findIndex((item) => item.id === playlist.id);
+        const index = updatedSynced.findIndex(
+          (item) => item.id === playlist.id,
+        );
         if (index >= 0) {
           updatedSynced[index] = {
             ...updatedSynced[index],
@@ -824,7 +1335,9 @@ export default function PlaylistManagerPage() {
 
     persistState({ ...state, syncedPlaylists: updatedSynced });
     setPageMessage(
-      failed ? "Some selected playlists failed to sync." : "Selected playlists synced.",
+      failed
+        ? "Some selected playlists failed to sync."
+        : "Selected playlists synced.",
     );
   };
 
@@ -853,19 +1366,54 @@ export default function PlaylistManagerPage() {
     });
   };
 
-  const selectedCount = state.syncedPlaylists.filter((playlist) => playlist.checked).length;
+  const selectedCount = visibleSelectedCount;
 
   if (!hydrated) {
-    return <div className="min-h-screen bg-black px-8 py-10 text-white">Loading...</div>;
+    return (
+      <div className="min-h-screen bg-black px-8 py-10 text-white">
+        Loading...
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-black px-8 py-10 text-white">
-      <div className="mb-8">
-        <h1 className="text-4xl font-semibold tracking-tight">Playlist Manager</h1>
-        <p className="mt-2 text-sm text-zinc-500">
-          Manage one master playlist and synced playlists.
-        </p>
+      <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h1 className="text-4xl font-semibold tracking-tight">
+            Playlist Manager
+          </h1>
+          <p className="mt-2 text-sm text-zinc-500">
+            Manage one master playlist and synced playlists.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(event) =>
+              handleImportCsvFile(event.target.files?.[0] ?? null)
+            }
+          />
+          <button
+            type="button"
+            onClick={() => csvInputRef.current?.click()}
+            className="h-12 rounded-xl bg-green-600 px-6 text-sm font-semibold text-white hover:bg-green-500"
+          >
+            Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadCsvTemplate}
+            aria-label="Download CSV template"
+            title="Download CSV template"
+            className="flex h-12 w-12 items-center justify-center rounded-xl border border-zinc-700 text-lg font-semibold text-white hover:bg-zinc-900"
+          >
+            ↓
+          </button>
+        </div>
       </div>
 
       {pageMessage ? (
@@ -924,7 +1472,6 @@ export default function PlaylistManagerPage() {
                   <h2 className="text-2xl font-semibold text-white">
                     {state.masterPlaylistName || "No master playlist imported"}
                   </h2>
-
                 </div>
               </div>
 
@@ -944,7 +1491,9 @@ export default function PlaylistManagerPage() {
 
                   <button
                     type="button"
-                    disabled={!state.masterPlaylistId || !state.masterPlaylistAccountId}
+                    disabled={
+                      !state.masterPlaylistId || !state.masterPlaylistAccountId
+                    }
                     onClick={() =>
                       state.masterPlaylistId && state.masterPlaylistAccountId
                         ? handleSyncSinglePlaylist(
@@ -967,9 +1516,13 @@ export default function PlaylistManagerPage() {
                   {state.masterPlaylistSyncHistory.length === 0 ? (
                     <div>Never synced</div>
                   ) : (
-                    state.masterPlaylistSyncHistory.slice(0, 3).map((item, index) => (
-                      <div key={`${item}-${index}`}>{formatDateTime(item)}</div>
-                    ))
+                    state.masterPlaylistSyncHistory
+                      .slice(0, 3)
+                      .map((item, index) => (
+                        <div key={`${item}-${index}`}>
+                          {formatDateTime(item)}
+                        </div>
+                      ))
                   )}
                 </div>
               </div>
@@ -992,7 +1545,10 @@ export default function PlaylistManagerPage() {
                   </span>
                   <button
                     type="button"
-                    disabled={!selectedCurationBox || selectedCurationBox.tracks.length === 0}
+                    disabled={
+                      !selectedCurationBox ||
+                      selectedCurationBox.tracks.length === 0
+                    }
                     onClick={handleClearCurationTracks}
                     className="rounded-xl border border-red-500/40 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -1008,7 +1564,8 @@ export default function PlaylistManagerPage() {
                 </div>
               </div>
 
-              {!selectedCurationBox || selectedCurationBox.tracks.length === 0 ? (
+              {!selectedCurationBox ||
+              selectedCurationBox.tracks.length === 0 ? (
                 <div className="flex h-[360px] items-center justify-center rounded-2xl border border-zinc-800 text-sm text-zinc-500">
                   No curation tracks yet.
                 </div>
@@ -1052,23 +1609,34 @@ export default function PlaylistManagerPage() {
         <section className="min-h-[80vh] rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-semibold text-white">Synced Playlists</h2>
+              <h2 className="text-2xl font-semibold text-white">
+                Synced Playlists
+              </h2>
               <div className="mt-4 flex items-center gap-4 text-sm font-semibold">
                 <button
                   type="button"
                   onClick={() => {
-                    const allSelected = state.syncedPlaylists.length > 0 && selectedCount === state.syncedPlaylists.length;
+                    const allSelected =
+                      visibleSyncedPlaylists.length > 0 &&
+                      selectedCount === visibleSyncedPlaylists.length;
+                    const visibleIds = new Set(
+                      visibleSyncedPlaylists.map((playlist) => playlist.id),
+                    );
                     persistState({
                       ...state,
-                      syncedPlaylists: state.syncedPlaylists.map((playlist) => ({
-                        ...playlist,
-                        checked: !allSelected,
-                      })),
+                      syncedPlaylists: state.syncedPlaylists.map((playlist) =>
+                        visibleIds.has(playlist.id)
+                          ? { ...playlist, checked: !allSelected }
+                          : playlist,
+                      ),
                     });
                   }}
                   className="text-white hover:text-green-400"
                 >
-                  {state.syncedPlaylists.length > 0 && selectedCount === state.syncedPlaylists.length ? "Deselect All" : "Select All"}
+                  {visibleSyncedPlaylists.length > 0 &&
+                  selectedCount === visibleSyncedPlaylists.length
+                    ? "Deselect All"
+                    : "Select All"}
                 </button>
 
                 {selectedCount > 0 ? (
@@ -1078,7 +1646,10 @@ export default function PlaylistManagerPage() {
                       persistState({
                         ...state,
                         syncedPlaylists: state.syncedPlaylists.filter(
-                          (playlist) => !playlist.checked,
+                          (playlist) =>
+                            !visibleSyncedPlaylists.some(
+                              (visible) => visible.id === playlist.id,
+                            ) || !playlist.checked,
                         ),
                       })
                     }
@@ -1109,13 +1680,13 @@ export default function PlaylistManagerPage() {
           </div>
 
           <div className="rounded-2xl border border-zinc-800 bg-black p-4">
-            {state.syncedPlaylists.length === 0 ? (
+            {visibleSyncedPlaylists.length === 0 ? (
               <div className="flex h-[520px] items-center justify-center text-sm text-zinc-500">
                 No synced playlists imported yet.
               </div>
             ) : (
               <div className="space-y-4">
-                {state.syncedPlaylists.map((playlist) => (
+                {visibleSyncedPlaylists.map((playlist) => (
                   <div
                     key={playlist.id}
                     className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-4"
@@ -1127,10 +1698,11 @@ export default function PlaylistManagerPage() {
                         onChange={(event) =>
                           persistState({
                             ...state,
-                            syncedPlaylists: state.syncedPlaylists.map((item) =>
-                              item.id === playlist.id
-                                ? { ...item, checked: event.target.checked }
-                                : item,
+                            syncedPlaylists: state.syncedPlaylists.map(
+                              (item) =>
+                                item.id === playlist.id
+                                  ? { ...item, checked: event.target.checked }
+                                  : item,
                             ),
                           })
                         }
@@ -1199,10 +1771,12 @@ export default function PlaylistManagerPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4">
           <div className="w-full max-w-xl rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <h2 className="text-2xl font-semibold text-white">
-              Import {importMode === "master" ? "Master Playlist" : "Synced Playlist"}
+              Import{" "}
+              {importMode === "master" ? "Master Playlist" : "Synced Playlist"}
             </h2>
             <p className="mt-2 text-sm text-zinc-500">
-              Paste Spotify link. The playlist must already be synced in one of your connected accounts.
+              Paste Spotify link. The playlist must already be synced in one of
+              your connected accounts.
             </p>
 
             <input
@@ -1241,7 +1815,8 @@ export default function PlaylistManagerPage() {
           <div className="w-full max-w-xl rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <h2 className="text-2xl font-semibold text-white">Insert Track</h2>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
-              Paste a Spotify track link or type Song Name - Artist Name. Add a placement number to insert the track exactly where you want it.
+              Paste a Spotify track link or type Song Name - Artist Name. Add a
+              placement number to insert the track exactly where you want it.
             </p>
 
             <input
@@ -1261,7 +1836,9 @@ export default function PlaylistManagerPage() {
             />
 
             <div className="mt-5 rounded-2xl border border-zinc-800 bg-black p-4">
-              <div className="mb-3 text-sm font-semibold text-white">Apply to</div>
+              <div className="mb-3 text-sm font-semibold text-white">
+                Apply to
+              </div>
               <label className="flex items-center gap-3 text-sm text-zinc-300">
                 <input
                   type="radio"
