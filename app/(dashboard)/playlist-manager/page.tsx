@@ -230,7 +230,60 @@ function extractSpotifyPlaylistId(input: string) {
 }
 
 
-function normalizeDraftTrack(track: Partial<TrackItem> | Record<string, unknown>): TrackItem {
+
+
+async function parseTrackInput(input: string) {
+  const clean = input.trim();
+
+  if (!clean) return null;
+
+  const spotifyTrackMatch =
+    clean.match(/open\.spotify\.com\/track\/([A-Za-z0-9]+)/) ||
+    clean.match(/spotify:track:([A-Za-z0-9]+)/);
+
+  const spotifyId = spotifyTrackMatch?.[1];
+
+  return {
+    id: spotifyId || `typed-${Date.now()}`,
+    spotify_id: spotifyId,
+    title: clean,
+    name: clean,
+    artist: "",
+    artist_name: "",
+    album_name: "",
+    image_url: null,
+    spotify_url: spotifyId ? `https://open.spotify.com/track/${spotifyId}` : null,
+  };
+}
+
+
+function insertAtPosition<T>(items: T[], item: T, position: number | string): T[] {
+  const next = [...items];
+  const parsedPosition = typeof position === "string" ? Number.parseInt(position, 10) : position;
+  const safePosition = Number.isFinite(parsedPosition) ? Math.max(1, Math.floor(parsedPosition)) : next.length + 1;
+  const index = Math.min(Math.max(safePosition - 1, 0), next.length);
+  next.splice(index, 0, item);
+  return next;
+}
+
+function reorderTracks<T>(items: T[], fromIndex: number, toIndex: number): T[] {
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return items;
+  }
+
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function normalizeDraftTrack(track: Record<string, unknown>) {
   const source = track as Record<string, unknown>;
 
   const id =
@@ -656,7 +709,7 @@ export default function PlaylistManagerPage() {
       try {
         const draft = JSON.parse(raw) as CurationDraft;
         const targetMasterId = draft.target_master_playlist_id;
-        const tracks = (draft.tracks ?? []).map(normalizeDraftTrack);
+        const tracks = (draft.tracks ?? []).map((track) => normalizeDraftTrack(track as Record<string, unknown>));
 
         if (!targetMasterId || tracks.length === 0) return;
 
@@ -918,7 +971,7 @@ export default function PlaylistManagerPage() {
 
         const masterDisplayName = buildCsvPlaylistName(
           masterName,
-          matchedMaster,
+          matchedMaster ?? null,
           accountName,
           masterUrl || masterName,
         );
@@ -969,7 +1022,7 @@ export default function PlaylistManagerPage() {
               matchedSynced?.name || "",
               csvAccountId,
               accountName,
-              matchedSynced,
+              matchedSynced ?? null,
             ) || matchedSynced;
 
           if (!syncedPlaylist) {
