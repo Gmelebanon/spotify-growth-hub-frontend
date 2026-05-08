@@ -595,6 +595,19 @@ export default function PlaylistManagerPage() {
     updateSelectedCurationTracks(tracks);
   };
 
+  const handleClearCurationTracks = () => {
+    if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Clear all songs from "${selectedCurationBox.curationName || "Manual Curation"}"?\n\nThis only clears the Playlist Manager curation list. It will not delete songs from Spotify until you sync/save to Spotify.`,
+    );
+
+    if (!confirmed) return;
+
+    updateSelectedCurationTracks([]);
+    setPageMessage("Curation tracks cleared. Click Save to store this change.");
+  };
+
   const handleDropTrack = (targetIndex: number) => {
     if (!selectedCurationBox || trackDragIndex === null) return;
     if (trackDragIndex === targetIndex) {
@@ -609,11 +622,6 @@ export default function PlaylistManagerPage() {
   };
 
   const handleSaveOrder = async () => {
-    if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) {
-      setPageMessage("No tracks available to save.");
-      return;
-    }
-
     if (!state.masterPlaylistId || !state.masterPlaylistAccountId) {
       setPageMessage("Import a master playlist first.");
       return;
@@ -622,6 +630,11 @@ export default function PlaylistManagerPage() {
     try {
       saveStateToLocalStorage(state);
       await saveStateToDatabase(state);
+
+      if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) {
+        setPageMessage("Playlist Manager saved. This master playlist has 0 curation tracks.");
+        return;
+      }
 
       await replacePlaylistTracks(
         state.masterPlaylistAccountId,
@@ -912,35 +925,40 @@ export default function PlaylistManagerPage() {
                     {state.masterPlaylistName || "No master playlist imported"}
                   </h2>
 
-                  {selectedMaster ? (
-                    <button
-                      type="button"
-                      onClick={handleDeleteMaster}
-                      className="mt-3 text-xs font-semibold text-red-400 hover:text-red-300"
-                    >
-                      Delete master playlist
-                    </button>
-                  ) : null}
                 </div>
               </div>
 
               <div className="text-right">
-                <button
-                  type="button"
-                  disabled={!state.masterPlaylistId || !state.masterPlaylistAccountId}
-                  onClick={() =>
-                    state.masterPlaylistId && state.masterPlaylistAccountId
-                      ? handleSyncSinglePlaylist(
-                          state.masterPlaylistId,
-                          state.masterPlaylistAccountId,
-                          state.masterPlaylistName || "Master Playlist",
-                        )
-                      : null
-                  }
-                  className="rounded-xl bg-green-600 px-5 py-3 text-sm font-semibold text-white hover:bg-green-500 disabled:opacity-50"
-                >
-                  Sync
-                </button>
+                <div className="flex items-center justify-end gap-3">
+                  {selectedMaster ? (
+                    <button
+                      type="button"
+                      aria-label="Delete master playlist"
+                      title="Delete master playlist"
+                      onClick={handleDeleteMaster}
+                      className="flex h-11 w-11 items-center justify-center rounded-xl border border-red-500/50 bg-red-500/10 text-lg font-bold text-red-300 hover:bg-red-500/20"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    disabled={!state.masterPlaylistId || !state.masterPlaylistAccountId}
+                    onClick={() =>
+                      state.masterPlaylistId && state.masterPlaylistAccountId
+                        ? handleSyncSinglePlaylist(
+                            state.masterPlaylistId,
+                            state.masterPlaylistAccountId,
+                            state.masterPlaylistName || "Master Playlist",
+                          )
+                        : null
+                    }
+                    className="rounded-xl bg-green-600 px-5 py-3 text-sm font-semibold text-white hover:bg-green-500 disabled:opacity-50"
+                  >
+                    Sync
+                  </button>
+                </div>
 
                 <div className="mt-4 text-xs uppercase tracking-wide text-zinc-500">
                   Sync Log
@@ -972,6 +990,14 @@ export default function PlaylistManagerPage() {
                   <span className="text-xs text-zinc-400">
                     {selectedCurationBox?.tracks.length ?? 0} tracks
                   </span>
+                  <button
+                    type="button"
+                    disabled={!selectedCurationBox || selectedCurationBox.tracks.length === 0}
+                    onClick={handleClearCurationTracks}
+                    className="rounded-xl border border-red-500/40 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Clear
+                  </button>
                   <button
                     type="button"
                     onClick={() => setAddTrackOpen(true)}
