@@ -24,17 +24,9 @@ type PlaylistItem = {
 };
 
 type FlatPlaylistItem = PlaylistItem & {
+  playlistId?: number;
   accountId: number;
   accountName: string;
-};
-
-type SpotifyPlaylistMetadata = {
-  spotify_id?: string | null;
-  name?: string | null;
-  image_url?: string | null;
-  spotify_url?: string | null;
-  owner_name?: string | null;
-  tracks_count?: number | null;
 };
 
 type AddedTrack = {
@@ -822,71 +814,6 @@ export default function PlaylistManagerPage() {
 
   const handleImportCsvFile = async (file: File | null) => {
     if (!file) return;
-
-    const metadataCache = new Map<string, Promise<SpotifyPlaylistMetadata | null>>();
-
-    const fetchPlaylistMetadata = async (
-      value: string,
-      accountId: number,
-    ): Promise<SpotifyPlaylistMetadata | null> => {
-      const spotifyId = extractSpotifyPlaylistId(value);
-      if (!spotifyId || !accountId) return null;
-
-      const cacheKey = `${accountId}:${spotifyId}`;
-      const cached = metadataCache.get(cacheKey);
-      if (cached) return cached;
-
-      const promise = fetch(
-        `${API_BASE_URL}/api/spotify/playlists/${encodeURIComponent(
-          spotifyId,
-        )}/metadata?account_id=${encodeURIComponent(String(accountId))}`,
-      )
-        .then(async (response) => {
-          if (!response.ok) return null;
-          return (await response.json()) as SpotifyPlaylistMetadata;
-        })
-        .catch(() => null);
-
-      metadataCache.set(cacheKey, promise);
-      return promise;
-    };
-
-    const enrichPlaylistFromSpotify = async (
-      playlist: FlatPlaylistItem | null,
-      value: string,
-      accountId: number,
-      accountName: string,
-    ): Promise<FlatPlaylistItem | null> => {
-      if (!playlist) return null;
-      const spotifyId = extractSpotifyPlaylistId(value);
-      if (!spotifyId) return playlist;
-
-      const metadata = await fetchPlaylistMetadata(value, accountId);
-      if (!metadata) return playlist;
-
-      const metadataName = metadata.name?.trim();
-      const fallbackNameLooksGenerated = /^Playlist\s+[A-Za-z0-9]+$/i.test(
-        playlist.name || "",
-      );
-      const playlistNameLooksLikeAccount =
-        normalizeTextForMatch(playlist.name || "") ===
-        normalizeTextForMatch(accountName || "");
-
-      return {
-        ...playlist,
-        name:
-          metadataName && (fallbackNameLooksGenerated || playlistNameLooksLikeAccount)
-            ? metadataName
-            : metadataName || playlist.name,
-        image_url: metadata.image_url ?? playlist.image_url ?? null,
-        spotify_url: metadata.spotify_url ?? playlist.spotify_url ?? value,
-        spotify_id: metadata.spotify_id ?? playlist.spotify_id ?? spotifyId,
-        spotify_playlist_id:
-          metadata.spotify_id ?? playlist.spotify_playlist_id ?? spotifyId,
-        tracks_count: metadata.tracks_count ?? playlist.tracks_count ?? 0,
-      };
-    };
-
     try {
       const content = await file.text();
       const parsedRows = parseCsvContent(content);
@@ -894,7 +821,6 @@ export default function PlaylistManagerPage() {
         setPageMessage("CSV is empty or missing rows.");
         return;
       }
-
       let importedMasters = 0;
       let importedSynced = 0;
       let skipped = 0;
@@ -904,7 +830,7 @@ export default function PlaylistManagerPage() {
         syncedPlaylists: [...state.syncedPlaylists],
       };
 
-      for (const { row, values } of parsedRows) {
+      parsedRows.forEach(({ row, values }) => {
         const accountName = getCsvValue(
           row,
           values,
@@ -942,7 +868,7 @@ export default function PlaylistManagerPage() {
         const matchedMaster =
           findPlaylistForCsv(allPlaylists, masterUrl, accountName) ||
           findPlaylistForCsv(allPlaylists, masterName, accountName);
-        const rawMasterPlaylist =
+        const masterPlaylist =
           makeExternalPlaylistFromCsv(
             masterUrl || masterName,
             masterName,
@@ -950,26 +876,18 @@ export default function PlaylistManagerPage() {
             accountName,
             matchedMaster,
           ) || matchedMaster;
-        const masterPlaylist = await enrichPlaylistFromSpotify(
-          rawMasterPlaylist,
-          masterUrl || masterName,
-          rawMasterPlaylist?.accountId ?? csvAccountId,
-          accountName,
-        );
 
         if (!masterPlaylist) {
           skipped += 1;
-          continue;
+          return;
         }
 
-        const masterDisplayName =
-          masterPlaylist.name ||
-          buildCsvPlaylistName(
-            masterName,
-            matchedMaster,
-            accountName,
-            masterUrl || masterName,
-          );
+        const masterDisplayName = buildCsvPlaylistName(
+          masterName,
+          matchedMaster,
+          accountName,
+          masterUrl || masterName,
+        );
 
         let master = nextState.savedMasterPlaylists.find(
           (item) =>
@@ -988,19 +906,14 @@ export default function PlaylistManagerPage() {
           };
           nextState.savedMasterPlaylists.unshift(master);
           importedMasters += 1;
-        } else {
-          master = {
-            ...master,
-            name: masterDisplayName || master.name,
-            imageUrl: masterPlaylist.image_url ?? master.imageUrl ?? null,
-            tracks: masterPlaylist.tracks_count ?? master.tracks ?? 0,
-          };
+        } else if (master.name !== masterDisplayName && masterDisplayName) {
+          master = { ...master, name: masterDisplayName };
           nextState.savedMasterPlaylists = nextState.savedMasterPlaylists.map((item) =>
             item.id === master?.id ? master : item,
           );
         }
 
-        for (const syncedValue of getSyncedCsvValues(row, values)) {
+        getSyncedCsvValues(row, values).forEach((syncedValue) => {
           const syncedSpotifyId = extractSpotifyPlaylistId(syncedValue);
           const masterSpotifyId = extractSpotifyPlaylistId(masterUrl);
           if (
@@ -1008,7 +921,7 @@ export default function PlaylistManagerPage() {
             masterSpotifyId &&
             syncedSpotifyId === masterSpotifyId
           ) {
-            continue;
+            return;
           }
 
           const matchedSynced = findPlaylistForCsv(
@@ -1016,24 +929,18 @@ export default function PlaylistManagerPage() {
             syncedValue,
             accountName,
           );
-          const rawSyncedPlaylist =
+          const syncedPlaylist =
             makeExternalPlaylistFromCsv(
               syncedValue,
               matchedSynced?.name || "",
-              csvAccountId || masterPlaylist.accountId,
+              csvAccountId,
               accountName,
               matchedSynced,
             ) || matchedSynced;
-          const syncedPlaylist = await enrichPlaylistFromSpotify(
-            rawSyncedPlaylist,
-            syncedValue,
-            rawSyncedPlaylist?.accountId ?? masterPlaylist.accountId,
-            accountName,
-          );
 
           if (!syncedPlaylist) {
             skipped += 1;
-            continue;
+            return;
           }
           const exists = nextState.syncedPlaylists.some(
             (item) =>
@@ -1041,7 +948,7 @@ export default function PlaylistManagerPage() {
               item.playlistId === syncedPlaylist.id &&
               item.accountId === syncedPlaylist.accountId,
           );
-          if (exists) continue;
+          if (exists) return;
           nextState.syncedPlaylists.push({
             id: makeId("synced-playlist"),
             masterPlaylistId: master.id,
@@ -1053,14 +960,13 @@ export default function PlaylistManagerPage() {
             lastSyncedAt: null,
           });
           importedSynced += 1;
-        }
+        });
 
         if (!nextState.selectedSavedMasterPlaylistId) {
           nextState.selectedSavedMasterPlaylistId = master.id;
           Object.assign(nextState, syncMasterMetaFromSelection(master));
         }
-      }
-
+      });
       persistState(nextState);
       setPageMessage(
         importedMasters === 0 && importedSynced === 0
