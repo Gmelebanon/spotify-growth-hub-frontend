@@ -101,7 +101,8 @@ const STORAGE_KEY = "nerd-engine-playlist-manager-global";
 const CURATION_DRAFT_KEY = "nerd-engine-playlist-manager-curation-draft";
 const PLAYLIST_MANAGER_USER_KEY = "global";
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+  process.env.NEXT_PUBLIC_API_URL?.trim() ||
   "https://spotify-growth-hub-backend.onrender.com";
 
 const emptyState = (): PlaylistManagerState => ({
@@ -221,12 +222,18 @@ function extractSpotifyTrackId(input: string) {
   return null;
 }
 function extractSpotifyPlaylistId(input: string) {
-  const trimmed = input.trim();
+  const trimmed = input.trim().replace(/^"|"$/g, "");
+  if (!trimmed) return null;
+
   const directMatch = trimmed.match(/playlist\/([a-zA-Z0-9]+)(\?|$|\/)/);
   if (directMatch?.[1]) return directMatch[1];
 
   const uriMatch = trimmed.match(/^spotify:playlist:([a-zA-Z0-9]+)$/);
   if (uriMatch?.[1]) return uriMatch[1];
+
+  // New CSV format: raw Spotify playlist ID, no URL.
+  const rawIdMatch = trimmed.match(/^[a-zA-Z0-9]{15,40}$/);
+  if (rawIdMatch) return trimmed;
 
   return null;
 }
@@ -333,7 +340,9 @@ function findPlaylistByLink(playlists: FlatPlaylistItem[], value: string) {
   return playlists.find((playlist) => {
     const spotifyUrl = playlist.spotify_url || "";
     const spotifyId =
-      playlist.spotify_id || playlist.spotify_playlist_id || extractSpotifyPlaylistId(spotifyUrl);
+      playlist.spotify_id ||
+      playlist.spotify_playlist_id ||
+      extractSpotifyPlaylistId(spotifyUrl);
 
     return (
       (spotifyPlaylistId
@@ -564,7 +573,12 @@ function splitCsvPlaylistReferences(value: string) {
   const spotifyUris = clean.match(/spotify:playlist:[A-Za-z0-9]+/g);
   if (spotifyUris?.length) return spotifyUris;
 
-  return [clean];
+  // Supports the new faster CSV format with raw playlist IDs.
+  // Also supports multiple IDs pasted in one cell separated by commas, semicolons, spaces, or new lines.
+  return clean
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter((item) => Boolean(item) && Boolean(extractSpotifyPlaylistId(item)));
 }
 
 function getSyncedCsvValues(row: Record<string, string>, values: string[]) {
@@ -575,7 +589,15 @@ function getSyncedCsvValues(row: Record<string, string>, values: string[]) {
     .filter(Boolean);
 
   const byHeader = Object.entries(row)
-    .filter(([key]) => key.startsWith("synced_playlists") || key.startsWith("synced_playlist"))
+    .filter(([key]) => {
+      const normalizedKey = normalizeCsvHeader(key);
+      return (
+        normalizedKey.startsWith("synced_playlist_") ||
+        normalizedKey.startsWith("synced_playlists") ||
+        normalizedKey.startsWith("synced_") ||
+        normalizedKey.includes("syncedplaylist")
+      );
+    })
     .flatMap(([, value]) => splitCsvPlaylistReferences(value))
     .map((value) => value.trim())
     .filter(Boolean);
@@ -877,21 +899,23 @@ export default function PlaylistManagerPage() {
     const template = [
       [
         "account_name",
-        "Masterplaylist_url",
-        "Master Playlist",
-        "Synced Playlists",
-        "Synced Playlists",
-        "Synced Playlists",
-        "Synced Playlists",
+        "master_playlist_id",
+        "master_playlist_name",
+        "synced_playlist_1",
+        "synced_playlist_2",
+        "synced_playlist_3",
+        "synced_playlist_4",
+        "synced_playlist_5",
       ]
         .map(escapeCsvValue)
         .join(","),
       [
         "Kim Kay",
-        "https://open.spotify.com/playlist/master_playlist_id",
+        "0rgFb1H731kfBzlc26zqsW",
         "Techno Main",
-        "https://open.spotify.com/playlist/synced_playlist_id_1",
-        "https://open.spotify.com/playlist/synced_playlist_id_2",
+        "14bqGG3a6QuKmKGpWyfjVq",
+        "14kFZUwk9tFNmBjQ8deYa8",
+        "7zZnRHmr84TYObDkTkcxEn",
         "",
         "",
       ]
@@ -931,6 +955,10 @@ export default function PlaylistManagerPage() {
           row,
           values,
           [
+            "master_playlist_id",
+            "masterplaylist_id",
+            "masterplaylistid",
+            "master_id",
             "masterplaylist_url",
             "master_playlist_url",
             "masterplaylisturl",
@@ -1059,7 +1087,7 @@ export default function PlaylistManagerPage() {
       persistState(nextState);
       setPageMessage(
         importedMasters === 0 && importedSynced === 0
-          ? `CSV imported, but no usable rows were found. Skipped: ${skipped}. Make sure columns are: account_name, Masterplaylist_url, Master Playlist, then synced playlist URLs.`
+          ? `CSV imported, but no usable rows were found. Skipped: ${skipped}. Make sure columns are: account_name, master_playlist_id, master_playlist_name, then synced_playlist_1, synced_playlist_2, etc.`
           : `CSV imported. Masters: ${importedMasters}, synced playlists: ${importedSynced}, skipped: ${skipped}.`,
       );
     } catch (error) {
@@ -1875,5 +1903,3 @@ export default function PlaylistManagerPage() {
     </div>
   );
 }
-
-// force vercel rebuild 05/09/2026 22:42:45
