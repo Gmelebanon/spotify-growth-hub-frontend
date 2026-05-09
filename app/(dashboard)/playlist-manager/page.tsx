@@ -480,7 +480,7 @@ function findPlaylistForCsv(
         playlist.spotify_playlist_id,
         String(playlist.id || ""),
         extractSpotifyPlaylistId(playlist.spotify_url || ""),
-        extractSpotifyPlaylistId(playlist.external_url || ""),
+        extractSpotifyPlaylistId((playlist as { external_url?: string }).external_url || ""),
       ].filter(Boolean);
 
       return importedId
