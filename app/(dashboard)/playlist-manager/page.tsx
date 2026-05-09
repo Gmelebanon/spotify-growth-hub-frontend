@@ -100,7 +100,9 @@ type AddTrackMode = "current" | "all";
 const STORAGE_KEY = "nerd-engine-playlist-manager-global";
 const CURATION_DRAFT_KEY = "nerd-engine-playlist-manager-curation-draft";
 const PLAYLIST_MANAGER_USER_KEY = "global";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://spotify-growth-hub-backend.onrender.com";
 
 const emptyState = (): PlaylistManagerState => ({
   savedMasterPlaylists: [],
