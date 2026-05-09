@@ -1,8 +1,4 @@
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-  process.env.NEXT_PUBLIC_API_URL?.trim() ||
-  "https://spotify-growth-hub-backend.onrender.com";
-
+const API_BASE_URL = "https://spotify-growth-hub-backend.onrender.com";
 const API_BASE = API_BASE_URL;
 
 export class ApiError extends Error {
