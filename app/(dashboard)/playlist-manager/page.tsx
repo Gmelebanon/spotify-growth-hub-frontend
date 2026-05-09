@@ -456,19 +456,39 @@ function findPlaylistForCsv(
   value: string,
   accountName?: string,
 ) {
-  const clean = value.trim();
-  if (!clean) return null;
+  const importedId = extractSpotifyPlaylistId(value);
+  const cleanValue = value.trim();
   const accountClean = accountName ? normalizeTextForMatch(accountName) : "";
+
+  if (!importedId && !cleanValue) return null;
+
   const candidates = accountClean
-    ? playlists.filter((playlist) =>
-        normalizeTextForMatch(playlist.accountName).includes(accountClean) ||
-        accountClean.includes(normalizeTextForMatch(playlist.accountName)),
-      )
+    ? playlists.filter((playlist) => {
+        const playlistAccount = normalizeTextForMatch(playlist.accountName || "");
+        return (
+          playlistAccount === accountClean ||
+          playlistAccount.includes(accountClean) ||
+          accountClean.includes(playlistAccount)
+        );
+      })
     : playlists;
-  return (
-    findPlaylistByLink(candidates, clean) ??
-    findPlaylistByLink(playlists, clean)
-  );
+
+  const matchFrom = (list: FlatPlaylistItem[]) =>
+    list.find((playlist) => {
+      const possibleIds = [
+        playlist.spotify_id,
+        playlist.spotify_playlist_id,
+        String(playlist.id || ""),
+        extractSpotifyPlaylistId(playlist.spotify_url || ""),
+        extractSpotifyPlaylistId(playlist.external_url || ""),
+      ].filter(Boolean);
+
+      return importedId
+        ? possibleIds.includes(importedId)
+        : normalizeTextForMatch(playlist.name || "") === normalizeTextForMatch(cleanValue);
+    }) || null;
+
+  return matchFrom(candidates) || matchFrom(playlists);
 }
 function stableExternalPlaylistNumber(value: string) {
   const key = extractSpotifyPlaylistId(value) || normalizeTextForMatch(value);
