@@ -275,6 +275,75 @@ function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
   return collected;
 }
 
+const HISTORY_DB_NAME = "nerd-engine-curation-history-db";
+const HISTORY_STORE_NAME = "history";
+
+function openHistoryDatabase(): Promise<IDBDatabase | null> {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    const request = window.indexedDB.open(HISTORY_DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(HISTORY_STORE_NAME)) {
+        db.createObjectStore(HISTORY_STORE_NAME, { keyPath: "side" });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+  });
+}
+
+async function loadImportHistoryFromIndexedDb(
+  side: "source" | "my",
+): Promise<ImportHistoryItem[]> {
+  const db = await openHistoryDatabase();
+  if (!db) return [];
+
+  return new Promise((resolve) => {
+    const transaction = db.transaction(HISTORY_STORE_NAME, "readonly");
+    const store = transaction.objectStore(HISTORY_STORE_NAME);
+    const request = store.get(side);
+
+    request.onsuccess = () => {
+      const items = request.result?.items;
+      resolve(Array.isArray(items) ? items : []);
+      db.close();
+    };
+
+    request.onerror = () => {
+      resolve([]);
+      db.close();
+    };
+  });
+}
+
+async function saveImportHistoryToIndexedDb(
+  side: "source" | "my",
+  items: ImportHistoryItem[],
+) {
+  const db = await openHistoryDatabase();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
+    const transaction = db.transaction(HISTORY_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(HISTORY_STORE_NAME);
+    const request = store.put({ side, items, updatedAt: new Date().toISOString() });
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => {
+      db.close();
+      resolve();
+    };
+  });
+}
+
 function importHistoryStorageKey(side: "source" | "my") {
   return `nerd-engine-curation-import-history-${side}`;
 }
@@ -297,6 +366,7 @@ function saveImportHistory(side: "source" | "my", items: ImportHistoryItem[]) {
     importHistoryStorageKey(side),
     JSON.stringify(items),
   );
+  void saveImportHistoryToIndexedDb(side, items);
 }
 
 function addToImportHistory(
@@ -517,6 +587,7 @@ async function fetchExternalSpotifyPlaylist(
 ): Promise<ImportedLinkWithId | null> {
   const endpointCandidates = [
     `${API_BASE_URL}/api/spotify/public-playlists/${spotifyPlaylistId}/tracks`,
+    `${API_BASE_URL}/api/spotify/public-playlist/${spotifyPlaylistId}`,
     `${API_BASE_URL}/api/spotify/playlists/${spotifyPlaylistId}/tracks`,
     `${API_BASE_URL}/api/spotify/playlist-tracks?spotify_playlist_id=${encodeURIComponent(spotifyPlaylistId)}`,
     `${API_BASE_URL}/api/playlists/external/${spotifyPlaylistId}/tracks`,
@@ -1198,13 +1269,14 @@ function SideSection({
       for (const section of sectionsToImport) {
         for (const item of section.items) {
           completed += 1;
-          setHistoryStatus(
-            `${completed}/${total} imported · ${item.display_name}`,
-          );
+          const nextStatus = `${completed}/${total} imported · ${item.display_name}`;
+          setHistoryStatus(nextStatus);
+          setSendStatus(nextStatus);
           await section.onImportItems([item]);
         }
       }
       setSelectedHistoryKeys([]);
+      setSendStatus(`Imported ${completed}/${total} playlist${total === 1 ? "" : "s"} from history.`);
       setHistoryOpen(false);
     } finally {
       setHistoryImporting(false);
@@ -1838,8 +1910,43 @@ export default function CurationPage() {
   }, [activeAccountId]);
 
   useEffect(() => {
-    setSourceImportHistory(loadImportHistory("source"));
-    setMyImportHistory(loadImportHistory("my"));
+    let cancelled = false;
+
+    const sourceLocal = loadImportHistory("source");
+    const myLocal = loadImportHistory("my");
+    setSourceImportHistory(sourceLocal);
+    setMyImportHistory(myLocal);
+
+    const restorePersistentHistory = async () => {
+      const [sourceIndexed, myIndexed] = await Promise.all([
+        loadImportHistoryFromIndexedDb("source"),
+        loadImportHistoryFromIndexedDb("my"),
+      ]);
+
+      if (cancelled) return;
+
+      if (sourceIndexed.length > sourceLocal.length) {
+        setSourceImportHistory(sourceIndexed);
+        window.localStorage.setItem(
+          importHistoryStorageKey("source"),
+          JSON.stringify(sourceIndexed),
+        );
+      }
+
+      if (myIndexed.length > myLocal.length) {
+        setMyImportHistory(myIndexed);
+        window.localStorage.setItem(
+          importHistoryStorageKey("my"),
+          JSON.stringify(myIndexed),
+        );
+      }
+    };
+
+    void restorePersistentHistory();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
