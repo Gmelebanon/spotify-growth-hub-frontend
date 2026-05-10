@@ -30,6 +30,15 @@ type ImportedLinkWithId = {
   mergedTracks?: CurationTrack[];
 };
 
+type ImportHistoryItem = {
+  id: string;
+  display_name: string;
+  link: string;
+  source_type: string;
+  track_count: number;
+  accountName?: string;
+};
+
 type SavedCuration = {
   id: string;
   name: string;
@@ -63,16 +72,29 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
 
-const LINK_COLORS = [
-  "bg-green-400",
-  "bg-sky-400",
-  "bg-fuchsia-400",
-  "bg-amber-400",
-  "bg-rose-400",
+const SOURCE_LINK_COLORS = [
+  "bg-red-500",
+  "bg-yellow-400",
   "bg-cyan-400",
-  "bg-violet-400",
-  "bg-emerald-400",
+  "bg-purple-500",
+  "bg-lime-400",
+  "bg-pink-500",
+  "bg-blue-500",
+  "bg-orange-500",
 ];
+
+const MY_LINK_COLORS = [
+  "bg-emerald-400",
+  "bg-fuchsia-500",
+  "bg-amber-500",
+  "bg-sky-500",
+  "bg-rose-500",
+  "bg-violet-400",
+  "bg-teal-300",
+  "bg-indigo-500",
+];
+
+const LINK_COLORS = SOURCE_LINK_COLORS;
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -97,7 +119,8 @@ function normalizeSavedCuration(item: any): SavedCuration | null {
     id,
     name,
     tracks,
-    trackCount: Number(item.trackCount ?? item.track_count ?? tracks.length) || 0,
+    trackCount:
+      Number(item.trackCount ?? item.track_count ?? tracks.length) || 0,
     createdAt: item.createdAt ?? item.created_at ?? new Date().toISOString(),
   };
 }
@@ -110,7 +133,7 @@ async function fetchSavedCurationsFromDatabase(accountId: number | null) {
   if (!response.ok) throw new Error("Could not load saved curations.");
 
   const payload = await response.json();
-  const items = Array.isArray(payload) ? payload : payload.items ?? [];
+  const items = Array.isArray(payload) ? payload : (payload.items ?? []);
 
   return items
     .map((item: any) => normalizeSavedCuration(item))
@@ -195,7 +218,8 @@ function extractArrayFromPossibleStorageValue(value: any): any[] {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.items)) return value.items;
   if (Array.isArray(value?.playlists)) return value.playlists;
-  if (Array.isArray(value?.savedMasterPlaylists)) return value.savedMasterPlaylists;
+  if (Array.isArray(value?.savedMasterPlaylists))
+    return value.savedMasterPlaylists;
   if (Array.isArray(value?.masterPlaylists)) return value.masterPlaylists;
   if (Array.isArray(value?.saved)) return value.saved;
   return [];
@@ -251,6 +275,93 @@ function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
   return collected;
 }
 
+function importHistoryStorageKey(side: "source" | "my") {
+  return `nerd-engine-curation-import-history-${side}`;
+}
+
+function loadImportHistory(side: "source" | "my"): ImportHistoryItem[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(importHistoryStorageKey(side));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveImportHistory(side: "source" | "my", items: ImportHistoryItem[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    importHistoryStorageKey(side),
+    JSON.stringify(items),
+  );
+}
+
+function addToImportHistory(
+  side: "source" | "my",
+  payload: ImportedLinkWithId,
+) {
+  if (typeof window === "undefined") return;
+  if (payload.source_type === "track") return;
+
+  const nextItem: ImportHistoryItem = {
+    id: payload.id || makeImportedLinkId(),
+    display_name: payload.display_name || "Imported Playlist",
+    link: payload.link,
+    source_type: payload.source_type,
+    track_count: payload.track_count,
+    accountName: payload.accountName,
+  };
+
+  const current = loadImportHistory(side);
+  const next = [
+    nextItem,
+    ...current.filter((item) => item.link !== nextItem.link),
+  ].slice(0, 80);
+  saveImportHistory(side, next);
+}
+
+function extractSpotifyTrackId(input: string) {
+  const clean = input.trim();
+  const urlMatch = clean.match(/track\/([A-Za-z0-9]+)/);
+  if (urlMatch?.[1]) return urlMatch[1];
+
+  const uriMatch = clean.match(/^spotify:track:([A-Za-z0-9]+)$/);
+  if (uriMatch?.[1]) return uriMatch[1];
+
+  if (/^[A-Za-z0-9]{16,}$/.test(clean)) return clean;
+  return null;
+}
+
+function extractSpotifyPlaylistId(input: string) {
+  const clean = input.trim();
+  const urlMatch = clean.match(/playlist\/([A-Za-z0-9]+)/);
+  if (urlMatch?.[1]) return urlMatch[1];
+
+  const uriMatch = clean.match(/^spotify:playlist:([A-Za-z0-9]+)$/);
+  if (uriMatch?.[1]) return uriMatch[1];
+
+  return null;
+}
+
+function reorderItems<T>(items: T[], fromIndex: number, toIndex: number): T[] {
+  const output = [...items];
+  const [moved] = output.splice(fromIndex, 1);
+  output.splice(toIndex, 0, moved);
+  return output;
+}
+
+function weightedShuffle<T>(items: T[]): T[] {
+  const output = [...items];
+  for (let index = output.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [output[index], output[randomIndex]] = [output[randomIndex], output[index]];
+  }
+  return output;
+}
+
 function trackKey(track: CurationTrack) {
   return `${track.title.toLowerCase()}__${track.artist.toLowerCase()}`;
 }
@@ -291,30 +402,42 @@ function ensureImportedLinkIds(
 }
 
 function normalizeImportedTrack(row: any, index: number): CurationTrack {
+  const source = row?.track && typeof row.track === "object" ? row.track : row;
+  const artists = Array.isArray(source?.artists)
+    ? source.artists
+        .map((artist: any) => artist?.name)
+        .filter(Boolean)
+        .join(", ")
+    : "";
+
   const spotifyId =
-    typeof row?.spotify_id === "string"
-      ? row.spotify_id
-      : typeof row?.track_id === "string"
-        ? row.track_id
-        : typeof row?.id === "string"
-          ? row.id
+    typeof source?.spotify_id === "string"
+      ? source.spotify_id
+      : typeof source?.track_id === "string"
+        ? source.track_id
+        : typeof source?.id === "string"
+          ? source.id
           : null;
+
+  const title =
+    typeof source?.title === "string"
+      ? source.title
+      : typeof source?.name === "string"
+        ? source.name
+        : "Untitled Track";
+
+  const artist =
+    typeof source?.artist === "string" && source.artist.trim()
+      ? source.artist
+      : typeof source?.artist_name === "string" && source.artist_name.trim()
+        ? source.artist_name
+        : artists || "Unknown Artist";
 
   return {
     id: spotifyId || `imported-track-${index}-${Date.now()}`,
     spotify_id: spotifyId,
-    title:
-      typeof row?.title === "string"
-        ? row.title
-        : typeof row?.name === "string"
-          ? row.name
-          : "Untitled Track",
-    artist:
-      typeof row?.artist === "string"
-        ? row.artist
-        : typeof row?.artist_name === "string"
-          ? row.artist_name
-          : "Unknown Artist",
+    title,
+    artist,
   };
 }
 
@@ -356,6 +479,190 @@ function normalizeImportedLinkPayload({
   };
 }
 
+async function fetchPublicSpotifyTrack(
+  spotifyTrackId: string,
+): Promise<CurationTrack | null> {
+  const endpointCandidates = [
+    `${API_BASE_URL}/api/spotify/public-track/${spotifyTrackId}`,
+    `${API_BASE_URL}/api/spotify/tracks/${spotifyTrackId}`,
+    `${API_BASE_URL}/api/spotify/track?spotify_track_id=${encodeURIComponent(spotifyTrackId)}`,
+    `${API_BASE_URL}/api/tracks/${spotifyTrackId}`,
+  ];
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const trackPayload = payload?.track ?? payload;
+      const normalized = normalizeImportedTrack(trackPayload, 0);
+      if (
+        normalized.title &&
+        normalized.artist &&
+        normalized.artist !== "Unknown Artist"
+      ) {
+        return normalized;
+      }
+    } catch {
+      // Try next backend shape.
+    }
+  }
+
+  return null;
+}
+
+async function fetchExternalSpotifyPlaylist(
+  spotifyPlaylistId: string,
+  url: string,
+): Promise<ImportedLinkWithId | null> {
+  const endpointCandidates = [
+    `${API_BASE_URL}/api/spotify/public-playlists/${spotifyPlaylistId}/tracks`,
+    `${API_BASE_URL}/api/spotify/playlists/${spotifyPlaylistId}/tracks`,
+    `${API_BASE_URL}/api/spotify/playlist-tracks?spotify_playlist_id=${encodeURIComponent(spotifyPlaylistId)}`,
+    `${API_BASE_URL}/api/playlists/external/${spotifyPlaylistId}/tracks`,
+  ];
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const tracksPayload = payload?.tracks ?? payload?.items ?? payload;
+      const playlist = payload?.playlist ?? {
+        name:
+          payload?.name ||
+          payload?.playlist_name ||
+          "Imported Spotify Playlist",
+      };
+      const normalized = normalizeImportedLinkPayload({
+        playlist,
+        tracksPayload,
+        url,
+        accountName:
+          playlist?.owner_display_name || playlist?.owner_name || "Spotify",
+      });
+      if (normalized.tracks.length > 0) return normalized;
+    } catch {
+      // Try next backend shape.
+    }
+  }
+
+  return null;
+}
+
+async function importSpotifyTrackLink(
+  url: string,
+): Promise<ImportedLinkWithId> {
+  const spotifyTrackId = extractSpotifyTrackId(url);
+  if (!spotifyTrackId)
+    throw new Error("Paste a valid Spotify playlist or track link.");
+
+  const publicTrack = await fetchPublicSpotifyTrack(spotifyTrackId);
+  if (publicTrack) {
+    return {
+      id: makeImportedLinkId(),
+      link: url,
+      display_name: formatTrackLine(publicTrack),
+      accountName: "Spotify Track",
+      source_type: "track",
+      track_count: 1,
+      tracks: [publicTrack],
+    };
+  }
+
+  let title = "Spotify Track";
+  let artist = "Unknown Artist";
+
+  try {
+    const response = await fetch(
+      `https://open.spotify.com/oembed?url=${encodeURIComponent(
+        `https://open.spotify.com/track/${spotifyTrackId}`,
+      )}`,
+    );
+
+    if (response.ok) {
+      const payload = await response.json();
+      const rawTitle = String(payload?.title || "").trim();
+      const authorName = String(
+        payload?.author_name || payload?.provider_name || "",
+      ).trim();
+      if (rawTitle) {
+        const separators = [" - ", " – ", " — "];
+        const separator = separators.find((item) => rawTitle.includes(item));
+        if (separator) {
+          const parts = rawTitle.split(separator);
+          title = parts[0]?.trim() || rawTitle;
+          artist =
+            parts.slice(1).join(separator).trim() || authorName || artist;
+        } else {
+          title = rawTitle;
+          artist = authorName || artist;
+        }
+      } else if (authorName) {
+        artist = authorName;
+      }
+    }
+  } catch {
+    // Keep fallback title and artist when oEmbed is not available.
+  }
+
+  return {
+    id: makeImportedLinkId(),
+    link: url,
+    display_name: `${title} - ${artist}`,
+    accountName: "Spotify Track",
+    source_type: "track",
+    track_count: 1,
+    tracks: [
+      {
+        id: spotifyTrackId,
+        spotify_id: spotifyTrackId,
+        title,
+        artist,
+      } as CurationTrack,
+    ],
+  };
+}
+
+async function importExternalSpotifyPlaylistFromAccount(
+  accountId: number,
+  accountName: string,
+  spotifyPlaylistId: string,
+  url: string,
+): Promise<ImportedLinkWithId | null> {
+  const endpointCandidates = [
+    `${API_BASE_URL}/api/accounts/${accountId}/spotify-playlists/${spotifyPlaylistId}/tracks`,
+    `${API_BASE_URL}/api/accounts/${accountId}/playlists/by-spotify-id/${spotifyPlaylistId}/tracks`,
+    `${API_BASE_URL}/api/accounts/${accountId}/playlist-tracks?spotify_playlist_id=${encodeURIComponent(spotifyPlaylistId)}`,
+  ];
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const tracksPayload = payload?.tracks ?? payload?.items ?? payload;
+      const playlist = payload?.playlist ?? {
+        name:
+          payload?.name ||
+          payload?.playlist_name ||
+          "Imported Spotify Playlist",
+      };
+      const normalized = normalizeImportedLinkPayload({
+        playlist,
+        tracksPayload,
+        url,
+        accountName,
+      });
+      if (normalized.tracks.length > 0) return normalized;
+    } catch {
+      // Try the next supported backend endpoint.
+    }
+  }
+
+  return null;
+}
+
 async function importSpotifyLinkFromAccount(
   accountId: number,
   accountName: string,
@@ -365,11 +672,15 @@ async function importSpotifyLinkFromAccount(
     throw new Error("Invalid account ID.");
   }
 
-  const playlistIdMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
-  const spotifyPlaylistId = playlistIdMatch?.[1];
+  const spotifyTrackId = extractSpotifyTrackId(url);
+  if (spotifyTrackId && !url.includes("playlist/")) {
+    return importSpotifyTrackLink(url);
+  }
+
+  const spotifyPlaylistId = extractSpotifyPlaylistId(url);
 
   if (!spotifyPlaylistId) {
-    throw new Error("Paste a valid Spotify playlist link.");
+    throw new Error("Paste a valid Spotify playlist or track link.");
   }
 
   const playlistsResponse = await fetch(
@@ -389,11 +700,21 @@ async function importSpotifyLinkFromAccount(
     return (
       item.spotify_id === spotifyPlaylistId ||
       item.spotify_playlist_id === spotifyPlaylistId ||
-      item.spotify_url?.includes(spotifyPlaylistId)
+      item.spotify_url?.includes(spotifyPlaylistId) ||
+      item.external_url?.includes(spotifyPlaylistId)
     );
   });
 
   if (!playlist?.id) {
+    const externalImport = await importExternalSpotifyPlaylistFromAccount(
+      accountId,
+      accountName,
+      spotifyPlaylistId,
+      url,
+    );
+
+    if (externalImport) return externalImport;
+
     throw new Error(`Playlist not found in ${accountName}.`);
   }
 
@@ -419,13 +740,26 @@ async function importSpotifyLinkAllAccounts(
   accounts: AccountItem[],
   url: string,
 ): Promise<ImportedLinkWithId> {
+  if (extractSpotifyTrackId(url) && !url.includes("playlist/")) {
+    return importSpotifyTrackLink(url);
+  }
+
+  const spotifyPlaylistId = extractSpotifyPlaylistId(url);
+  if (spotifyPlaylistId) {
+    const publicPlaylist = await fetchExternalSpotifyPlaylist(
+      spotifyPlaylistId,
+      url,
+    );
+    if (publicPlaylist) return publicPlaylist;
+  }
+
   const realAccounts = accounts.filter((account) => account.id > 0);
 
   if (realAccounts.length === 0) {
     throw new Error("No Spotify accounts found.");
   }
 
-  let lastError = "Playlist not found in any account.";
+  const errors: string[] = [];
 
   for (const account of realAccounts) {
     try {
@@ -439,13 +773,17 @@ async function importSpotifyLinkAllAccounts(
         return imported;
       }
 
-      lastError = `No tracks found in ${account.display_name || `Account ${account.id}`}.`;
+      errors.push(
+        `No tracks found in ${account.display_name || `Account ${account.id}`}.`,
+      );
     } catch (error) {
-      lastError = error instanceof Error ? error.message : "Import failed.";
+      errors.push(error instanceof Error ? error.message : "Import failed.");
     }
   }
 
-  throw new Error(lastError);
+  throw new Error(
+    "Playlist tracks could not be imported. Public playlist import needs the backend external Spotify playlist route. Synced playlists and Spotify track links still work.",
+  );
 }
 
 function parseTypedTracks(raw: string): CurationTrack[] {
@@ -672,7 +1010,13 @@ function enforceGroupSpacing(
   return output;
 }
 
-function TrackDots({ colorIndexes }: { colorIndexes: number[] }) {
+function TrackDots({
+  colorIndexes,
+  colorPalette = LINK_COLORS,
+}: {
+  colorIndexes: number[];
+  colorPalette?: string[];
+}) {
   if (colorIndexes.length === 0) return null;
 
   return (
@@ -680,12 +1024,20 @@ function TrackDots({ colorIndexes }: { colorIndexes: number[] }) {
       {colorIndexes.map((index, dotIndex) => (
         <span
           key={`${index}-${dotIndex}`}
-          className={`h-2.5 w-2.5 rounded-full ${getColorClass(index)}`}
+          className={`h-2.5 w-2.5 rounded-full ${colorPalette[index % colorPalette.length]}`}
         />
       ))}
     </div>
   );
 }
+
+type HistorySection = {
+  side: "source" | "my";
+  title: string;
+  items: ImportHistoryItem[];
+  setItems: Dispatch<SetStateAction<ImportHistoryItem[]>>;
+  onImportItems: (items: ImportHistoryItem[]) => Promise<void>;
+};
 
 function SideSection({
   title,
@@ -697,6 +1049,8 @@ function SideSection({
   setImportedLinks,
   clearSide,
   removeTrack,
+  colorPalette,
+  historySections,
 }: {
   title: string;
   tracks: CurationTrack[];
@@ -707,6 +1061,8 @@ function SideSection({
   setImportedLinks: Dispatch<SetStateAction<ImportedLinkWithId[]>>;
   clearSide: () => void;
   removeTrack: (track: CurationTrack) => void;
+  colorPalette: string[];
+  historySections: HistorySection[];
 }) {
   const trackColorMap = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -724,51 +1080,167 @@ function SideSection({
 
   const [ratioOne, setRatioOne] = useState("3");
   const [ratioTwo, setRatioTwo] = useState("1");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyImporting, setHistoryImporting] = useState(false);
+  const [historyStatus, setHistoryStatus] = useState("");
+  const [selectedHistoryKeys, setSelectedHistoryKeys] = useState<string[]>([]);
+  const [draggedImportedIndex, setDraggedImportedIndex] = useState<
+    number | null
+  >(null);
+  const [draggedTrackIndex, setDraggedTrackIndex] = useState<number | null>(
+    null,
+  );
 
   const randomShuffleTracks = () => {
-    setImportedLinks((prev) =>
-      prev.map((item) => ({
-        ...item,
-        tracks: shuffleTracksList(item.tracks),
-        mergedTracks: undefined,
-      })),
-    );
+    setImportedLinks((prev) => {
+      if (prev.length <= 1) {
+        return prev.map((item) => ({
+          ...item,
+          tracks: shuffleTracksList(item.tracks),
+          mergedTracks: undefined,
+        }));
+      }
+
+      const mixed = weightedShuffle(prev.flatMap((item) => item.tracks));
+      return prev.map((item, index) =>
+        index === 0
+          ? { ...item, mergedTracks: mixed }
+          : { ...item, mergedTracks: [] },
+      );
+    });
   };
 
   const ratioShuffleTracks = () => {
     setImportedLinks((prev) => {
       if (prev.length < 2) return prev;
 
-      const first = prev[0];
-      const second = prev[1];
-      const mixed = interleaveByRatio(
-        first.tracks,
-        second.tracks,
-        Number(ratioOne),
-        Number(ratioTwo),
+      const queues = prev.map((item) => [...item.tracks]);
+      const firstWeight = Math.max(1, Number(ratioOne) || 1);
+      const otherWeight = Math.max(1, Number(ratioTwo) || 1);
+      const mixed: CurationTrack[] = [];
+
+      while (queues.some((queue) => queue.length > 0)) {
+        queues.forEach((queue, index) => {
+          const weight = index === 0 ? firstWeight : otherWeight;
+          for (let step = 0; step < weight && queue.length > 0; step += 1) {
+            mixed.push(queue.shift() as CurationTrack);
+          }
+        });
+      }
+
+      return prev.map((item, index) =>
+        index === 0
+          ? { ...item, mergedTracks: mixed }
+          : { ...item, mergedTracks: [] },
       );
-
-      return prev.map((item, index) => {
-        if (index === 0) {
-          return {
-            ...item,
-            mergedTracks: mixed,
-          };
-        }
-
-        if (index === 1) {
-          return {
-            ...item,
-            mergedTracks: [],
-          };
-        }
-
-        return {
-          ...item,
-          mergedTracks: undefined,
-        };
-      });
     });
+  };
+
+  const visibleHistorySections = historySections.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => item.source_type !== "track"),
+  }));
+
+  const selectedHistoryCount = selectedHistoryKeys.length;
+
+  useEffect(() => {
+    if (!historyOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [historyOpen]);
+
+  const removeHistoryItem = (section: HistorySection, id: string) => {
+    const next = section.items.filter((item) => item.id !== id);
+    section.setItems(next);
+    saveImportHistory(section.side, next);
+    setSelectedHistoryKeys((current) =>
+      current.filter((itemKey) => itemKey !== `${section.side}:${id}`),
+    );
+  };
+
+  const toggleHistoryItem = (
+    side: "source" | "my",
+    id: string,
+    checked: boolean,
+  ) => {
+    const key = `${side}:${id}`;
+    setSelectedHistoryKeys((current) =>
+      checked
+        ? Array.from(new Set([...current, key]))
+        : current.filter((item) => item !== key),
+    );
+  };
+
+  const importSelectedHistory = async () => {
+    const sectionsToImport = visibleHistorySections.map((section) => ({
+      ...section,
+      items: section.items.filter((item) =>
+        selectedHistoryKeys.includes(`${section.side}:${item.id}`),
+      ),
+    }));
+
+    const total = sectionsToImport.reduce(
+      (sum, section) => sum + section.items.length,
+      0,
+    );
+    if (total === 0) return;
+
+    setHistoryImporting(true);
+    setHistoryStatus(`0/${total} imported`);
+
+    let completed = 0;
+    try {
+      for (const section of sectionsToImport) {
+        for (const item of section.items) {
+          completed += 1;
+          setHistoryStatus(
+            `${completed}/${total} imported · ${item.display_name}`,
+          );
+          await section.onImportItems([item]);
+        }
+      }
+      setSelectedHistoryKeys([]);
+      setHistoryOpen(false);
+    } finally {
+      setHistoryImporting(false);
+      setHistoryStatus("");
+    }
+  };
+
+  const reorderImportedLinks = (targetIndex: number) => {
+    if (draggedImportedIndex === null || draggedImportedIndex === targetIndex) {
+      setDraggedImportedIndex(null);
+      return;
+    }
+
+    setImportedLinks((prev) =>
+      reorderItems(prev, draggedImportedIndex, targetIndex),
+    );
+    setDraggedImportedIndex(null);
+  };
+
+  const reorderVisibleTrack = (targetIndex: number) => {
+    if (draggedTrackIndex === null || draggedTrackIndex === targetIndex) {
+      setDraggedTrackIndex(null);
+      return;
+    }
+
+    setImportedLinks((prev) => {
+      if (prev.length === 0) return prev;
+      const reordered = reorderItems(tracks, draggedTrackIndex, targetIndex);
+      return prev.map((item, index) =>
+        index === 0
+          ? { ...item, mergedTracks: reordered }
+          : { ...item, mergedTracks: [] },
+      );
+    });
+
+    setDraggedTrackIndex(null);
   };
 
   return (
@@ -781,12 +1253,23 @@ function SideSection({
           </div>
         </div>
 
-        <button
-          onClick={clearSide}
-          className="rounded-xl border border-zinc-700 bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-900"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-900"
+            title="Import history"
+          >
+            ♥
+          </button>
+
+          <button
+            onClick={clearSide}
+            className="rounded-xl border border-zinc-700 bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-900"
+          >
+            Clear
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-3">
@@ -824,13 +1307,17 @@ function SideSection({
             {importedLinks.map((item, index) => (
               <div
                 key={`${item.id}-${index}`}
-                className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                draggable
+                onDragStart={() => setDraggedImportedIndex(index)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={() => reorderImportedLinks(index)}
+                className="cursor-move rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span
-                        className={`h-2.5 w-2.5 rounded-full ${getColorClass(index)}`}
+                        className={`h-2.5 w-2.5 rounded-full ${colorPalette[index % colorPalette.length]}`}
                       />
                       <div className="truncate text-sm font-semibold text-white">
                         {item.display_name || "Imported Playlist"}
@@ -880,10 +1367,17 @@ function SideSection({
               return (
                 <div
                   key={`${track.id}-${trackKey(track)}-${index}`}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                  draggable
+                  onDragStart={() => setDraggedTrackIndex(index)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => reorderVisibleTrack(index)}
+                  className="flex cursor-move items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
                 >
                   <div className="flex min-w-0 items-center">
-                    <TrackDots colorIndexes={colorIndexes} />
+                    <TrackDots
+                      colorIndexes={colorIndexes}
+                      colorPalette={colorPalette}
+                    />
                     <div className="min-w-0 text-sm text-zinc-300">
                       {formatTrackLine(track)}
                     </div>
@@ -933,6 +1427,114 @@ function SideSection({
           </div>
         </div>
       </div>
+
+      {historyOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setHistoryOpen(false)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-lg font-semibold text-white">History</div>
+                <div className="mt-1 text-xs text-zinc-500">{title}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded-lg border border-zinc-700 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-900"
+              >
+                X
+              </button>
+            </div>
+
+            <div className="grid max-h-[420px] grid-cols-1 gap-3 overflow-y-auto pr-1 md:grid-cols-2">
+              {visibleHistorySections.map((section) => (
+                <div
+                  key={section.side}
+                  className="rounded-2xl border border-zinc-800 bg-black p-3"
+                >
+                  <div className="mb-3 text-sm font-semibold text-white">
+                    {section.title}
+                  </div>
+                  {section.items.length === 0 ? (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-4 text-sm text-zinc-500">
+                      No playlists saved.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {section.items.map((item) => {
+                        const key = `${section.side}:${item.id}`;
+                        const checked = selectedHistoryKeys.includes(key);
+
+                        return (
+                          <div
+                            key={key}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3"
+                          >
+                            <label className="flex min-w-0 flex-1 items-center gap-3">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) =>
+                                  toggleHistoryItem(
+                                    section.side,
+                                    item.id,
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-semibold text-white">
+                                  {item.display_name}
+                                </div>
+                                <div className="mt-1 truncate text-xs text-zinc-500">
+                                  {item.track_count} tracks ·{" "}
+                                  {item.accountName || "Spotify"}
+                                </div>
+                              </div>
+                            </label>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removeHistoryItem(section, item.id)
+                              }
+                              className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/20"
+                            >
+                              X
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              {historyStatus ? (
+                <div className="flex items-center gap-2 text-xs font-semibold text-green-300">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-green-400 border-t-transparent" />
+                  {historyStatus}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                disabled={selectedHistoryCount === 0 || historyImporting}
+                onClick={importSelectedHistory}
+                className="rounded-xl bg-green-600 px-5 py-3 text-sm font-semibold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {historyImporting ? "Importing..." : "Import Selected"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1176,6 +1778,14 @@ export default function CurationPage() {
     SavedMasterPlaylist[]
   >([]);
   const [sendStatus, setSendStatus] = useState("");
+  const [undoStack, setUndoStack] = useState<CurationTrack[][]>([]);
+  const [resultDragIndex, setResultDragIndex] = useState<number | null>(null);
+  const [sourceImportHistory, setSourceImportHistory] = useState<
+    ImportHistoryItem[]
+  >([]);
+  const [myImportHistory, setMyImportHistory] = useState<ImportHistoryItem[]>(
+    [],
+  );
 
   const accountsQuery = useQuery<AccountItem[]>({
     queryKey: ["accounts"],
@@ -1226,6 +1836,11 @@ export default function CurationPage() {
       cancelled = true;
     };
   }, [activeAccountId]);
+
+  useEffect(() => {
+    setSourceImportHistory(loadImportHistory("source"));
+    setMyImportHistory(loadImportHistory("my"));
+  }, []);
 
   useEffect(() => {
     const refreshSavedMasters = () => {
@@ -1298,12 +1913,43 @@ export default function CurationPage() {
     return keys;
   }, [duplicateGroups]);
 
+  const sourcePlaylistColorMap = useMemo(() => {
+    const map = new Map<string, number>();
+    sourceImportedLinks.forEach((item, itemIndex) => {
+      item.tracks.forEach((track) => map.set(trackKey(track), itemIndex));
+    });
+    return map;
+  }, [sourceImportedLinks]);
+
+  const myPlaylistColorMap = useMemo(() => {
+    const map = new Map<string, number>();
+    myImportedLinks.forEach((item, itemIndex) => {
+      item.tracks.forEach((track) => map.set(trackKey(track), itemIndex));
+    });
+    return map;
+  }, [myImportedLinks]);
+
+  const pushUndo = () => {
+    setUndoStack((current) => [curationBaseResult, ...current].slice(0, 30));
+  };
+
+  const undoLastChange = () => {
+    setUndoStack((current) => {
+      const [previous, ...rest] = current;
+      if (!previous) return current;
+      setCurationBaseResult(previous);
+      return rest;
+    });
+  };
+
   const sourceImportMutation = useMutation({
     mutationFn: (link: string) => importSpotifyLinkAllAccounts(accounts, link),
     onSuccess: (payload) => {
       setSourceImportedLinks((prev) =>
         ensureImportedLinkIds([...prev, payload]),
       );
+      addToImportHistory("source", payload);
+      setSourceImportHistory(loadImportHistory("source"));
       setSourceLinkInput("");
     },
   });
@@ -1312,9 +1958,40 @@ export default function CurationPage() {
     mutationFn: (link: string) => importSpotifyLinkAllAccounts(accounts, link),
     onSuccess: (payload) => {
       setMyImportedLinks((prev) => ensureImportedLinkIds([...prev, payload]));
+      addToImportHistory("my", payload);
+      setMyImportHistory(loadImportHistory("my"));
       setMyTracksLinkInput("");
     },
   });
+
+  const importHistoryItems = async (
+    side: "source" | "my",
+    items: ImportHistoryItem[],
+  ) => {
+    setSendStatus(
+      `Importing ${items.length} playlist${items.length === 1 ? "" : "s"} from history...`,
+    );
+    for (const item of items) {
+      try {
+        const payload = await importSpotifyLinkAllAccounts(accounts, item.link);
+        if (side === "source") {
+          setSourceImportedLinks((prev) =>
+            ensureImportedLinkIds([...prev, payload]),
+          );
+        } else {
+          setMyImportedLinks((prev) =>
+            ensureImportedLinkIds([...prev, payload]),
+          );
+        }
+      } catch (error) {
+        setSendStatus(
+          error instanceof Error
+            ? error.message
+            : "Import from history failed.",
+        );
+      }
+    }
+  };
 
   const clearSourceOnly = () => {
     setSourceText("");
@@ -1338,10 +2015,32 @@ export default function CurationPage() {
 
   const deleteTrackFromResult = (trackToDelete: CurationTrack) => {
     const targetIdentity = trackIdentity(trackToDelete);
+    pushUndo();
 
     setCurationBaseResult((prev) =>
       prev.filter((track) => trackIdentity(track) !== targetIdentity),
     );
+  };
+
+  const removeDuplicateTracks = (tracksToDelete: CurationTrack[]) => {
+    const identities = new Set(tracksToDelete.map(trackIdentity));
+    pushUndo();
+    setCurationBaseResult((prev) =>
+      prev.filter((track) => !identities.has(trackIdentity(track))),
+    );
+  };
+
+  const reorderResultTrack = (targetIndex: number) => {
+    if (resultDragIndex === null || resultDragIndex === targetIndex) {
+      setResultDragIndex(null);
+      return;
+    }
+
+    pushUndo();
+    setCurationBaseResult((prev) =>
+      reorderItems(prev, resultDragIndex, targetIndex),
+    );
+    setResultDragIndex(null);
   };
 
   const runCuration = () => {
@@ -1378,6 +2077,7 @@ export default function CurationPage() {
     nextSettings[DUPLICATE_SPACE_KEY] =
       spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 10;
 
+    pushUndo();
     setSpaceApartModes(nextModes);
     setSpaceApartSettings(nextSettings);
     setCurationBaseResult(output);
@@ -1421,7 +2121,10 @@ export default function CurationPage() {
       });
       const normalized = normalizeSavedCuration(saved.item ?? saved);
       if (normalized) {
-        const synced = [normalized, ...savedCurations.filter((item) => item.id !== normalized.id)];
+        const synced = [
+          normalized,
+          ...savedCurations.filter((item) => item.id !== normalized.id),
+        ];
         persistSavedCurations(synced);
         setSelectedCurationId(normalized.id);
       }
@@ -1569,6 +2272,23 @@ export default function CurationPage() {
             setImportedLinks={setSourceImportedLinks}
             clearSide={clearSourceOnly}
             removeTrack={removeTrackFromSource}
+            colorPalette={SOURCE_LINK_COLORS}
+            historySections={[
+              {
+                side: "source",
+                title: "Source Playlist Tracks",
+                items: sourceImportHistory,
+                setItems: setSourceImportHistory,
+                onImportItems: (items) => importHistoryItems("source", items),
+              },
+              {
+                side: "my",
+                title: "My Tracks",
+                items: myImportHistory,
+                setItems: setMyImportHistory,
+                onImportItems: (items) => importHistoryItems("my", items),
+              },
+            ]}
           />
 
           <SideSection
@@ -1581,6 +2301,23 @@ export default function CurationPage() {
             setImportedLinks={setMyImportedLinks}
             clearSide={clearMyTracksOnly}
             removeTrack={removeTrackFromMyTracks}
+            colorPalette={MY_LINK_COLORS}
+            historySections={[
+              {
+                side: "source",
+                title: "Source Playlist Tracks",
+                items: sourceImportHistory,
+                setItems: setSourceImportHistory,
+                onImportItems: (items) => importHistoryItems("source", items),
+              },
+              {
+                side: "my",
+                title: "My Tracks",
+                items: myImportHistory,
+                setItems: setMyImportHistory,
+                onImportItems: (items) => importHistoryItems("my", items),
+              },
+            ]}
           />
         </div>
 
@@ -1621,12 +2358,23 @@ export default function CurationPage() {
             </div>
           </div>
 
-          <button
-            onClick={runCuration}
-            className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500"
-          >
-            Run Curation
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={undoLastChange}
+              disabled={undoStack.length === 0}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-950 px-6 text-sm font-semibold text-white transition hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Undo
+            </button>
+
+            <button
+              onClick={runCuration}
+              className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500"
+            >
+              Run Curation
+            </button>
+          </div>
         </div>
 
         <div className="mt-6 rounded-2xl border border-zinc-800 bg-black p-4">
@@ -1646,16 +2394,19 @@ export default function CurationPage() {
                 const isMine = myTrackKeys.has(key);
                 const isDuplicate = duplicateTrackKeys.has(key);
 
-                const dotClass = isDuplicate
-                  ? "bg-green-400"
-                  : isSource
-                    ? "bg-red-400"
-                    : isMine
-                      ? "bg-yellow-300"
-                      : "bg-zinc-400";
+                const sourceColorIndex = sourcePlaylistColorMap.get(key);
+                const myColorIndex = myPlaylistColorMap.get(key);
+                const sourceColorClass =
+                  sourceColorIndex !== undefined
+                    ? SOURCE_LINK_COLORS[
+                        sourceColorIndex % SOURCE_LINK_COLORS.length
+                      ]
+                    : myColorIndex !== undefined
+                      ? MY_LINK_COLORS[myColorIndex % MY_LINK_COLORS.length]
+                      : "bg-zinc-500";
 
                 const borderClass = isDuplicate
-                  ? "border-green-500/40"
+                  ? "border-green-500 border-2"
                   : isSource
                     ? "border-red-500/20"
                     : isMine
@@ -1665,10 +2416,19 @@ export default function CurationPage() {
                 return (
                   <div
                     key={`${trackIdentity(track)}-${index}`}
-                    className={`flex items-center justify-between rounded-xl border bg-zinc-950 px-4 py-3 ${borderClass}`}
+                    draggable
+                    onDragStart={() => setResultDragIndex(index)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => reorderResultTrack(index)}
+                    className={`flex cursor-move items-center justify-between rounded-xl border bg-zinc-950 px-4 py-3 ${borderClass}`}
                   >
                     <div className="flex min-w-0 items-center">
-                      <ResultDot colorClass={dotClass} />
+                      <div className="mr-3 flex shrink-0 items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-full border border-white bg-white" />
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full ${sourceColorClass}`}
+                        />
+                      </div>
                       <div className="min-w-0 text-sm text-zinc-300">
                         {index + 1}. {formatTrackLine(track)}
                       </div>
@@ -1689,8 +2449,21 @@ export default function CurationPage() {
 
         {duplicateGroups.length > 0 ? (
           <div className="mt-6 rounded-2xl border border-green-500/30 bg-black p-4">
-            <div className="mb-4 text-sm font-semibold text-green-400">
-              Duplicate Risk ({duplicateGroups.length})
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-green-400">
+                Duplicate Risk ({duplicateGroups.length})
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  removeDuplicateTracks(
+                    duplicateGroups.flatMap((group) => group.tracks),
+                  )
+                }
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20"
+              >
+                Remove All
+              </button>
             </div>
 
             <div className="space-y-4">
