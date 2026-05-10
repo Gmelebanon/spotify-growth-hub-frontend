@@ -1271,12 +1271,11 @@ function SideSection({
           completed += 1;
           const nextStatus = `${completed}/${total} imported · ${item.display_name}`;
           setHistoryStatus(nextStatus);
-          setSendStatus(nextStatus);
           await section.onImportItems([item]);
         }
       }
       setSelectedHistoryKeys([]);
-      setSendStatus(`Imported ${completed}/${total} playlist${total === 1 ? "" : "s"} from history.`);
+      setHistoryStatus(`Imported ${completed}/${total} playlist${total === 1 ? "" : "s"} from history.`);
       setHistoryOpen(false);
     } finally {
       setHistoryImporting(false);
