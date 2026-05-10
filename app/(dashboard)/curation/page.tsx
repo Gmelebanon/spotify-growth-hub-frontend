@@ -393,6 +393,29 @@ function addToImportHistory(
   saveImportHistory(side, next);
 }
 
+function addRawPlaylistLinkToImportHistory(
+  side: "source" | "my",
+  link: string,
+) {
+  if (typeof window === "undefined") return;
+  if (!extractSpotifyPlaylistId(link)) return;
+
+  const current = loadImportHistory(side);
+  const existing = current.find((item) => item.link === link);
+  if (existing) return;
+
+  const nextItem: ImportHistoryItem = {
+    id: makeImportedLinkId(),
+    display_name: "Spotify Playlist",
+    link,
+    source_type: "playlist",
+    track_count: 0,
+    accountName: "Spotify",
+  };
+
+  saveImportHistory(side, [nextItem, ...current].slice(0, 80));
+}
+
 function extractSpotifyTrackId(input: string) {
   const clean = input.trim();
   const urlMatch = clean.match(/track\/([A-Za-z0-9]+)/);
@@ -586,6 +609,7 @@ async function fetchExternalSpotifyPlaylist(
   url: string,
 ): Promise<ImportedLinkWithId | null> {
   const endpointCandidates = [
+    `${API_BASE_URL}/api/spotify/public-playlist/${spotifyPlaylistId}/tracks`,
     `${API_BASE_URL}/api/spotify/public-playlists/${spotifyPlaylistId}/tracks`,
     `${API_BASE_URL}/api/spotify/public-playlist/${spotifyPlaylistId}`,
     `${API_BASE_URL}/api/spotify/playlists/${spotifyPlaylistId}/tracks`,
@@ -2050,6 +2074,10 @@ export default function CurationPage() {
 
   const sourceImportMutation = useMutation({
     mutationFn: (link: string) => importSpotifyLinkAllAccounts(accounts, link),
+    onMutate: (link: string) => {
+      addRawPlaylistLinkToImportHistory("source", link);
+      setSourceImportHistory(loadImportHistory("source"));
+    },
     onSuccess: (payload) => {
       setSourceImportedLinks((prev) =>
         ensureImportedLinkIds([...prev, payload]),
@@ -2062,6 +2090,10 @@ export default function CurationPage() {
 
   const myTracksImportMutation = useMutation({
     mutationFn: (link: string) => importSpotifyLinkAllAccounts(accounts, link),
+    onMutate: (link: string) => {
+      addRawPlaylistLinkToImportHistory("my", link);
+      setMyImportHistory(loadImportHistory("my"));
+    },
     onSuccess: (payload) => {
       setMyImportedLinks((prev) => ensureImportedLinkIds([...prev, payload]));
       addToImportHistory("my", payload);
