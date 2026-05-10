@@ -348,13 +348,124 @@ function importHistoryStorageKey(side: "source" | "my") {
   return `nerd-engine-curation-import-history-${side}`;
 }
 
+const GLOBAL_HISTORY_STORAGE_KEY = "nerd-engine-curation-history-global";
+const LEGACY_HISTORY_STORAGE_KEY = "curation-history";
+
+
+type CurationHistoryDatabaseRow = {
+  id?: string;
+  side?: "source" | "my" | string;
+  url?: string;
+  display_name?: string | null;
+  account_name?: string | null;
+  item_type?: string | null;
+  imported_at?: string | null;
+};
+
+function normalizeDatabaseHistoryItem(row: CurationHistoryDatabaseRow): ImportHistoryItem | null {
+  const side = row.side === "source" || row.side === "my" ? row.side : null;
+  const link = String(row.url || "").trim();
+
+  if (!side || !link) return null;
+
+  return {
+    id: String(row.id || makeImportedLinkId()),
+    display_name: String(row.display_name || "Imported Spotify Playlist"),
+    link,
+    source_type: String(row.item_type || "playlist"),
+    track_count: 0,
+    accountName: String(row.account_name || "Spotify"),
+  };
+}
+
+async function loadImportHistoryFromDatabase(): Promise<{
+  source: ImportHistoryItem[];
+  my: ImportHistoryItem[];
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/curation/history`);
+    if (!response.ok) return { source: [], my: [] };
+
+    const rows = await response.json();
+    const source: ImportHistoryItem[] = [];
+    const my: ImportHistoryItem[] = [];
+
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const item = normalizeDatabaseHistoryItem(row);
+      if (!item) return;
+      if (row.side === "source") source.push(item);
+      if (row.side === "my") my.push(item);
+    });
+
+    return { source, my };
+  } catch {
+    return { source: [], my: [] };
+  }
+}
+
+async function saveImportHistoryItemToDatabase(
+  side: "source" | "my",
+  item: ImportHistoryItem,
+) {
+  try {
+    await fetch(`${API_BASE_URL}/api/curation/history`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        side,
+        url: item.link,
+        display_name: item.display_name || "Imported Spotify Playlist",
+        account_name: item.accountName || "Spotify",
+        item_type: item.source_type || "playlist",
+      }),
+    });
+  } catch {
+    // Keep local history even if database save fails.
+  }
+}
+
+async function deleteImportHistoryItemFromDatabase(id: string) {
+  try {
+    await fetch(`${API_BASE_URL}/api/curation/history/${id}`, {
+      method: "DELETE",
+    });
+  } catch {
+    // Keep local delete responsive even if database delete fails.
+  }
+}
+
+function readHistoryArray(value: unknown): ImportHistoryItem[] {
+  return Array.isArray(value) ? (value as ImportHistoryItem[]) : [];
+}
+
 function loadImportHistory(side: "source" | "my"): ImportHistoryItem[] {
   if (typeof window === "undefined") return [];
 
   try {
     const raw = window.localStorage.getItem(importHistoryStorageKey(side));
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    const sideItems = readHistoryArray(parsed);
+    if (sideItems.length > 0) return sideItems;
+  } catch {
+    // Continue to global fallbacks.
+  }
+
+  try {
+    const rawGlobal = window.localStorage.getItem(GLOBAL_HISTORY_STORAGE_KEY);
+    const parsedGlobal = rawGlobal ? JSON.parse(rawGlobal) : null;
+    const globalItems = readHistoryArray(parsedGlobal?.[side]);
+    if (globalItems.length > 0) return globalItems;
+  } catch {
+    // Continue to legacy fallback.
+  }
+
+  try {
+    const rawLegacy = window.localStorage.getItem(LEGACY_HISTORY_STORAGE_KEY);
+    const parsedLegacy = rawLegacy ? JSON.parse(rawLegacy) : null;
+    if (Array.isArray(parsedLegacy)) {
+      return parsedLegacy.filter((item: ImportHistoryItem & { side?: string }) => item.side === side || !item.side);
+    }
+    return readHistoryArray(parsedLegacy?.[side]);
   } catch {
     return [];
   }
@@ -362,10 +473,28 @@ function loadImportHistory(side: "source" | "my"): ImportHistoryItem[] {
 
 function saveImportHistory(side: "source" | "my", items: ImportHistoryItem[]) {
   if (typeof window === "undefined") return;
+
   window.localStorage.setItem(
     importHistoryStorageKey(side),
     JSON.stringify(items),
   );
+
+  try {
+    const rawGlobal = window.localStorage.getItem(GLOBAL_HISTORY_STORAGE_KEY);
+    const globalValue = rawGlobal ? JSON.parse(rawGlobal) : {};
+    const nextGlobal = {
+      ...globalValue,
+      [side]: items,
+      updatedAt: new Date().toISOString(),
+    };
+    window.localStorage.setItem(GLOBAL_HISTORY_STORAGE_KEY, JSON.stringify(nextGlobal));
+  } catch {
+    window.localStorage.setItem(
+      GLOBAL_HISTORY_STORAGE_KEY,
+      JSON.stringify({ [side]: items, updatedAt: new Date().toISOString() }),
+    );
+  }
+
   void saveImportHistoryToIndexedDb(side, items);
 }
 
@@ -382,7 +511,7 @@ function addToImportHistory(
     link: payload.link,
     source_type: payload.source_type,
     track_count: payload.track_count,
-    accountName: payload.accountName,
+    accountName: payload.accountName || "Spotify",
   };
 
   const current = loadImportHistory(side);
@@ -391,6 +520,7 @@ function addToImportHistory(
     ...current.filter((item) => item.link !== nextItem.link),
   ].slice(0, 80);
   saveImportHistory(side, next);
+  void saveImportHistoryItemToDatabase(side, nextItem);
 }
 
 function addRawPlaylistLinkToImportHistory(
@@ -414,6 +544,7 @@ function addRawPlaylistLinkToImportHistory(
   };
 
   saveImportHistory(side, [nextItem, ...current].slice(0, 80));
+  void saveImportHistoryItemToDatabase(side, nextItem);
 }
 
 function extractSpotifyTrackId(input: string) {
@@ -557,15 +688,26 @@ function normalizeImportedLinkPayload({
     normalizeImportedTrack(track, index),
   );
 
+  const playlistName =
+    playlist?.name ||
+    playlist?.title ||
+    playlist?.playlist_name ||
+    playlist?.display_name ||
+    "Imported Playlist";
+
+  const playlistOwner =
+    playlist?.owner_display_name ||
+    playlist?.owner_name ||
+    playlist?.owner?.display_name ||
+    playlist?.owner?.id ||
+    accountName ||
+    "Spotify";
+
   return {
     id: makeImportedLinkId(),
     link: url,
-    display_name:
-      playlist?.name ||
-      playlist?.title ||
-      playlist?.playlist_name ||
-      "Imported Playlist",
-    accountName,
+    display_name: playlistName,
+    accountName: playlistOwner,
     source_type: "playlist",
     track_count: tracks.length,
     tracks,
@@ -1253,6 +1395,7 @@ function SideSection({
     const next = section.items.filter((item) => item.id !== id);
     section.setItems(next);
     saveImportHistory(section.side, next);
+    void deleteImportHistoryItemFromDatabase(id);
     setSelectedHistoryKeys((current) =>
       current.filter((itemKey) => itemKey !== `${section.side}:${id}`),
     );
@@ -1941,28 +2084,30 @@ export default function CurationPage() {
     setMyImportHistory(myLocal);
 
     const restorePersistentHistory = async () => {
-      const [sourceIndexed, myIndexed] = await Promise.all([
+      const [sourceIndexed, myIndexed, databaseHistory] = await Promise.all([
         loadImportHistoryFromIndexedDb("source"),
         loadImportHistoryFromIndexedDb("my"),
+        loadImportHistoryFromDatabase(),
       ]);
 
       if (cancelled) return;
 
-      if (sourceIndexed.length > sourceLocal.length) {
-        setSourceImportHistory(sourceIndexed);
-        window.localStorage.setItem(
-          importHistoryStorageKey("source"),
-          JSON.stringify(sourceIndexed),
-        );
-      }
+      const sourceBest = databaseHistory.source.length > 0
+        ? databaseHistory.source
+        : sourceIndexed.length > sourceLocal.length
+          ? sourceIndexed
+          : sourceLocal;
 
-      if (myIndexed.length > myLocal.length) {
-        setMyImportHistory(myIndexed);
-        window.localStorage.setItem(
-          importHistoryStorageKey("my"),
-          JSON.stringify(myIndexed),
-        );
-      }
+      const myBest = databaseHistory.my.length > 0
+        ? databaseHistory.my
+        : myIndexed.length > myLocal.length
+          ? myIndexed
+          : myLocal;
+
+      setSourceImportHistory(sourceBest);
+      setMyImportHistory(myBest);
+      saveImportHistory("source", sourceBest);
+      saveImportHistory("my", myBest);
     };
 
     void restorePersistentHistory();
