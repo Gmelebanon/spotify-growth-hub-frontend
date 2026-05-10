@@ -1,4 +1,4 @@
-const API_BASE = "http://127.0.0.1:8000"
+const API_BASE = "https://spotify-growth-hub-backend.onrender.com"
 
 export async function getTrades(accountId: number) {
   const res = await fetch(`${API_BASE}/accounts/${accountId}/trades`)

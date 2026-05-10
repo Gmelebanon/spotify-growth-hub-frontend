@@ -10,7 +10,7 @@ export default function Topbar() {
       <div className="flex items-center gap-4">
         <button
           onClick={() => {
-            window.location.href = "http://127.0.0.1:8000/auth/login"
+            window.location.href = "https://spotify-growth-hub-backend.onrender.com/auth/login"
           }}
           className="bg-green-500 text-black px-3 py-1 rounded text-sm font-medium"
         >

@@ -79,7 +79,7 @@ type CreatedPlaylistDetails = {
 
 const ALL_ACCOUNTS_ID = -1;
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 
 async function fetchPlaylistsWithHistory(

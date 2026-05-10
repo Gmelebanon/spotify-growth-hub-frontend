@@ -61,7 +61,7 @@ const DUPLICATE_SPACE_KEY = "__all_duplicate_groups__";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000";
+  "https://spotify-growth-hub-backend.onrender.com";
 
 const LINK_COLORS = [
   "bg-green-400",
