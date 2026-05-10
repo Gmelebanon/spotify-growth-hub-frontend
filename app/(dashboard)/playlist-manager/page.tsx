@@ -105,6 +105,9 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.trim() ||
   "https://spotify-growth-hub-backend.onrender.com";
 
+const SAFE_SYNC_DELAY_MS = 5000;
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 const emptyState = (): PlaylistManagerState => ({
   savedMasterPlaylists: [],
   selectedSavedMasterPlaylistId: null,
@@ -241,30 +244,84 @@ function extractSpotifyPlaylistId(input: string) {
 
 
 
-async function parseTrackInput(input: string) {
+function parseSpotifyOembedTitle(rawTitle: string, spotifyId: string) {
+  const clean = rawTitle
+    .replace(/\s*\|\s*Spotify\s*$/i, "")
+    .replace(/\s+-\s+song and lyrics by\s+/i, " - ")
+    .replace(/\s+-\s+single by\s+/i, " - ")
+    .trim();
+
+  if (!clean) {
+    return {
+      title: `Spotify Track ${spotifyId}`,
+      artist: "",
+    };
+  }
+
+  const parts = clean.split(/\s+-\s+/);
+  if (parts.length >= 2) {
+    return {
+      title: parts[0].trim() || `Spotify Track ${spotifyId}`,
+      artist: parts.slice(1).join(" - ").trim(),
+    };
+  }
+
+  return {
+    title: clean,
+    artist: "",
+  };
+}
+
+async function parseTrackInput(input: string): Promise<AddedTrack | null> {
   const clean = input.trim();
 
   if (!clean) return null;
 
-  const spotifyTrackMatch =
-    clean.match(/open\.spotify\.com\/track\/([A-Za-z0-9]+)/) ||
-    clean.match(/spotify:track:([A-Za-z0-9]+)/);
+  const spotifyId = extractSpotifyTrackId(clean);
 
-  const spotifyId = spotifyTrackMatch?.[1];
+  if (spotifyId) {
+    try {
+      const response = await fetch(
+        `https://open.spotify.com/oembed?url=${encodeURIComponent(
+          `https://open.spotify.com/track/${spotifyId}`,
+        )}`,
+      );
+
+      if (response.ok) {
+        const data = (await response.json()) as { title?: string };
+        const parsedTitle = parseSpotifyOembedTitle(data.title || "", spotifyId);
+
+        return {
+          id: spotifyId,
+          spotify_id: spotifyId,
+          title: parsedTitle.title,
+          artist: parsedTitle.artist,
+          createdAt: new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Fall back below if oEmbed is blocked or unavailable.
+    }
+
+    return {
+      id: spotifyId,
+      spotify_id: spotifyId,
+      title: `Spotify Track ${spotifyId}`,
+      artist: "",
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const split = clean.split(/\s+-\s+/);
 
   return {
-    id: spotifyId || `typed-${Date.now()}`,
-    spotify_id: spotifyId,
-    title: clean,
-    name: clean,
-    artist: "",
-    artist_name: "",
-    album_name: "",
-    image_url: null,
-    spotify_url: spotifyId ? `https://open.spotify.com/track/${spotifyId}` : null,
+    id: `typed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    spotify_id: null,
+    title: split[0]?.trim() || clean,
+    artist: split.slice(1).join(" - ").trim(),
+    createdAt: new Date().toISOString(),
   };
 }
-
 
 function insertAtPosition<T>(items: T[], item: T, position: number | string): T[] {
   const next = [...items];
@@ -637,6 +694,8 @@ export default function PlaylistManagerPage() {
   const [placementNumber, setPlacementNumber] = useState("");
   const [addTrackMode, setAddTrackMode] = useState<AddTrackMode>("current");
   const [trackDragIndex, setTrackDragIndex] = useState<number | null>(null);
+  const [syncProgress, setSyncProgress] = useState<Record<string, number>>({});
+  const [syncStatus, setSyncStatus] = useState<Record<string, string>>({});
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const accountsQuery = useQuery<AccountItem[]>({
@@ -694,6 +753,23 @@ export default function PlaylistManagerPage() {
     });
   };
 
+  const handleClearAllPlaylistManager = () => {
+    const confirmed = window.confirm(
+      "Clear all Playlist Manager data?\n\nThis will remove all saved master playlists, synced playlists, curation boxes, and local saved state. It will NOT delete anything from Spotify.",
+    );
+
+    if (!confirmed) return;
+
+    const nextState = emptyState();
+    setSyncProgress({});
+    setSyncStatus({});
+    persistState(nextState);
+    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem("master_playlists");
+    window.localStorage.removeItem(CURATION_DRAFT_KEY);
+    setPageMessage("Playlist Manager cleared. You can import again now.");
+  };
+
   const allPlaylists = useMemo<FlatPlaylistItem[]>(() => {
     return playlistsQueries.flatMap((query, index) => {
       const account = accounts[index];
@@ -742,6 +818,8 @@ export default function PlaylistManagerPage() {
   const visibleSelectedCount = visibleSyncedPlaylists.filter(
     (playlist) => playlist.checked,
   ).length;
+
+  const importedSyncedCount = visibleSyncedPlaylists.length;
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1212,14 +1290,42 @@ export default function PlaylistManagerPage() {
     }
 
     if (addTrackMode === "current") {
-      if (!selectedCurationBox) {
-        setPageMessage("No curation box selected for this master playlist.");
+      const targetMasterId = state.selectedSavedMasterPlaylistId;
+
+      if (!targetMasterId) {
+        setPageMessage("Select a master playlist first.");
         return;
       }
 
-      updateSelectedCurationTracks(
-        insertAtPosition(selectedCurationBox.tracks, parsed, placementNumber),
+      const existingBox = state.masterCurationBoxes.find(
+        (box) => box.masterPlaylistId === targetMasterId,
       );
+
+      let nextBoxes: MasterCurationBox[];
+
+      if (existingBox) {
+        nextBoxes = state.masterCurationBoxes.map((box) =>
+          box.id === existingBox.id
+            ? {
+                ...box,
+                tracks: insertAtPosition(box.tracks, parsed, placementNumber),
+              }
+            : box,
+        );
+      } else {
+        nextBoxes = [
+          {
+            id: makeId("curation-box"),
+            masterPlaylistId: targetMasterId,
+            curationName: "Manual Curation",
+            createdAt: new Date().toISOString(),
+            tracks: insertAtPosition([], parsed, placementNumber),
+          },
+          ...state.masterCurationBoxes,
+        ];
+      }
+
+      persistState({ ...state, masterCurationBoxes: nextBoxes });
     } else {
       if (state.savedMasterPlaylists.length === 0) {
         setPageMessage("No saved master playlists available.");
@@ -1261,8 +1367,8 @@ export default function PlaylistManagerPage() {
     setAddTrackOpen(false);
     setPageMessage(
       addTrackMode === "all"
-        ? "Track inserted into all saved master playlists."
-        : "Track inserted into current master playlist.",
+        ? `Track inserted into all saved master playlists: ${parsed.title}${parsed.artist ? ` - ${parsed.artist}` : ""}.`
+        : `Track inserted into current master playlist: ${parsed.title}${parsed.artist ? ` - ${parsed.artist}` : ""}.`,
     );
   };
 
@@ -1283,7 +1389,12 @@ export default function PlaylistManagerPage() {
 
     if (!confirmed) return;
 
+    const progressKey = localSyncedId || "master";
+
     try {
+      setSyncProgress((current) => ({ ...current, [progressKey]: 20 }));
+      setSyncStatus((current) => ({ ...current, [progressKey]: "Syncing..." }));
+
       await replacePlaylistTracks(
         accountId,
         playlistId,
@@ -1294,6 +1405,9 @@ export default function PlaylistManagerPage() {
           artist: track.artist,
         })),
       );
+
+      setSyncProgress((current) => ({ ...current, [progressKey]: 100 }));
+      setSyncStatus((current) => ({ ...current, [progressKey]: "Done" }));
 
       const now = new Date().toISOString();
 
@@ -1319,6 +1433,8 @@ export default function PlaylistManagerPage() {
 
       setPageMessage(`${playlistName} updated on Spotify.`);
     } catch (error) {
+      setSyncProgress((current) => ({ ...current, [progressKey]: 0 }));
+      setSyncStatus((current) => ({ ...current, [progressKey]: "Failed" }));
       setPageMessage(error instanceof Error ? error.message : "Sync failed.");
     }
   };
@@ -1338,8 +1454,9 @@ export default function PlaylistManagerPage() {
       return;
     }
 
+    const estimatedSeconds = Math.max(0, selected.length - 1) * (SAFE_SYNC_DELAY_MS / 1000);
     const confirmed = window.confirm(
-      `Update ${selected.length} selected playlist(s)?\n\nEach selected playlist will be replaced with the curation shown in the Master Playlist box.`,
+      `Update ${selected.length} selected playlist(s)?\n\nEach selected playlist will be replaced with the curation shown in the Master Playlist box.\n\nSafe sync mode: 1 playlist every ${SAFE_SYNC_DELAY_MS / 1000} seconds. Estimated delay: ${estimatedSeconds} seconds.`,
     );
 
     if (!confirmed) return;
@@ -1348,8 +1465,22 @@ export default function PlaylistManagerPage() {
     const now = new Date().toISOString();
     const updatedSynced = [...state.syncedPlaylists];
 
-    for (const playlist of selected) {
+    for (let index = 0; index < selected.length; index += 1) {
+      const playlist = selected[index];
+
       try {
+        if (index > 0) {
+          setSyncStatus((current) => ({
+            ...current,
+            [playlist.id]: `Waiting ${SAFE_SYNC_DELAY_MS / 1000}s...`,
+          }));
+          setSyncProgress((current) => ({ ...current, [playlist.id]: 10 }));
+          await wait(SAFE_SYNC_DELAY_MS);
+        }
+
+        setSyncProgress((current) => ({ ...current, [playlist.id]: 35 }));
+        setSyncStatus((current) => ({ ...current, [playlist.id]: "Syncing..." }));
+
         await replacePlaylistTracks(
           playlist.accountId,
           playlist.playlistId,
@@ -1361,26 +1492,31 @@ export default function PlaylistManagerPage() {
           })),
         );
 
-        const index = updatedSynced.findIndex(
+        setSyncProgress((current) => ({ ...current, [playlist.id]: 100 }));
+        setSyncStatus((current) => ({ ...current, [playlist.id]: "Done" }));
+
+        const updatedIndex = updatedSynced.findIndex(
           (item) => item.id === playlist.id,
         );
-        if (index >= 0) {
-          updatedSynced[index] = {
-            ...updatedSynced[index],
+        if (updatedIndex >= 0) {
+          updatedSynced[updatedIndex] = {
+            ...updatedSynced[updatedIndex],
             lastSyncedAt: now,
             checked: false,
           };
         }
       } catch {
         failed = true;
+        setSyncProgress((current) => ({ ...current, [playlist.id]: 0 }));
+        setSyncStatus((current) => ({ ...current, [playlist.id]: "Failed" }));
       }
     }
 
     persistState({ ...state, syncedPlaylists: updatedSynced });
     setPageMessage(
       failed
-        ? "Some selected playlists failed to sync."
-        : "Selected playlists synced.",
+        ? "Some selected playlists failed to sync. Safe sync mode stopped only for failed requests."
+        : `${selected.length} selected playlist(s) synced safely at 1 playlist every ${SAFE_SYNC_DELAY_MS / 1000} seconds.`,
     );
   };
 
@@ -1440,6 +1576,13 @@ export default function PlaylistManagerPage() {
               handleImportCsvFile(event.target.files?.[0] ?? null)
             }
           />
+          <button
+            type="button"
+            onClick={handleClearAllPlaylistManager}
+            className="h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-6 text-sm font-semibold text-red-300 hover:bg-red-500/20"
+          >
+            Clear All
+          </button>
           <button
             type="button"
             onClick={() => csvInputRef.current?.click()}
@@ -1655,6 +1798,12 @@ export default function PlaylistManagerPage() {
               <h2 className="text-2xl font-semibold text-white">
                 Synced Playlists
               </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Imported playlists: {importedSyncedCount}
+              </p>
+              <p className="mt-1 text-xs text-zinc-600">
+                Safe sync rate: 1 playlist every {SAFE_SYNC_DELAY_MS / 1000}s
+              </p>
               <div className="mt-4 flex items-center gap-4 text-sm font-semibold">
                 <button
                   type="button"
@@ -1678,8 +1827,8 @@ export default function PlaylistManagerPage() {
                 >
                   {visibleSyncedPlaylists.length > 0 &&
                   selectedCount === visibleSyncedPlaylists.length
-                    ? "Deselect All"
-                    : "Select All"}
+                    ? `Deselect All (${selectedCount})`
+                    : `Select All${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
                 </button>
 
                 {selectedCount > 0 ? (
@@ -1768,6 +1917,17 @@ export default function PlaylistManagerPage() {
                         <div className="mt-1 text-xs text-zinc-500">
                           Last synced: {formatDateTime(playlist.lastSyncedAt)}
                         </div>
+                        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                          <div
+                            className="h-full rounded-full bg-green-500 transition-all"
+                            style={{ width: `${syncProgress[playlist.id] ?? 0}%` }}
+                          />
+                        </div>
+                        {syncStatus[playlist.id] ? (
+                          <div className="mt-1 text-xs text-green-400">
+                            {syncStatus[playlist.id]}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
