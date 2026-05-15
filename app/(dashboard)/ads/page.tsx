@@ -85,10 +85,29 @@ type PlaylistRow = {
     ads?: AdEntry[] | null;
     color?: CodeColor | null;
   } | null;
-  daily_growth?: Array<{ date: string; label?: string; growth: number }>;
+  daily_growth?: Array<{
+    date: string;
+    label?: string;
+    growth?: number;
+    followers?: number;
+    followers_count?: number;
+    count?: number;
+    value?: number;
+  }>;
+  daily_history?: Array<{
+    date: string;
+    label?: string;
+    followers?: number;
+    followers_count?: number;
+    count?: number;
+    value?: number;
+    growth?: number;
+  }>;
   updated_at?: string | null;
   last_update?: string | null;
   last_update_date?: string | null;
+  synced_at?: string | null;
+  last_synced_at?: string | null;
 };
 
 type AdEntry = {
@@ -225,6 +244,22 @@ function formatDate(value: string | null | undefined) {
   return value.slice(0, 10);
 }
 
+
+function getLastSyncedAt(playlist: PlaylistRow) {
+  return (
+    playlist.last_synced_at ??
+    playlist.synced_at ??
+    playlist.updated_at ??
+    playlist.last_update ??
+    playlist.last_update_date ??
+    null
+  );
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function formatAdDateDisplay(value: string) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
@@ -254,30 +289,51 @@ function getTrackCount(playlist: PlaylistRow) {
 }
 
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  const dailyValue = playlist.daily_growth?.[offset]?.growth;
-  if (typeof dailyValue === "number") return dailyValue;
+  const historyItem =
+    playlist.daily_history?.[offset] ?? playlist.daily_growth?.[offset];
+
+  const historyFollowers =
+    readNumber(historyItem?.followers) ??
+    readNumber(historyItem?.followers_count) ??
+    readNumber(historyItem?.count) ??
+    readNumber(historyItem?.value);
+
+  if (historyFollowers !== null) return historyFollowers;
+
+  const record = playlist as unknown as Record<string, unknown>;
 
   if (offset === 0) {
     return (
-      playlist.today ??
-      playlist.today_growth ??
-      playlist.growth_today ??
-      playlist.growth_24h ??
-      playlist.growth ??
+      readNumber(record.followers_today) ??
+      readNumber(record.today_followers) ??
+      readNumber(record.followers) ??
+      readNumber(playlist.followers) ??
+      readNumber(record.today) ??
+      readNumber(record.today_growth) ??
+      readNumber(record.growth_today) ??
+      readNumber(record.growth_24h) ??
+      readNumber(record.growth) ??
       0
     );
   }
+
   const keys = [
+    `followers_day_${offset}`,
+    `followers_today_minus_${offset}`,
+    `today_minus_${offset}_followers`,
+    `day_${offset}_followers`,
     `today_minus_${offset}`,
     `day_${offset}`,
-    `followers_day_${offset}`,
-  ] as const;
+  ];
+
   for (const key of keys) {
-    const value = (playlist as unknown as Record<string, number | undefined>)[
-      key
-    ];
-    if (typeof value === "number") return value;
+    const value = readNumber(record[key]);
+    if (value !== null) return value;
   }
+
+  const fallbackGrowth = readNumber(historyItem?.growth);
+  if (fallbackGrowth !== null) return fallbackGrowth;
+
   return 0;
 }
 
@@ -526,7 +582,7 @@ export default function AdsPage() {
               : 30;
       data = data.filter((p) =>
         isWithinLastDays(
-          p.updated_at ?? p.last_update ?? p.last_update_date,
+          getLastSyncedAt(p),
           days,
         ),
       );
@@ -550,11 +606,9 @@ export default function AdsPage() {
         return (getTrackCount(a) - getTrackCount(b)) * dir;
       if (sortField === "lastUpdate")
         return (
-          formatDate(
-            a.updated_at ?? a.last_update ?? a.last_update_date,
-          ).localeCompare(
-            formatDate(b.updated_at ?? b.last_update ?? b.last_update_date),
-          ) * dir
+          formatDate(getLastSyncedAt(a)).localeCompare(
+          formatDate(getLastSyncedAt(b)),
+        ) * dir
         );
       if (sortField === "today")
         return (getTodayValue(a, 0) - getTodayValue(b, 0)) * dir;
@@ -915,7 +969,7 @@ export default function AdsPage() {
       "Followers",
       "Ads",
       "Tracks",
-      "Last Update",
+      "Last Synced",
       formatDayMonth(0),
       formatDayMonth(1),
       formatDayMonth(2),
@@ -940,9 +994,7 @@ export default function AdsPage() {
         data.ads.length,
         getTrackCount(playlist),
         formatDate(
-          playlist.updated_at ??
-            playlist.last_update ??
-            playlist.last_update_date,
+          getLastSyncedAt(playlist),
         ),
         getTodayValue(playlist, 0),
         getTodayValue(playlist, 1),
@@ -1012,7 +1064,7 @@ export default function AdsPage() {
       set: (value: string) => setFilters((prev) => ({ ...prev, genre: value })),
     },
     {
-      label: "Last Update",
+      label: "Last Synced",
       options: ["Today", "Last Week", "Last 15 Days", "Last 30 Days"],
       value: filters.lastUpdate,
       set: (value: string) =>
@@ -1265,7 +1317,7 @@ export default function AdsPage() {
               >
                 Account {arrowFor("account")}
               </div>
-              <div className="px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
+              <div className="px-1 py-3 text-[10px] font-semibold uppercase text-zinc-400">
                 Master
               </div>
               <div
@@ -1290,7 +1342,7 @@ export default function AdsPage() {
                 className={headerClass("lastUpdate")}
                 onClick={() => toggleSort("lastUpdate")}
               >
-                Last Update {arrowFor("lastUpdate")}
+                Last Synced {arrowFor("lastUpdate")}
               </div>
               <div
                 className={headerClass("today")}
@@ -1499,9 +1551,7 @@ export default function AdsPage() {
                       <div className="px-2">{getTrackCount(playlist)}</div>
                       <div className="px-2 text-[11px]">
                         {formatDate(
-                          playlist.updated_at ??
-                            playlist.last_update ??
-                            playlist.last_update_date,
+                          getLastSyncedAt(playlist),
                         )}
                       </div>
                       <div className="px-1">
