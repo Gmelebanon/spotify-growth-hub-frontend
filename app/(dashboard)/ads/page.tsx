@@ -45,6 +45,7 @@ type PlaylistRow = {
   id: number | string;
   account_id?: number;
   spotify_id?: string | null;
+  spotify_playlist_id?: string | null;
   spotify_url?: string | null;
   playlist_url?: string | null;
   external_url?: string | null;
@@ -125,10 +126,36 @@ type RowMeta = {
   ads: AdEntry[];
 };
 
+type AdsSettingsRow = {
+  playlist_id?: string | number | null;
+  spotify_id?: string | null;
+  spotify_playlist_id?: string | null;
+  playlist_name?: string | null;
+  category?: string | null;
+  genre?: string | null;
+  country?: string | null;
+  master_playlist?: string | null;
+  ad_date?: string | null;
+  ads?: AdEntry[] | null;
+  color?: CodeColor | null;
+  settings?: {
+    ads?: AdEntry[];
+    color?: CodeColor;
+    category?: string;
+    genre?: string;
+    country?: string;
+    master_playlist?: string;
+  } | null;
+};
+
 const ALL_ACCOUNTS_ID = -1;
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 const ADS_CATEGORY_OPTIONS_STORAGE_KEY = "ads-page-category-options-v17";
 const ADS_GENRE_OPTIONS_STORAGE_KEY = "ads-page-genre-options-v17";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://spotify-growth-hub-backend.onrender.com";
 
 const defaultCategoryOptions = [
   "Category",
@@ -243,7 +270,6 @@ function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
 }
-
 
 function getLastSyncedAt(playlist: PlaylistRow) {
   return (
@@ -369,12 +395,133 @@ function UploadIcon() {
   return <span className="text-[15px] leading-none">↑</span>;
 }
 
+function normalizeAdEntry(value: unknown): AdEntry | null {
+  const entry = value as Partial<AdEntry> | null;
+  if (!entry?.date) return null;
+
+  return {
+    date: String(entry.date),
+    color: (entry.color as CodeColor) || "gray",
+    stroke: Boolean(entry.stroke),
+  };
+}
+
+function normalizeAdsArray(value: unknown): AdEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizeAdEntry).filter(Boolean) as AdEntry[];
+}
+
+function normalizeAdsSettingsPayload(payload: unknown): AdsSettingsRow[] {
+  if (Array.isArray(payload)) return payload as AdsSettingsRow[];
+  const record = payload as {
+    items?: unknown;
+    rows?: unknown;
+    data?: unknown;
+  } | null;
+  if (Array.isArray(record?.items)) return record.items as AdsSettingsRow[];
+  if (Array.isArray(record?.rows)) return record.rows as AdsSettingsRow[];
+  if (Array.isArray(record?.data)) return record.data as AdsSettingsRow[];
+  return [];
+}
+
+function rowMetaFromSettingsRow(row: AdsSettingsRow): RowMeta {
+  const settings = row.settings ?? {};
+  const adsFromRow = normalizeAdsArray(row.ads);
+  const adsFromSettings = normalizeAdsArray(settings.ads);
+  const fallbackAdDate = row.ad_date
+    ? [
+        {
+          date: String(row.ad_date).slice(0, 10),
+          color: (row.color || settings.color || "gray") as CodeColor,
+        },
+      ]
+    : [];
+
+  return {
+    color: row.color || settings.color || "gray",
+    category: row.category || settings.category || "Category",
+    genre: row.genre || settings.genre || "Genre",
+    country: row.country || settings.country || "",
+    master: row.master_playlist || settings.master_playlist || "",
+    ads:
+      adsFromRow.length > 0
+        ? adsFromRow
+        : adsFromSettings.length > 0
+          ? adsFromSettings
+          : fallbackAdDate,
+  };
+}
+
+function isPlaceholderValue(value: string | undefined, placeholder: string) {
+  return !value || value === placeholder;
+}
+
+function preferSavedMeta(local: RowMeta | undefined, saved: RowMeta): RowMeta {
+  if (!local) return saved;
+
+  return {
+    color: local.color && local.color !== "gray" ? local.color : saved.color,
+    category: isPlaceholderValue(local.category, "Category")
+      ? saved.category
+      : local.category,
+    genre: isPlaceholderValue(local.genre, "Genre") ? saved.genre : local.genre,
+    country: local.country || saved.country,
+    master: local.master || saved.master,
+    ads: local.ads?.length ? local.ads : saved.ads,
+  };
+}
+
+async function fetchAdsSettingsFromDatabase() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/ads/settings`);
+    if (!response.ok) return [];
+    return normalizeAdsSettingsPayload(await response.json());
+  } catch {
+    return [];
+  }
+}
+
+async function saveAdsSettingsToDatabase(
+  playlistId: string | number,
+  playlistName: string,
+  data: RowMeta,
+) {
+  const latestAd = data.ads?.[0] ?? null;
+
+  try {
+    await fetch(`${API_BASE_URL}/api/ads/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        playlist_id: String(playlistId),
+        playlist_name: playlistName,
+        category: data.category,
+        genre: data.genre,
+        country: data.country,
+        master_playlist: data.master,
+        ad_date: latestAd?.date ?? null,
+        color: data.color ?? "gray",
+        ads: data.ads,
+        settings: {
+          category: data.category,
+          genre: data.genre,
+          country: data.country,
+          master_playlist: data.master,
+          color: data.color ?? "gray",
+          ads: data.ads,
+        },
+      }),
+    });
+  } catch {
+    // The playlists ads-meta route below is still the main fallback.
+  }
+}
+
 async function saveAdsMetaToDatabase(
   playlistId: string | number,
   data: RowMeta,
+  playlistName = "",
 ) {
-  const API_BASE_URL =
-    process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
   const payload = {
     category: data.category,
     genre: data.genre,
@@ -391,8 +538,10 @@ async function saveAdsMetaToDatabase(
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    console.error("Autosave failed", error);
+    console.error("Playlist ads-meta autosave failed", error);
   }
+
+  await saveAdsSettingsToDatabase(playlistId, playlistName, data);
 }
 
 export default function AdsPage() {
@@ -495,6 +644,58 @@ export default function AdsPage() {
     );
   }, [activeAccountId, accounts, allAccountQueries, singleAccountQuery.data]);
 
+  useEffect(() => {
+    if (playlists.length === 0) return;
+
+    let cancelled = false;
+
+    async function loadSavedAdsSettings() {
+      const rows = await fetchAdsSettingsFromDatabase();
+      if (cancelled || rows.length === 0) return;
+
+      setRowData((current) => {
+        const next = { ...current };
+        const rowsByPlaylistId = new Map(
+          rows
+            .filter((row) => row.playlist_id || row.spotify_id)
+            .map((row) => [String(row.playlist_id || row.spotify_id), row]),
+        );
+
+        playlists.forEach((playlist) => {
+          const key = playlistKey(playlist);
+          const possibleIds = [
+            String(playlist.id),
+            String(playlist.spotify_id || ""),
+            String(playlist.spotify_playlist_id || ""),
+            getPlaylistId(playlist),
+          ].filter(Boolean);
+          const savedRow = possibleIds
+            .map((id) => rowsByPlaylistId.get(id))
+            .find(Boolean);
+
+          const savedFromPlaylist = getDefaultRowData(playlist);
+          const savedFromSettings = savedRow
+            ? rowMetaFromSettingsRow(savedRow)
+            : null;
+          const savedMeta = savedFromSettings
+            ? preferSavedMeta(savedFromPlaylist, savedFromSettings)
+            : savedFromPlaylist;
+
+          next[key] = preferSavedMeta(next[key], savedMeta);
+        });
+
+        window.localStorage.setItem(ADS_DATA_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+    }
+
+    loadSavedAdsSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [playlists]);
+
   const isLoading =
     activeAccountId === ALL_ACCOUNTS_ID
       ? allAccountQueries.some((query) => query.isLoading)
@@ -519,7 +720,9 @@ export default function AdsPage() {
     genre: playlist.ads_meta?.genre || playlist.genre || "Genre",
     country: playlist.ads_meta?.country || playlist.country || "",
     master: playlist.ads_meta?.master_playlist || "",
-    ads: Array.isArray(playlist.ads_meta?.ads) ? playlist.ads_meta?.ads || [] : [],
+    ads: Array.isArray(playlist.ads_meta?.ads)
+      ? playlist.ads_meta?.ads || []
+      : [],
   });
 
   const getRowData = (playlist: PlaylistRow) =>
@@ -541,12 +744,11 @@ export default function AdsPage() {
       },
     };
     persistRowData(next);
-    saveAdsMetaToDatabase(playlist.id, next[key]);
+    saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
   };
 
   const masterOptions = useMemo(
-    () =>
-      uniqueValues(playlists.map((playlist) => playlist.name)),
+    () => uniqueValues(playlists.map((playlist) => playlist.name)),
     [playlists],
   );
   const listedCountries = useMemo(
@@ -580,12 +782,7 @@ export default function AdsPage() {
             : filters.lastUpdate === "15"
               ? 15
               : 30;
-      data = data.filter((p) =>
-        isWithinLastDays(
-          getLastSyncedAt(p),
-          days,
-        ),
-      );
+      data = data.filter((p) => isWithinLastDays(getLastSyncedAt(p), days));
     }
 
     return [...data].sort((a, b) => {
@@ -607,8 +804,8 @@ export default function AdsPage() {
       if (sortField === "lastUpdate")
         return (
           formatDate(getLastSyncedAt(a)).localeCompare(
-          formatDate(getLastSyncedAt(b)),
-        ) * dir
+            formatDate(getLastSyncedAt(b)),
+          ) * dir
         );
       if (sortField === "today")
         return (getTodayValue(a, 0) - getTodayValue(b, 0)) * dir;
@@ -722,7 +919,7 @@ export default function AdsPage() {
     selectedPlaylists.forEach((playlist) => {
       const key = playlistKey(playlist);
       next[key] = { ...getDefaultRowData(playlist), ...next[key], color };
-      saveAdsMetaToDatabase(playlist.id, next[key]);
+      saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
     });
     persistRowData(next);
     setSelectedRows({});
@@ -770,12 +967,12 @@ export default function AdsPage() {
         const current = { ...getDefaultRowData(playlist), ...next[key] };
         next[key] = {
           ...current,
-          ads: [{ date: modalDate, color: modalColor, stroke: modalStroke }, ...current.ads].slice(
-            0,
-            12,
-          ),
+          ads: [
+            { date: modalDate, color: modalColor, stroke: modalStroke },
+            ...current.ads,
+          ].slice(0, 12),
         };
-        saveAdsMetaToDatabase(playlist.id, next[key]);
+        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
       });
       persistRowData(next);
       setSelectedRows({});
@@ -789,11 +986,20 @@ export default function AdsPage() {
     const current = { ...getDefaultRowData(playlist), ...next[adModalKey] };
     const nextAds = [...current.ads];
     if (modalAdIndex !== null)
-      nextAds[modalAdIndex] = { date: modalDate, color: modalColor, stroke: modalStroke };
-    else nextAds.unshift({ date: modalDate, color: modalColor, stroke: modalStroke });
+      nextAds[modalAdIndex] = {
+        date: modalDate,
+        color: modalColor,
+        stroke: modalStroke,
+      };
+    else
+      nextAds.unshift({
+        date: modalDate,
+        color: modalColor,
+        stroke: modalStroke,
+      });
     next[adModalKey] = { ...current, ads: nextAds.slice(0, 12) };
     persistRowData(next);
-    saveAdsMetaToDatabase(playlist.id, next[adModalKey]);
+    saveAdsMetaToDatabase(playlist.id, next[adModalKey], playlist.name);
     closeAdModal();
   };
 
@@ -848,7 +1054,7 @@ export default function AdsPage() {
       );
       if (ads.length !== current.ads.length) {
         next[key] = { ...current, ads };
-        saveAdsMetaToDatabase(playlist.id, next[key]);
+        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
       }
     });
 
@@ -873,7 +1079,7 @@ export default function AdsPage() {
       });
       if (changed) {
         next[key] = { ...current, ads };
-        saveAdsMetaToDatabase(playlist.id, next[key]);
+        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
       }
     });
 
@@ -993,9 +1199,7 @@ export default function AdsPage() {
         playlist.followers ?? 0,
         data.ads.length,
         getTrackCount(playlist),
-        formatDate(
-          getLastSyncedAt(playlist),
-        ),
+        formatDate(getLastSyncedAt(playlist)),
         getTodayValue(playlist, 0),
         getTodayValue(playlist, 1),
         getTodayValue(playlist, 2),
@@ -1209,43 +1413,43 @@ export default function AdsPage() {
             </button>
             <div className="invisible absolute right-0 top-full z-[9999] w-56 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
               <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
-              {filterGroups.map((group) => (
-                <div
-                  key={group.label}
-                  className="group/item relative rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white"
-                >
-                  <div className="flex items-center justify-between">
-                    <span>{group.label}</span>
-                    <span>›</span>
-                  </div>
-                  <div className="invisible absolute right-full top-0 z-[10000] mr-2 max-h-72 w-56 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 opacity-0 shadow-[0_20px_60px_rgba(0,0,0,0.9)] group-hover/item:visible group-hover/item:opacity-100">
-                    <button
-                      type="button"
-                      onClick={() => group.set("")}
-                      className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
-                    >
-                      All
-                    </button>
-                    {group.options.map((option, optionIndex) => (
+                {filterGroups.map((group) => (
+                  <div
+                    key={group.label}
+                    className="group/item relative rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>{group.label}</span>
+                      <span>›</span>
+                    </div>
+                    <div className="invisible absolute right-full top-0 z-[10000] mr-2 max-h-72 w-56 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 opacity-0 shadow-[0_20px_60px_rgba(0,0,0,0.9)] group-hover/item:visible group-hover/item:opacity-100">
                       <button
-                        key={`${group.label}-${option}-${optionIndex}`}
                         type="button"
-                        onClick={() => group.set(option)}
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900"
+                        onClick={() => group.set("")}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
                       >
-                        {option}
+                        All
                       </button>
-                    ))}
+                      {group.options.map((option, optionIndex) => (
+                        <button
+                          key={`${group.label}-${option}-${optionIndex}`}
+                          type="button"
+                          onClick={() => group.set(option)}
+                          className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="mt-1 w-full rounded-lg border-t border-zinc-800 px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
-              >
-                Clear filters
-              </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="mt-1 w-full rounded-lg border-t border-zinc-800 px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
+                >
+                  Clear filters
+                </button>
               </div>
             </div>
           </div>
@@ -1550,9 +1754,7 @@ export default function AdsPage() {
                       <div className="px-2">{data.ads.length}</div>
                       <div className="px-2">{getTrackCount(playlist)}</div>
                       <div className="px-2 text-[11px]">
-                        {formatDate(
-                          getLastSyncedAt(playlist),
-                        )}
+                        {formatDate(getLastSyncedAt(playlist))}
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 0)} />
@@ -1611,7 +1813,10 @@ export default function AdsPage() {
                         const adKey = `${key}::${index}`;
                         const isSelectedAd = !!selectedAds[adKey];
                         return (
-                          <div key={`${key}-ad-${index}`} className="flex justify-center px-1">
+                          <div
+                            key={`${key}-ad-${index}`}
+                            className="flex justify-center px-1"
+                          >
                             {ad ? (
                               <button
                                 type="button"
