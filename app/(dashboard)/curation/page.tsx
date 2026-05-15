@@ -3640,32 +3640,61 @@ export default function CurationPage() {
             </div>
 
             <div className="space-y-4">
-              <div>
-                <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  Import Mode
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
+              <div className="rounded-xl border border-zinc-800 bg-black p-4">
+                <div className="flex flex-wrap items-end justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Import Mode
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
+                        <input
+                          type="radio"
+                          checked={csvImportMode === "replace"}
+                          onChange={() => setCsvImportMode("replace")}
+                          className="h-4 w-4 accent-green-500"
+                        />
+                        Replace playlists
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
+                        <input
+                          type="radio"
+                          checked={csvImportMode === "add"}
+                          onChange={() => setCsvImportMode("add")}
+                          className="h-4 w-4 accent-green-500"
+                        />
+                        Add playlists
+                      </label>
+                    </div>
+                  </div>
+
+                  <label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl bg-green-600 px-5 text-sm font-semibold text-white transition hover:bg-green-500">
+                    Upload CSV
                     <input
-                      type="radio"
-                      checked={csvImportMode === "replace"}
-                      onChange={() => setCsvImportMode("replace")}
-                      className="h-4 w-4 accent-green-500"
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="hidden"
+                      onChange={(event) => {
+                        void handleCurationCsvFile(event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
                     />
-                    Replace playlists
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
-                    <input
-                      type="radio"
-                      checked={csvImportMode === "add"}
-                      onChange={() => setCsvImportMode("add")}
-                      className="h-4 w-4 accent-green-500"
-                    />
-                    Add playlists
                   </label>
                 </div>
+
                 <div className="mt-2 text-xs text-zinc-500">
                   Replace clears both dropdowns first. Add keeps the current dropdown playlists.
+                </div>
+
+                <div className="mt-4 border-t border-zinc-800 pt-3">
+                  <button
+                    type="button"
+                    onClick={downloadCurationCsvTemplate}
+                    className="text-sm font-bold text-white hover:text-green-300"
+                    title="Download CSV template"
+                  >
+                    Download Template
+                  </button>
                 </div>
               </div>
 
@@ -3709,30 +3738,6 @@ export default function CurationPage() {
                     My Tracks
                   </label>
                 </div>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3">
-                <button
-                  type="button"
-                  onClick={downloadCurationCsvTemplate}
-                  className="text-sm font-bold text-white hover:text-green-300"
-                  title="Download CSV template"
-                >
-                  Download Template
-                </button>
-
-                <label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl bg-green-600 px-5 text-sm font-semibold text-white transition hover:bg-green-500">
-                  Upload CSV
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="hidden"
-                    onChange={(event) => {
-                      void handleCurationCsvFile(event.target.files?.[0] ?? null);
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                </label>
               </div>
 
               {csvImportMessage ? (
