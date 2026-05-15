@@ -3,6 +3,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type SetStateAction,
@@ -761,7 +762,7 @@ function parseCurationDropdownCsv(content: string) {
 
 function downloadCurationCsvTemplate() {
   const content = [
-    "Source Playlist Tracks Playlist_ID,My Tracks Playlist_ID",
+    "Source Playlists Playlist_ID,My Tracks Playlist_ID",
     "28L7yWnkQAEIPbLo1XgEX,43zplpQ9DfT74CCdjeergG",
   ].join("\n");
 
@@ -1479,8 +1480,8 @@ function SideSection({
   colorPalette,
   historySections,
   csvPlaylistOptions,
-  selectedCsvPlaylistId,
-  onSelectCsvPlaylist,
+  onImportCsvPlaylists,
+  onDeleteCsvPlaylists,
 }: {
   title: string;
   tracks: CurationTrack[];
@@ -1494,8 +1495,10 @@ function SideSection({
   colorPalette: string[];
   historySections: HistorySection[];
   csvPlaylistOptions: CsvPlaylistOption[];
-  selectedCsvPlaylistId: string;
-  onSelectCsvPlaylist: (playlistId: string) => void;
+  selectedCsvPlaylistId?: string;
+  onSelectCsvPlaylist?: (playlistId: string) => void;
+  onImportCsvPlaylists: (playlistIds: string[]) => void;
+  onDeleteCsvPlaylists: (playlistIds: string[]) => void;
 }) {
   const trackColorMap = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -1513,6 +1516,81 @@ function SideSection({
 
   const [ratioOne, setRatioOne] = useState("3");
   const [ratioTwo, setRatioTwo] = useState("1");
+  const [csvDropdownOpen, setCsvDropdownOpen] = useState(false);
+  const csvDropdownRef = useRef<HTMLDivElement | null>(null);
+  const [csvDropdownSearch, setCsvDropdownSearch] = useState("");
+  const [selectedCsvPlaylistIds, setSelectedCsvPlaylistIds] = useState<string[]>([]);
+
+  const filteredCsvPlaylistOptions = useMemo(() => {
+    const search = csvDropdownSearch.trim().toLowerCase();
+    const items = csvPlaylistOptions ?? [];
+    if (!search) return items;
+
+    return items.filter((item) =>
+      `${item.label} ${item.playlistId}`.toLowerCase().includes(search),
+    );
+  }, [csvDropdownSearch, csvPlaylistOptions]);
+
+  const selectedCsvPlaylistLabels = useMemo(() => {
+    const byId = new Map((csvPlaylistOptions ?? []).map((item) => [item.playlistId, item]));
+    return selectedCsvPlaylistIds
+      .map((id) => byId.get(id))
+      .filter(Boolean) as CsvPlaylistOption[];
+  }, [csvPlaylistOptions, selectedCsvPlaylistIds]);
+
+  useEffect(() => {
+    if (!csvDropdownOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (target && csvDropdownRef.current?.contains(target)) return;
+      setCsvDropdownOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCsvDropdownOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [csvDropdownOpen]);
+
+  const toggleCsvPlaylist = (playlistId: string) => {
+    setSelectedCsvPlaylistIds((current) =>
+      current.includes(playlistId)
+        ? current.filter((id) => id !== playlistId)
+        : [...current, playlistId],
+    );
+  };
+
+  const importSelectedCsvPlaylists = () => {
+    if (selectedCsvPlaylistIds.length === 0) return;
+    onImportCsvPlaylists(selectedCsvPlaylistIds);
+    setCsvDropdownOpen(false);
+  };
+
+  const removeSelectedCsvPlaylistChip = (playlistId: string) => {
+    setSelectedCsvPlaylistIds((current) =>
+      current.filter((id) => id !== playlistId),
+    );
+  };
+
+  const deleteSelectedCsvPlaylists = () => {
+    if (selectedCsvPlaylistIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${selectedCsvPlaylistIds.length} selected playlist${selectedCsvPlaylistIds.length === 1 ? "" : "s"} from this dropdown?`,
+    );
+    if (!confirmed) return;
+    onDeleteCsvPlaylists(selectedCsvPlaylistIds);
+    setSelectedCsvPlaylistIds([]);
+  };
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyStatus, setHistoryStatus] = useState("");
@@ -1688,19 +1766,129 @@ function SideSection({
         </div>
 
         <div className="flex items-center gap-2">
-          <select
-            value={selectedCsvPlaylistId}
-            onChange={(event) => onSelectCsvPlaylist(event.target.value)}
-            className="h-[46px] w-[420px] max-w-[48vw] rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-xs font-semibold text-green-300 outline-none transition accent-green-500 focus:border-green-500"
-            title="CSV saved playlists"
-          >
-            <option value="">CSV playlists</option>
-            {(csvPlaylistOptions ?? []).map((item) => (
-              <option key={item.id} value={item.playlistId}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+          <div ref={csvDropdownRef} className="relative w-[420px] max-w-[48vw]">
+            <button
+              type="button"
+              onClick={() => setCsvDropdownOpen((current) => !current)}
+              className="flex min-h-[46px] w-full items-center justify-between gap-2 rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-left text-xs font-semibold text-green-300 outline-none transition focus:border-green-500"
+              title="CSV saved playlists"
+            >
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+                {selectedCsvPlaylistLabels.length > 0 ? (
+                  selectedCsvPlaylistLabels.slice(0, 3).map((item) => (
+                    <span
+                      key={item.playlistId}
+                      className="inline-flex max-w-[170px] items-center gap-1 rounded-md bg-green-500/15 px-2 py-1 text-green-200"
+                    >
+                      <span className="truncate">{item.label}</span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeSelectedCsvPlaylistChip(item.playlistId);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            removeSelectedCsvPlaylistChip(item.playlistId);
+                          }
+                        }}
+                        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-red-500/40 text-[10px] font-bold text-red-300 hover:bg-red-500/15"
+                        title="Remove from selected imports"
+                      >
+                        ×
+                      </span>
+                    </span>
+                  ))
+                ) : (
+                  <span>Select Playlists</span>
+                )}
+                {selectedCsvPlaylistLabels.length > 3 ? (
+                  <span className="rounded-md bg-zinc-800 px-2 py-1 text-zinc-300">
+                    +{selectedCsvPlaylistLabels.length - 3}
+                  </span>
+                ) : null}
+              </div>
+              <span className="text-lg leading-none text-green-400">▾</span>
+            </button>
+
+            {csvDropdownOpen ? (
+              <div className="absolute left-0 top-[calc(100%+6px)] z-30 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl">
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm text-white hover:bg-zinc-900">
+                  <input
+                    type="checkbox"
+                    checked={(csvPlaylistOptions ?? []).length > 0 && selectedCsvPlaylistIds.length === (csvPlaylistOptions ?? []).length}
+                    onChange={(event) =>
+                      setSelectedCsvPlaylistIds(
+                        event.target.checked
+                          ? (csvPlaylistOptions ?? []).map((item) => item.playlistId)
+                          : [],
+                      )
+                    }
+                    className="h-4 w-4 accent-green-500"
+                  />
+                  Select All
+                </label>
+
+                <input
+                  value={csvDropdownSearch}
+                  onChange={(event) => setCsvDropdownSearch(event.target.value)}
+                  placeholder="Search"
+                  className="my-2 h-10 w-full rounded-lg border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
+                />
+
+                <div className="max-h-80 overflow-y-auto pr-1">
+                  {filteredCsvPlaylistOptions.length === 0 ? (
+                    <div className="px-2 py-3 text-sm text-zinc-500">No playlists saved.</div>
+                  ) : (
+                    filteredCsvPlaylistOptions.map((item) => (
+                      <label
+                        key={item.id}
+                        className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm text-white hover:bg-zinc-900"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedCsvPlaylistIds.includes(item.playlistId)}
+                          onChange={() => toggleCsvPlaylist(item.playlistId)}
+                          className="h-4 w-4 accent-green-500"
+                        />
+                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
+                  <button
+                    type="button"
+                    onClick={deleteSelectedCsvPlaylists}
+                    disabled={selectedCsvPlaylistIds.length === 0}
+                    className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Delete selected playlists from dropdown"
+                  >
+                    Delete Selected
+                  </button>
+
+                  <div className="ml-auto flex items-center gap-2">
+                    <span className="text-xs text-zinc-500">
+                      {selectedCsvPlaylistIds.length} selected
+                    </span>
+                    <button
+                      type="button"
+                      onClick={importSelectedCsvPlaylists}
+                      disabled={selectedCsvPlaylistIds.length === 0}
+                      className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-40"
+                      title="Import selected playlists"
+                    >
+                      ➜
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           <button
             type="button"
@@ -2005,10 +2193,10 @@ function DuplicateGroupCard({
   deleteTrackFromResult: (track: CurationTrack) => void;
 }) {
   const settingKey = group.id;
-  const mode = spaceApartModes[settingKey] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
-  const target = spaceApartSettings[settingKey] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
+  const mode = spaceApartModes[settingKey] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "20";
+  const target = spaceApartSettings[settingKey] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 20;
 
-  const setPreset = (preset: "5" | "10" | "20") => {
+  const setPreset = (preset: "20") => {
     setSpaceApartModes((prev) => ({
       ...prev,
       [settingKey]: preset,
@@ -2075,30 +2263,6 @@ function DuplicateGroupCard({
 
       <div className="mt-4 flex items-center gap-2 text-xs text-zinc-400">
         <span className="mr-2">Space Apart</span>
-
-        <button
-          type="button"
-          onClick={() => setPreset("5")}
-          className={`rounded-lg border px-3 py-2 font-semibold ${
-            mode === "5"
-              ? "border-green-500 bg-green-600 text-white"
-              : "border-zinc-800 bg-black text-zinc-300"
-          }`}
-        >
-          5
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setPreset("10")}
-          className={`rounded-lg border px-3 py-2 font-semibold ${
-            mode === "10"
-              ? "border-green-500 bg-green-600 text-white"
-              : "border-zinc-800 bg-black text-zinc-300"
-          }`}
-        >
-          10
-        </button>
 
         <button
           type="button"
@@ -2254,6 +2418,8 @@ export default function CurationPage() {
   const [csvImportOpen, setCsvImportOpen] = useState(false);
   const [csvImportMode, setCsvImportMode] = useState<CsvImportMode>("add");
   const [csvImportMessage, setCsvImportMessage] = useState("");
+  const [csvManualPlaylistInput, setCsvManualPlaylistInput] = useState("");
+  const [csvManualPlaylistSide, setCsvManualPlaylistSide] = useState<"source" | "my">("source");
   const [selectedResultIndexes, setSelectedResultIndexes] = useState<number[]>([]);
   const [lastSelectedResultIndex, setLastSelectedResultIndex] = useState<number | null>(null);
 
@@ -2576,6 +2742,50 @@ export default function CurationPage() {
     myTracksImportMutation.mutate(playlistLink);
   };
 
+  const importCsvPlaylistOptions = (side: "source" | "my", playlistIds: string[]) => {
+    playlistIds
+      .filter(Boolean)
+      .forEach((playlistId, index) => {
+        window.setTimeout(() => importCsvPlaylistOption(side, playlistId), index * 350);
+      });
+  };
+
+  const addManualCsvPlaylist = async () => {
+    const playlistId = extractSpotifyPlaylistId(csvManualPlaylistInput) || csvManualPlaylistInput.trim();
+
+    if (!playlistId) {
+      setCsvImportMessage("Paste a Spotify playlist link or playlist ID first.");
+      return;
+    }
+
+    setCsvImportMessage("Loading playlist name...");
+
+    const fallback: CsvPlaylistOption = {
+      id: `${csvManualPlaylistSide}-manual-${playlistId}-${Date.now()}`,
+      playlistId,
+      label: csvPlaylistLabel(playlistId, csvManualPlaylistSide, 0),
+      side: csvManualPlaylistSide,
+      createdAt: new Date().toISOString(),
+    };
+
+    const [hydrated] = await hydrateCsvPlaylistLabels([fallback]);
+
+    if (csvManualPlaylistSide === "source") {
+      const nextSource = mergeCsvPlaylistOptions(sourceCsvPlaylists, [hydrated]);
+      setSourceCsvPlaylists(nextSource);
+      saveCsvPlaylistOptions("source", nextSource);
+      await saveCsvPlaylistOptionsToDatabase("source", nextSource);
+    } else {
+      const nextMy = mergeCsvPlaylistOptions(myCsvPlaylists, [hydrated]);
+      setMyCsvPlaylists(nextMy);
+      saveCsvPlaylistOptions("my", nextMy);
+      await saveCsvPlaylistOptionsToDatabase("my", nextMy);
+    }
+
+    setCsvManualPlaylistInput("");
+    setCsvImportMessage("Playlist added to dropdown.");
+  };
+
   const hydrateCsvPlaylistLabels = async (items: CsvPlaylistOption[]) => {
     return Promise.all(
       items.map(async (item, index) => {
@@ -2642,6 +2852,33 @@ export default function CurationPage() {
         error instanceof Error ? error.message : "CSV import failed.",
       );
     }
+  };
+
+  const deleteCsvPlaylistOptions = (side: "source" | "my", playlistIds: string[]) => {
+    if (playlistIds.length === 0) return;
+
+    if (side === "source") {
+      const nextSource = sourceCsvPlaylists.filter(
+        (item) => !playlistIds.includes(item.playlistId),
+      );
+      setSourceCsvPlaylists(nextSource);
+      saveCsvPlaylistOptions("source", nextSource);
+      void saveCsvPlaylistOptionsToDatabase("source", nextSource);
+      setSelectedSourceCsvPlaylistId((current) =>
+        playlistIds.includes(current) ? "" : current,
+      );
+      return;
+    }
+
+    const nextMy = myCsvPlaylists.filter(
+      (item) => !playlistIds.includes(item.playlistId),
+    );
+    setMyCsvPlaylists(nextMy);
+    saveCsvPlaylistOptions("my", nextMy);
+    void saveCsvPlaylistOptionsToDatabase("my", nextMy);
+    setSelectedMyCsvPlaylistId((current) =>
+      playlistIds.includes(current) ? "" : current,
+    );
   };
 
   const handleResultTrackSelect = (index: number, shiftKey: boolean) => {
@@ -2775,15 +3012,15 @@ export default function CurationPage() {
     const nextSettings: SpaceApartSettings = {};
 
     nextModes[DUPLICATE_SPACE_KEY] =
-      spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
+      spaceApartModes[DUPLICATE_SPACE_KEY] ?? "20";
     nextSettings[DUPLICATE_SPACE_KEY] =
-      spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
+      spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 20;
 
     groups.forEach((group) => {
       nextModes[group.id] =
-        spaceApartModes[group.id] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
+        spaceApartModes[group.id] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "20";
       nextSettings[group.id] =
-        spaceApartSettings[group.id] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
+        spaceApartSettings[group.id] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 20;
     });
 
     pushUndo();
@@ -3033,7 +3270,7 @@ export default function CurationPage() {
       <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <SideSection
-            title="Source Playlist Tracks"
+            title="Source Playlists"
             tracks={sourceTracks}
             linkInput={sourceLinkInput}
             setLinkInput={setSourceLinkInput}
@@ -3049,10 +3286,12 @@ export default function CurationPage() {
               setSelectedSourceCsvPlaylistId(playlistId);
               importCsvPlaylistOption("source", playlistId);
             }}
+            onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("source", playlistIds)}
+            onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("source", playlistIds)}
             historySections={[
               {
                 side: "source",
-                title: "Source Playlist Tracks",
+                title: "Source Playlists",
                 items: sourceImportHistory,
                 setItems: setSourceImportHistory,
                 onImportItems: (items) => importHistoryItems("source", items),
@@ -3084,10 +3323,12 @@ export default function CurationPage() {
               setSelectedMyCsvPlaylistId(playlistId);
               importCsvPlaylistOption("my", playlistId);
             }}
+            onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("my", playlistIds)}
+            onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("my", playlistIds)}
             historySections={[
               {
                 side: "source",
-                title: "Source Playlist Tracks",
+                title: "Source Playlists",
                 items: sourceImportHistory,
                 setItems: setSourceImportHistory,
                 onImportItems: (items) => importHistoryItems("source", items),
@@ -3386,7 +3627,7 @@ export default function CurationPage() {
               <div>
                 <div className="text-lg font-semibold text-white">Import CSV Dropdown</div>
                 <div className="mt-1 text-xs text-zinc-500">
-                  Columns: Source Playlist Tracks Playlist_ID, My Tracks Playlist_ID
+                  Columns: Source Playlists Playlist_ID, My Tracks Playlist_ID
                 </div>
               </div>
               <button
@@ -3403,16 +3644,70 @@ export default function CurationPage() {
                 <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
                   Import Mode
                 </label>
-                <select
-                  value={csvImportMode}
-                  onChange={(event) => setCsvImportMode(event.target.value as CsvImportMode)}
-                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none focus:border-green-500"
-                >
-                  <option value="replace">Replace playlists</option>
-                  <option value="add">Add playlists</option>
-                </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
+                    <input
+                      type="radio"
+                      checked={csvImportMode === "replace"}
+                      onChange={() => setCsvImportMode("replace")}
+                      className="h-4 w-4 accent-green-500"
+                    />
+                    Replace playlists
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3 text-sm font-semibold text-white hover:border-green-500/50">
+                    <input
+                      type="radio"
+                      checked={csvImportMode === "add"}
+                      onChange={() => setCsvImportMode("add")}
+                      className="h-4 w-4 accent-green-500"
+                    />
+                    Add playlists
+                  </label>
+                </div>
                 <div className="mt-2 text-xs text-zinc-500">
                   Replace clears both dropdowns first. Add keeps the current dropdown playlists.
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-black p-4">
+                <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Import Playlist
+                </label>
+                <div className="flex gap-3">
+                  <input
+                    value={csvManualPlaylistInput}
+                    onChange={(event) => setCsvManualPlaylistInput(event.target.value)}
+                    placeholder="Paste Spotify playlist link or playlist ID"
+                    className="h-11 min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm text-white outline-none focus:border-green-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={addManualCsvPlaylist}
+                    className="rounded-xl bg-green-600 px-5 text-sm font-semibold text-white transition hover:bg-green-500"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-3 text-sm text-zinc-300">
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={csvManualPlaylistSide === "source"}
+                      onChange={() => setCsvManualPlaylistSide("source")}
+                      className="h-4 w-4 accent-green-500"
+                    />
+                    Source Playlist
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={csvManualPlaylistSide === "my"}
+                      onChange={() => setCsvManualPlaylistSide("my")}
+                      className="h-4 w-4 accent-green-500"
+                    />
+                    My Tracks
+                  </label>
                 </div>
               </div>
 
