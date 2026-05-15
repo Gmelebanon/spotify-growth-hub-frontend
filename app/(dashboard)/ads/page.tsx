@@ -109,6 +109,9 @@ type PlaylistRow = {
   last_update_date?: string | null;
   synced_at?: string | null;
   last_synced_at?: string | null;
+  last_synced?: string | null;
+  lastSyncedAt?: string | null;
+  lastSynced?: string | null;
 };
 
 type AdEntry = {
@@ -159,21 +162,68 @@ const API_BASE_URL =
 
 const defaultCategoryOptions = [
   "Category",
+  "Aesthetic",
+  "Afro House",
+  "Amapiano",
+  "Beach",
+  "Country",
+  "Deep House",
+  "Driving",
+  "EDM",
+  "Gospel",
+  "Instrumental",
+  "Kids",
+  "Lounge",
+  "Mashups",
+  "Meditation",
+  "Nature",
+  "Orchestral",
+  "Pop",
+  "Remixes",
+  "Riddim",
+  "Romance",
   "Running",
-  "Mood",
-  "Workout",
-  "Focus",
-  "Chill",
+  "Sad",
+  "Sleep",
+  "Spinning",
+  "Studying",
+  "Summer",
+  "Techno",
+  "UKG",
+  "Viral",
+  "Walking",
+  "Wellness",
 ];
+
 const defaultGenreOptions = [
   "Genre",
-  "Techno",
-  "House",
+  "Afro House",
+  "Amapiano",
+  "Ambient",
+  "Chill House",
+  "Instrumentals",
+  "Mashups",
+  "Mixed",
   "Pop",
-  "Hip-Hop",
-  "Afro",
-  "Latin",
+  "Reggae",
+  "Soft Pop",
+  "Techno",
+  "UKG",
+  "Viral Mixed",
+  "World EDM",
 ];
+
+function mergeDropdownOptions(defaults: string[], saved: string[] | null | undefined) {
+  const merged: string[] = [];
+  [...defaults, ...(saved ?? [])].forEach((item) => {
+    const clean = String(item || "").trim();
+    if (!clean) return;
+    if (!merged.some((existing) => existing.toLowerCase() === clean.toLowerCase())) {
+      merged.push(clean);
+    }
+  });
+  return merged;
+}
 
 const colorOptions: Array<{
   value: CodeColor;
@@ -274,10 +324,13 @@ function formatDate(value: string | null | undefined) {
 function getLastSyncedAt(playlist: PlaylistRow) {
   return (
     playlist.last_synced_at ??
+    playlist.last_synced ??
+    playlist.lastSyncedAt ??
+    playlist.lastSynced ??
     playlist.synced_at ??
-    playlist.updated_at ??
     playlist.last_update ??
     playlist.last_update_date ??
+    playlist.updated_at ??
     null
   );
 }
@@ -605,8 +658,20 @@ export default function AdsPage() {
         ADS_GENRE_OPTIONS_STORAGE_KEY,
       );
       if (savedData) setRowData(JSON.parse(savedData));
-      if (savedCategories) setCategoryOptions(JSON.parse(savedCategories));
-      if (savedGenres) setGenreOptions(JSON.parse(savedGenres));
+      if (savedCategories) {
+        setCategoryOptions(
+          mergeDropdownOptions(defaultCategoryOptions, JSON.parse(savedCategories)),
+        );
+      } else {
+        setCategoryOptions(defaultCategoryOptions);
+      }
+      if (savedGenres) {
+        setGenreOptions(
+          mergeDropdownOptions(defaultGenreOptions, JSON.parse(savedGenres)),
+        );
+      } else {
+        setGenreOptions(defaultGenreOptions);
+      }
     } catch {
       setRowData({});
     }
@@ -744,6 +809,7 @@ export default function AdsPage() {
       },
     };
     persistRowData(next);
+    saveAdsSettingsToDatabase(playlist.id, playlist.name, next[key]);
     saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
   };
 
