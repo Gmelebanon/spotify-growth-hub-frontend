@@ -105,6 +105,11 @@ type PlaylistRow = {
     growth?: number;
   }>;
   updated_at?: string | null;
+  updatedAt?: string | null;
+  modified_at?: string | null;
+  modifiedAt?: string | null;
+  last_modified?: string | null;
+  lastModified?: string | null;
   last_update?: string | null;
   last_update_date?: string | null;
   synced_at?: string | null;
@@ -149,6 +154,13 @@ type AdsSettingsRow = {
     country?: string;
     master_playlist?: string;
   } | null;
+};
+
+
+type AdsFilterOptionRow = {
+  id?: string;
+  option_type?: string;
+  value?: string;
 };
 
 const ALL_ACCOUNTS_ID = -1;
@@ -261,27 +273,201 @@ const colorOptions: Array<{
 ];
 
 const countryOptions = [
-  "Germany",
-  "Lebanon",
-  "France",
-  "United States",
-  "United Kingdom",
-  "Canada",
+  "Afghanistan",
+  "Albania",
+  "Algeria",
+  "Andorra",
+  "Angola",
+  "Antigua and Barbuda",
+  "Argentina",
+  "Armenia",
   "Australia",
+  "Austria",
+  "Azerbaijan",
+  "Bahamas",
+  "Bahrain",
+  "Bangladesh",
+  "Barbados",
+  "Belarus",
+  "Belgium",
+  "Belize",
+  "Benin",
+  "Bhutan",
+  "Bolivia",
+  "Bosnia and Herzegovina",
+  "Botswana",
   "Brazil",
-  "Italy",
-  "Spain",
-  "Netherlands",
-  "Sweden",
-  "Norway",
+  "Brunei",
+  "Bulgaria",
+  "Burkina Faso",
+  "Burundi",
+  "Cabo Verde",
+  "Cambodia",
+  "Cameroon",
+  "Canada",
+  "Central African Republic",
+  "Chad",
+  "Chile",
+  "China",
+  "Colombia",
+  "Comoros",
+  "Congo",
+  "Costa Rica",
+  "Croatia",
+  "Cuba",
+  "Cyprus",
+  "Czechia",
+  "Democratic Republic of the Congo",
   "Denmark",
-  "UAE",
-  "Saudi Arabia",
+  "Djibouti",
+  "Dominica",
+  "Dominican Republic",
+  "Ecuador",
   "Egypt",
-  "Turkey",
+  "El Salvador",
+  "Equatorial Guinea",
+  "Eritrea",
+  "Estonia",
+  "Eswatini",
+  "Ethiopia",
+  "Fiji",
+  "Finland",
+  "France",
+  "Gabon",
+  "Gambia",
+  "Georgia",
+  "Germany",
+  "Ghana",
+  "Greece",
+  "Grenada",
+  "Guatemala",
+  "Guinea",
+  "Guinea-Bissau",
+  "Guyana",
+  "Haiti",
+  "Honduras",
+  "Hungary",
+  "Iceland",
   "India",
+  "Indonesia",
+  "Iran",
+  "Iraq",
+  "Ireland",
+  "Israel",
+  "Italy",
+  "Jamaica",
   "Japan",
+  "Jordan",
+  "Kazakhstan",
+  "Kenya",
+  "Kiribati",
+  "Kuwait",
+  "Kyrgyzstan",
+  "Laos",
+  "Latvia",
+  "Lebanon",
+  "Lesotho",
+  "Liberia",
+  "Libya",
+  "Liechtenstein",
+  "Lithuania",
+  "Luxembourg",
+  "Madagascar",
+  "Malawi",
+  "Malaysia",
+  "Maldives",
+  "Mali",
+  "Malta",
+  "Marshall Islands",
+  "Mauritania",
+  "Mauritius",
+  "Mexico",
+  "Micronesia",
+  "Moldova",
+  "Monaco",
+  "Mongolia",
+  "Montenegro",
+  "Morocco",
+  "Mozambique",
+  "Myanmar",
+  "Namibia",
+  "Nauru",
+  "Nepal",
+  "Netherlands",
+  "New Zealand",
+  "Nicaragua",
+  "Niger",
+  "Nigeria",
+  "North Korea",
+  "North Macedonia",
+  "Norway",
+  "Oman",
+  "Pakistan",
+  "Palau",
+  "Palestine",
+  "Panama",
+  "Papua New Guinea",
+  "Paraguay",
+  "Peru",
+  "Philippines",
+  "Poland",
+  "Portugal",
+  "Qatar",
+  "Romania",
+  "Russia",
+  "Rwanda",
+  "Saint Kitts and Nevis",
+  "Saint Lucia",
+  "Saint Vincent and the Grenadines",
+  "Samoa",
+  "San Marino",
+  "Sao Tome and Principe",
+  "Saudi Arabia",
+  "Senegal",
+  "Serbia",
+  "Seychelles",
+  "Sierra Leone",
+  "Singapore",
+  "Slovakia",
+  "Slovenia",
+  "Solomon Islands",
+  "Somalia",
+  "South Africa",
   "South Korea",
+  "South Sudan",
+  "Spain",
+  "Sri Lanka",
+  "Sudan",
+  "Suriname",
+  "Sweden",
+  "Switzerland",
+  "Syria",
+  "Taiwan",
+  "Tajikistan",
+  "Tanzania",
+  "Thailand",
+  "Timor-Leste",
+  "Togo",
+  "Tonga",
+  "Trinidad and Tobago",
+  "Tunisia",
+  "Turkey",
+  "Turkmenistan",
+  "Tuvalu",
+  "Uganda",
+  "Ukraine",
+  "United Arab Emirates",
+  "United Kingdom",
+  "United States",
+  "Uruguay",
+  "Uzbekistan",
+  "Vanuatu",
+  "Vatican City",
+  "Venezuela",
+  "Vietnam",
+  "Yemen",
+  "Zambia",
+  "Zimbabwe",
 ];
 
 function playlistKey(p: PlaylistRow) {
@@ -322,17 +508,36 @@ function formatDate(value: string | null | undefined) {
 }
 
 function getLastSyncedAt(playlist: PlaylistRow) {
-  return (
-    playlist.last_synced_at ??
-    playlist.last_synced ??
-    playlist.lastSyncedAt ??
-    playlist.lastSynced ??
-    playlist.synced_at ??
-    playlist.last_update ??
-    playlist.last_update_date ??
-    playlist.updated_at ??
-    null
-  );
+  const record = playlist as PlaylistRow & Record<string, unknown>;
+  const adsMeta = (record.ads_meta || {}) as Record<string, unknown>;
+
+  const candidates = [
+    record.last_synced_at,
+    record.last_synced,
+    record.lastSyncedAt,
+    record.lastSynced,
+    record.synced_at,
+    record.updated_at,
+    record.updatedAt,
+    record.modified_at,
+    record.modifiedAt,
+    record.last_modified,
+    record.lastModified,
+    record.last_update,
+    record.last_update_date,
+    adsMeta.last_synced,
+    adsMeta.last_synced_at,
+    adsMeta.synced_at,
+    adsMeta.updated_at,
+  ];
+
+  const valid = candidates.find((value) => {
+    if (!value) return false;
+    const date = new Date(String(value));
+    return !Number.isNaN(date.getTime());
+  });
+
+  return valid ? String(valid) : null;
 }
 
 function readNumber(value: unknown) {
@@ -524,6 +729,59 @@ function preferSavedMeta(local: RowMeta | undefined, saved: RowMeta): RowMeta {
   };
 }
 
+async function fetchAdsFilterOptionsFromDatabase() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/ads/filter-options`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return [];
+    const payload = await response.json();
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    return items as AdsFilterOptionRow[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveAdsFilterOptionToDatabase(
+  optionType: "category" | "genre",
+  value: string,
+) {
+  try {
+    await fetch(`${API_BASE_URL}/api/ads/filter-options`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        option_type: optionType,
+        value,
+      }),
+    });
+  } catch {
+    // Keep local option even if backend save fails.
+  }
+}
+
+async function deleteAdsFilterOptionFromDatabase(
+  optionType: "category" | "genre",
+  value: string,
+) {
+  try {
+    const rows = await fetchAdsFilterOptionsFromDatabase();
+    const match = rows.find(
+      (item) =>
+        item.option_type === optionType &&
+        String(item.value || "").toLowerCase() === value.toLowerCase(),
+    );
+    if (!match?.id) return;
+
+    await fetch(`${API_BASE_URL}/api/ads/filter-options/${match.id}`, {
+      method: "DELETE",
+    });
+  } catch {
+    // Keep local delete responsive even if backend delete fails.
+  }
+}
+
 async function fetchAdsSettingsFromDatabase() {
   try {
     const response = await fetch(`${API_BASE_URL}/api/ads/settings`);
@@ -649,6 +907,8 @@ export default function AdsPage() {
   }, [activeAccountId, accounts, setActiveAccountId]);
 
   useEffect(() => {
+    let cancelled = false;
+
     try {
       const savedData = window.localStorage.getItem(ADS_DATA_STORAGE_KEY);
       const savedCategories = window.localStorage.getItem(
@@ -658,23 +918,64 @@ export default function AdsPage() {
         ADS_GENRE_OPTIONS_STORAGE_KEY,
       );
       if (savedData) setRowData(JSON.parse(savedData));
-      if (savedCategories) {
-        setCategoryOptions(
-          mergeDropdownOptions(defaultCategoryOptions, JSON.parse(savedCategories)),
-        );
-      } else {
-        setCategoryOptions(defaultCategoryOptions);
-      }
-      if (savedGenres) {
-        setGenreOptions(
-          mergeDropdownOptions(defaultGenreOptions, JSON.parse(savedGenres)),
-        );
-      } else {
-        setGenreOptions(defaultGenreOptions);
-      }
+      setCategoryOptions(
+        mergeDropdownOptions(
+          defaultCategoryOptions,
+          savedCategories ? JSON.parse(savedCategories) : [],
+        ),
+      );
+      setGenreOptions(
+        mergeDropdownOptions(
+          defaultGenreOptions,
+          savedGenres ? JSON.parse(savedGenres) : [],
+        ),
+      );
     } catch {
       setRowData({});
+      setCategoryOptions(defaultCategoryOptions);
+      setGenreOptions(defaultGenreOptions);
     }
+
+    fetchAdsFilterOptionsFromDatabase().then((items) => {
+      if (cancelled) return;
+
+      const savedCategories = items
+        .filter((item) => item.option_type === "category")
+        .map((item) => String(item.value || "").trim())
+        .filter(Boolean);
+      const savedGenres = items
+        .filter((item) => item.option_type === "genre")
+        .map((item) => String(item.value || "").trim())
+        .filter(Boolean);
+
+      setCategoryOptions((current) => {
+        const next = mergeDropdownOptions(defaultCategoryOptions, [
+          ...current,
+          ...savedCategories,
+        ]);
+        window.localStorage.setItem(
+          ADS_CATEGORY_OPTIONS_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+        return next;
+      });
+
+      setGenreOptions((current) => {
+        const next = mergeDropdownOptions(defaultGenreOptions, [
+          ...current,
+          ...savedGenres,
+        ]);
+        window.localStorage.setItem(
+          ADS_GENRE_OPTIONS_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const singleAccountQuery = useQuery({
@@ -1178,17 +1479,22 @@ export default function AdsPage() {
   };
 
   const saveOptions = (type: "category" | "genre", nextOptions: string[]) => {
+    const normalized = mergeDropdownOptions(
+      type === "category" ? defaultCategoryOptions : defaultGenreOptions,
+      nextOptions,
+    );
+
     if (type === "category") {
-      setCategoryOptions(nextOptions);
+      setCategoryOptions(normalized);
       window.localStorage.setItem(
         ADS_CATEGORY_OPTIONS_STORAGE_KEY,
-        JSON.stringify(nextOptions),
+        JSON.stringify(normalized),
       );
     } else {
-      setGenreOptions(nextOptions);
+      setGenreOptions(normalized);
       window.localStorage.setItem(
         ADS_GENRE_OPTIONS_STORAGE_KEY,
-        JSON.stringify(nextOptions),
+        JSON.stringify(normalized),
       );
     }
   };
@@ -1199,12 +1505,15 @@ export default function AdsPage() {
     if (!cleaned) return;
     const currentOptions =
       optionModalType === "category" ? categoryOptions : genreOptions;
-    if (
-      !currentOptions.some(
-        (item) => item.toLowerCase() === cleaned.toLowerCase(),
-      )
-    )
+    const exists = currentOptions.some(
+      (item) => item.toLowerCase() === cleaned.toLowerCase(),
+    );
+
+    if (!exists) {
       saveOptions(optionModalType, [...currentOptions, cleaned]);
+      void saveAdsFilterOptionToDatabase(optionModalType, cleaned);
+    }
+
     setNewOptionName("");
   };
 
@@ -1217,6 +1526,7 @@ export default function AdsPage() {
       optionModalType,
       currentOptions.filter((item) => item !== option),
     );
+    void deleteAdsFilterOptionFromDatabase(optionModalType, option);
   };
 
   const clearFilters = () =>
@@ -1450,19 +1760,6 @@ export default function AdsPage() {
           >
             <DownloadIcon />
           </button>
-          <label
-            className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-green-500 hover:text-green-400"
-            title="Upload CSV"
-          >
-            <UploadIcon />
-            <input
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={handleUploadCSV}
-            />
-          </label>
-
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
