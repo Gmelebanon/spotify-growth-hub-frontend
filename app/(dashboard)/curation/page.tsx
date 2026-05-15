@@ -39,12 +39,25 @@ type ImportHistoryItem = {
   accountName?: string;
 };
 
+type CsvPlaylistOption = {
+  id: string;
+  playlistId: string;
+  label: string;
+  side: "source" | "my";
+  createdAt: string;
+};
+
+type CsvImportMode = "replace" | "add";
+
 type SavedCuration = {
   id: string;
   name: string;
   tracks: CurationTrack[];
   trackCount: number;
   createdAt: string;
+  duplicateGroups?: DuplicateGroup[];
+  spaceApartSettings?: SpaceApartSettings;
+  spaceApartModes?: SpaceApartModes;
 };
 
 type SavedMasterPlaylist = {
@@ -62,7 +75,7 @@ type DuplicateGroup = {
   riskType: "exact" | "similar";
 };
 
-type SpaceApartModes = Record<string, "10" | "20" | "custom">;
+type SpaceApartModes = Record<string, "5" | "10" | "20" | "custom">;
 type SpaceApartSettings = Record<string, number>;
 
 const DUPLICATE_SPACE_KEY = "__all_duplicate_groups__";
@@ -122,6 +135,9 @@ function normalizeSavedCuration(item: any): SavedCuration | null {
     trackCount:
       Number(item.trackCount ?? item.track_count ?? tracks.length) || 0,
     createdAt: item.createdAt ?? item.created_at ?? new Date().toISOString(),
+    duplicateGroups: item.duplicateGroups ?? item.duplicate_groups ?? [],
+    spaceApartSettings: item.spaceApartSettings ?? item.space_apart_settings ?? {},
+    spaceApartModes: item.spaceApartModes ?? item.space_apart_modes ?? {},
   };
 }
 
@@ -145,6 +161,9 @@ async function saveCurationToDatabase(payload: {
   name: string;
   account_id: number | null;
   tracks: CurationTrack[];
+  duplicate_groups?: DuplicateGroup[];
+  space_apart_settings?: SpaceApartSettings;
+  space_apart_modes?: SpaceApartModes;
 }) {
   const response = await fetch(`${API_BASE_URL}/api/curations`, {
     method: "POST",
@@ -162,7 +181,7 @@ async function saveCurationToDatabase(payload: {
 
 async function updateCurationInDatabase(
   id: string,
-  payload: { name: string; account_id: number | null; tracks: CurationTrack[] },
+  payload: { name: string; account_id: number | null; tracks: CurationTrack[]; duplicate_groups?: DuplicateGroup[]; space_apart_settings?: SpaceApartSettings; space_apart_modes?: SpaceApartModes },
 ) {
   const response = await fetch(`${API_BASE_URL}/api/curations/${id}`, {
     method: "PATCH",
@@ -567,6 +586,9 @@ function extractSpotifyPlaylistId(input: string) {
   const uriMatch = clean.match(/^spotify:playlist:([A-Za-z0-9]+)$/);
   if (uriMatch?.[1]) return uriMatch[1];
 
+  const rawMatch = clean.match(/^[A-Za-z0-9]{10,80}$/);
+  if (rawMatch) return clean;
+
   return null;
 }
 
@@ -600,6 +622,174 @@ function formatTrackLine(track: CurationTrack) {
 
 function getColorClass(index: number) {
   return LINK_COLORS[index % LINK_COLORS.length];
+}
+
+function csvPlaylistStorageKey(side: "source" | "my") {
+  return `nerd-engine-curation-csv-playlists-${side}`;
+}
+
+function loadCsvPlaylistOptions(side: "source" | "my"): CsvPlaylistOption[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(csvPlaylistStorageKey(side));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCsvPlaylistOptions(side: "source" | "my", items: CsvPlaylistOption[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(csvPlaylistStorageKey(side), JSON.stringify(items));
+}
+
+async function loadCsvPlaylistOptionsFromDatabase(side: "source" | "my") {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/curation/csv-playlists?side=${side}`);
+    if (!response.ok) return [];
+
+    const payload = await response.json();
+    const items = Array.isArray(payload) ? payload : payload.items ?? [];
+
+    return (Array.isArray(items) ? items : [])
+      .map((item: any, index: number) => ({
+        id: String(item.id ?? item.playlist_id ?? `${side}-csv-${index}`),
+        playlistId: String(item.playlistId ?? item.playlist_id ?? item.spotify_playlist_id ?? item.spotify_id ?? ""),
+        label: String(item.label ?? item.display_name ?? item.name ?? ""),
+        side,
+        createdAt: String(item.createdAt ?? item.created_at ?? new Date().toISOString()),
+      }))
+      .filter((item: CsvPlaylistOption) => item.playlistId);
+  } catch {
+    return [];
+  }
+}
+
+async function saveCsvPlaylistOptionsToDatabase(
+  side: "source" | "my",
+  items: CsvPlaylistOption[],
+) {
+  try {
+    await fetch(`${API_BASE_URL}/api/curation/csv-playlists`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ side, items }),
+    });
+  } catch {
+    // Local autosave remains the source of truth when the database endpoint is unavailable.
+  }
+}
+
+function parseSimpleCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+
+    if (char === '"' && insideQuotes && next === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (char === "," && !insideQuotes) {
+      values.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  values.push(current.trim());
+  return values;
+}
+
+function csvPlaylistLabel(playlistId: string, side: "source" | "my", index: number) {
+  const prefix = side === "source" ? "Source" : "My Tracks";
+  return `${prefix} Playlist ${index + 1} · ${playlistId}`;
+}
+
+function parseCurationDropdownCsv(content: string) {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const source: CsvPlaylistOption[] = [];
+  const my: CsvPlaylistOption[] = [];
+  const dataLines = lines.slice(1);
+
+  dataLines.forEach((line, index) => {
+    const [sourceValue = "", myValue = ""] = parseSimpleCsvLine(line);
+    const sourceId = extractSpotifyPlaylistId(sourceValue) || sourceValue.trim();
+    const myId = extractSpotifyPlaylistId(myValue) || myValue.trim();
+
+    if (sourceId) {
+      source.push({
+        id: `source-csv-${sourceId}-${Date.now()}-${index}`,
+        playlistId: sourceId,
+        label: csvPlaylistLabel(sourceId, "source", source.length),
+        side: "source",
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    if (myId) {
+      my.push({
+        id: `my-csv-${myId}-${Date.now()}-${index}`,
+        playlistId: myId,
+        label: csvPlaylistLabel(myId, "my", my.length),
+        side: "my",
+        createdAt: new Date().toISOString(),
+      });
+    }
+  });
+
+  return { source, my };
+}
+
+function downloadCurationCsvTemplate() {
+  const content = [
+    "Source Playlist Tracks Playlist_ID,My Tracks Playlist_ID",
+    "28L7yWnkQAEIPbLo1XgEX,43zplpQ9DfT74CCdjeergG",
+  ].join("\n");
+
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "curation-playlists-template.csv";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function mergeCsvPlaylistOptions(
+  current: CsvPlaylistOption[],
+  incoming: CsvPlaylistOption[],
+) {
+  const seen = new Set(current.map((item) => item.playlistId));
+  const merged = [...current];
+
+  incoming.forEach((item) => {
+    if (seen.has(item.playlistId)) return;
+    seen.add(item.playlistId);
+    merged.push(item);
+  });
+
+  return merged;
 }
 
 function ensureImportedLinkIds(
@@ -1288,6 +1478,9 @@ function SideSection({
   removeTrack,
   colorPalette,
   historySections,
+  csvPlaylistOptions,
+  selectedCsvPlaylistId,
+  onSelectCsvPlaylist,
 }: {
   title: string;
   tracks: CurationTrack[];
@@ -1300,12 +1493,15 @@ function SideSection({
   removeTrack: (track: CurationTrack) => void;
   colorPalette: string[];
   historySections: HistorySection[];
+  csvPlaylistOptions: CsvPlaylistOption[];
+  selectedCsvPlaylistId: string;
+  onSelectCsvPlaylist: (playlistId: string) => void;
 }) {
   const trackColorMap = useMemo(() => {
     const map = new Map<string, number[]>();
 
-    importedLinks.forEach((item, itemIndex) => {
-      item.tracks.forEach((track) => {
+    (importedLinks ?? []).forEach((item, itemIndex) => {
+      (item.tracks ?? []).forEach((track) => {
         const key = trackKey(track);
         const existing = map.get(key) ?? [];
         map.set(key, [...existing, itemIndex]);
@@ -1330,16 +1526,16 @@ function SideSection({
 
   const randomShuffleTracks = () => {
     setImportedLinks((prev) => {
-      if (prev.length <= 1) {
-        return prev.map((item) => ({
+      if ((prev ?? []).length <= 1) {
+        return (prev ?? []).map((item) => ({
           ...item,
           tracks: shuffleTracksList(item.tracks),
           mergedTracks: undefined,
         }));
       }
 
-      const mixed = weightedShuffle(prev.flatMap((item) => item.tracks));
-      return prev.map((item, index) =>
+      const mixed = weightedShuffle((prev ?? []).flatMap((item) => item.tracks ?? []));
+      return (prev ?? []).map((item, index) =>
         index === 0
           ? { ...item, mergedTracks: mixed }
           : { ...item, mergedTracks: [] },
@@ -1349,9 +1545,9 @@ function SideSection({
 
   const ratioShuffleTracks = () => {
     setImportedLinks((prev) => {
-      if (prev.length < 2) return prev;
+      if ((prev ?? []).length < 2) return prev;
 
-      const queues = prev.map((item) => [...item.tracks]);
+      const queues = (prev ?? []).map((item) => [...(item.tracks ?? [])]);
       const firstWeight = Math.max(1, Number(ratioOne) || 1);
       const otherWeight = Math.max(1, Number(ratioTwo) || 1);
       const mixed: CurationTrack[] = [];
@@ -1365,7 +1561,7 @@ function SideSection({
         });
       }
 
-      return prev.map((item, index) =>
+      return (prev ?? []).map((item, index) =>
         index === 0
           ? { ...item, mergedTracks: mixed }
           : { ...item, mergedTracks: [] },
@@ -1373,9 +1569,9 @@ function SideSection({
     });
   };
 
-  const visibleHistorySections = historySections.map((section) => ({
+  const visibleHistorySections = (historySections ?? []).map((section) => ({
     ...section,
-    items: section.items.filter((item) => item.source_type !== "track"),
+    items: (section.items ?? []).filter((item) => item.source_type !== "track"),
   }));
 
   const selectedHistoryCount = selectedHistoryKeys.length;
@@ -1392,7 +1588,7 @@ function SideSection({
   }, [historyOpen]);
 
   const removeHistoryItem = (section: HistorySection, id: string) => {
-    const next = section.items.filter((item) => item.id !== id);
+    const next = (section.items ?? []).filter((item) => item.id !== id);
     section.setItems(next);
     saveImportHistory(section.side, next);
     void deleteImportHistoryItemFromDatabase(id);
@@ -1417,13 +1613,13 @@ function SideSection({
   const importSelectedHistory = async () => {
     const sectionsToImport = visibleHistorySections.map((section) => ({
       ...section,
-      items: section.items.filter((item) =>
+      items: (section.items ?? []).filter((item) =>
         selectedHistoryKeys.includes(`${section.side}:${item.id}`),
       ),
     }));
 
     const total = sectionsToImport.reduce(
-      (sum, section) => sum + section.items.length,
+      (sum, section) => sum + (section.items ?? []).length,
       0,
     );
     if (total === 0) return;
@@ -1434,7 +1630,7 @@ function SideSection({
     let completed = 0;
     try {
       for (const section of sectionsToImport) {
-        for (const item of section.items) {
+        for (const item of section.items ?? []) {
           completed += 1;
           const nextStatus = `${completed}/${total} imported · ${item.display_name}`;
           setHistoryStatus(nextStatus);
@@ -1469,9 +1665,9 @@ function SideSection({
     }
 
     setImportedLinks((prev) => {
-      if (prev.length === 0) return prev;
+      if ((prev ?? []).length === 0) return prev;
       const reordered = reorderItems(tracks, draggedTrackIndex, targetIndex);
-      return prev.map((item, index) =>
+      return (prev ?? []).map((item, index) =>
         index === 0
           ? { ...item, mergedTracks: reordered }
           : { ...item, mergedTracks: [] },
@@ -1487,11 +1683,25 @@ function SideSection({
         <div>
           <h2 className="text-2xl font-semibold text-white">{title}</h2>
           <div className="mt-2 text-[20px] font-semibold text-white">
-            {tracks.length} tracks
+            {(tracks ?? []).length} tracks
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <select
+            value={selectedCsvPlaylistId}
+            onChange={(event) => onSelectCsvPlaylist(event.target.value)}
+            className="h-[46px] w-[420px] max-w-[48vw] rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-xs font-semibold text-green-300 outline-none transition accent-green-500 focus:border-green-500"
+            title="CSV saved playlists"
+          >
+            <option value="">CSV playlists</option>
+            {(csvPlaylistOptions ?? []).map((item) => (
+              <option key={item.id} value={item.playlistId}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+
           <button
             type="button"
             onClick={() => setHistoryOpen(true)}
@@ -1538,11 +1748,11 @@ function SideSection({
           Imported Links
         </div>
 
-        {importedLinks.length === 0 ? (
+        {(importedLinks ?? []).length === 0 ? (
           <div className="text-sm text-zinc-500">No imported links yet.</div>
         ) : (
           <div className="space-y-3">
-            {importedLinks.map((item, index) => (
+            {(importedLinks ?? []).map((item, index) => (
               <div
                 key={`${item.id}-${index}`}
                 draggable
@@ -1593,13 +1803,13 @@ function SideSection({
           Tracks In List
         </div>
 
-        {tracks.length === 0 ? (
+        {(tracks ?? []).length === 0 ? (
           <div className="text-sm text-zinc-500">
             No tracks in this list yet.
           </div>
         ) : (
           <div className="scrollbar-spotify max-h-[280px] space-y-2 overflow-y-auto pr-1">
-            {tracks.map((track, index) => {
+            {(tracks ?? []).map((track, index) => {
               const colorIndexes = trackColorMap.get(trackKey(track)) ?? [];
 
               return (
@@ -1657,7 +1867,7 @@ function SideSection({
             <button
               type="button"
               onClick={ratioShuffleTracks}
-              disabled={importedLinks.length < 2}
+              disabled={(importedLinks ?? []).length < 2}
               className="text-sm font-semibold text-green-400 transition hover:text-green-300 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Shuffle
@@ -1794,30 +2004,31 @@ function DuplicateGroupCard({
   setSpaceApartSettings: Dispatch<SetStateAction<SpaceApartSettings>>;
   deleteTrackFromResult: (track: CurationTrack) => void;
 }) {
-  const mode = spaceApartModes[DUPLICATE_SPACE_KEY] ?? "10";
-  const target = spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 10;
+  const settingKey = group.id;
+  const mode = spaceApartModes[settingKey] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
+  const target = spaceApartSettings[settingKey] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
 
-  const setPreset = (preset: "10" | "20") => {
+  const setPreset = (preset: "5" | "10" | "20") => {
     setSpaceApartModes((prev) => ({
       ...prev,
-      [DUPLICATE_SPACE_KEY]: preset,
+      [settingKey]: preset,
     }));
 
     setSpaceApartSettings((prev) => ({
       ...prev,
-      [DUPLICATE_SPACE_KEY]: Number(preset),
+      [settingKey]: Number(preset),
     }));
   };
 
   const setCustom = (value: string) => {
     setSpaceApartModes((prev) => ({
       ...prev,
-      [DUPLICATE_SPACE_KEY]: "custom",
+      [settingKey]: "custom",
     }));
 
     setSpaceApartSettings((prev) => ({
       ...prev,
-      [DUPLICATE_SPACE_KEY]: Math.max(0, Number(value) || 0),
+      [settingKey]: Math.max(0, Number(value) || 0),
     }));
   };
 
@@ -1864,6 +2075,18 @@ function DuplicateGroupCard({
 
       <div className="mt-4 flex items-center gap-2 text-xs text-zinc-400">
         <span className="mr-2">Space Apart</span>
+
+        <button
+          type="button"
+          onClick={() => setPreset("5")}
+          className={`rounded-lg border px-3 py-2 font-semibold ${
+            mode === "5"
+              ? "border-green-500 bg-green-600 text-white"
+              : "border-zinc-800 bg-black text-zinc-300"
+          }`}
+        >
+          5
+        </button>
 
         <button
           type="button"
@@ -2000,7 +2223,7 @@ export default function CurationPage() {
 
   const [sourceRatio, setSourceRatio] = useState("3");
   const [myRatio, setMyRatio] = useState("1");
-  const [leadsCount, setLeadsCount] = useState("15");
+  const [leadsCount, setLeadsCount] = useState("5");
 
   const [curationName, setCurationName] = useState("");
   const [savedCurations, setSavedCurations] = useState<SavedCuration[]>([]);
@@ -2024,6 +2247,15 @@ export default function CurationPage() {
   const [myImportHistory, setMyImportHistory] = useState<ImportHistoryItem[]>(
     [],
   );
+  const [sourceCsvPlaylists, setSourceCsvPlaylists] = useState<CsvPlaylistOption[]>([]);
+  const [myCsvPlaylists, setMyCsvPlaylists] = useState<CsvPlaylistOption[]>([]);
+  const [selectedSourceCsvPlaylistId, setSelectedSourceCsvPlaylistId] = useState("");
+  const [selectedMyCsvPlaylistId, setSelectedMyCsvPlaylistId] = useState("");
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
+  const [csvImportMode, setCsvImportMode] = useState<CsvImportMode>("add");
+  const [csvImportMessage, setCsvImportMessage] = useState("");
+  const [selectedResultIndexes, setSelectedResultIndexes] = useState<number[]>([]);
+  const [lastSelectedResultIndex, setLastSelectedResultIndex] = useState<number | null>(null);
 
   const accountsQuery = useQuery<AccountItem[]>({
     queryKey: ["accounts"],
@@ -2116,6 +2348,46 @@ export default function CurationPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const sourceLocal = loadCsvPlaylistOptions("source");
+    const myLocal = loadCsvPlaylistOptions("my");
+    setSourceCsvPlaylists(sourceLocal);
+    setMyCsvPlaylists(myLocal);
+
+    const loadDatabaseDropdowns = async () => {
+      const [sourceDb, myDb] = await Promise.all([
+        loadCsvPlaylistOptionsFromDatabase("source"),
+        loadCsvPlaylistOptionsFromDatabase("my"),
+      ]);
+
+      if (cancelled) return;
+
+      const nextSource = sourceDb.length > 0 ? sourceDb : sourceLocal;
+      const nextMy = myDb.length > 0 ? myDb : myLocal;
+
+      setSourceCsvPlaylists(nextSource);
+      setMyCsvPlaylists(nextMy);
+      saveCsvPlaylistOptions("source", nextSource);
+      saveCsvPlaylistOptions("my", nextMy);
+    };
+
+    void loadDatabaseDropdowns();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    saveCsvPlaylistOptions("source", sourceCsvPlaylists);
+  }, [sourceCsvPlaylists]);
+
+  useEffect(() => {
+    saveCsvPlaylistOptions("my", myCsvPlaylists);
+  }, [myCsvPlaylists]);
 
   useEffect(() => {
     const refreshSavedMasters = () => {
@@ -2276,6 +2548,153 @@ export default function CurationPage() {
     }
   };
 
+  useEffect(() => {
+    if (!csvImportOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCsvImportOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [csvImportOpen]);
+
+  const importCsvPlaylistOption = (side: "source" | "my", playlistId: string) => {
+    if (!playlistId) return;
+
+    const playlistLink = playlistId.startsWith("http")
+      ? playlistId
+      : `https://open.spotify.com/playlist/${playlistId}`;
+
+    if (side === "source") {
+      setSourceLinkInput(playlistLink);
+      sourceImportMutation.mutate(playlistLink);
+      return;
+    }
+
+    setMyTracksLinkInput(playlistLink);
+    myTracksImportMutation.mutate(playlistLink);
+  };
+
+  const hydrateCsvPlaylistLabels = async (items: CsvPlaylistOption[]) => {
+    return Promise.all(
+      items.map(async (item, index) => {
+        try {
+          const imported = await fetchExternalSpotifyPlaylist(
+            item.playlistId,
+            `https://open.spotify.com/playlist/${item.playlistId}`,
+          );
+
+          if (imported?.display_name) {
+            return {
+              ...item,
+              label: imported.display_name,
+            };
+          }
+        } catch {
+          // Keep the fallback label when metadata is not available.
+        }
+
+        return {
+          ...item,
+          label: item.label || csvPlaylistLabel(item.playlistId, item.side, index),
+        };
+      }),
+    );
+  };
+
+  const handleCurationCsvFile = async (file: File | null) => {
+    if (!file) return;
+
+    setCsvImportMessage("Reading CSV...");
+
+    try {
+      const content = await file.text();
+      const parsed = parseCurationDropdownCsv(content);
+
+      setCsvImportMessage("Loading playlist names...");
+
+      const hydratedSource = await hydrateCsvPlaylistLabels(parsed.source);
+      const hydratedMy = await hydrateCsvPlaylistLabels(parsed.my);
+
+      const nextSource =
+        csvImportMode === "replace"
+          ? hydratedSource
+          : mergeCsvPlaylistOptions(sourceCsvPlaylists, hydratedSource);
+      const nextMy =
+        csvImportMode === "replace"
+          ? hydratedMy
+          : mergeCsvPlaylistOptions(myCsvPlaylists, hydratedMy);
+
+      setSourceCsvPlaylists(nextSource);
+      setMyCsvPlaylists(nextMy);
+      saveCsvPlaylistOptions("source", nextSource);
+      saveCsvPlaylistOptions("my", nextMy);
+      void saveCsvPlaylistOptionsToDatabase("source", nextSource);
+      void saveCsvPlaylistOptionsToDatabase("my", nextMy);
+      setSelectedSourceCsvPlaylistId("");
+      setSelectedMyCsvPlaylistId("");
+      setCsvImportMessage(
+        `CSV imported. Source playlists: ${hydratedSource.length}, My Tracks playlists: ${hydratedMy.length}.`,
+      );
+    } catch (error) {
+      setCsvImportMessage(
+        error instanceof Error ? error.message : "CSV import failed.",
+      );
+    }
+  };
+
+  const handleResultTrackSelect = (index: number, shiftKey: boolean) => {
+    setSelectedResultIndexes((current) => {
+      if (shiftKey && lastSelectedResultIndex !== null) {
+        const start = Math.min(lastSelectedResultIndex, index);
+        const end = Math.max(lastSelectedResultIndex, index);
+        const range = Array.from(
+          { length: end - start + 1 },
+          (_, rangeIndex) => start + rangeIndex,
+        );
+        return Array.from(new Set([...current, ...range])).sort((a, b) => a - b);
+      }
+
+      return current.includes(index)
+        ? current.filter((item) => item !== index)
+        : [...current, index].sort((a, b) => a - b);
+    });
+
+    setLastSelectedResultIndex(index);
+  };
+
+  const deleteSelectedResultTracks = () => {
+    if (selectedResultIndexes.length === 0) return;
+    const selectedIdentities = new Set(
+      selectedResultIndexes
+        .map((index) => displayedCurationResult[index])
+        .filter(Boolean)
+        .map(trackIdentity),
+    );
+
+    pushUndo();
+    setCurationBaseResult((prev) =>
+      prev.filter((track) => !selectedIdentities.has(trackIdentity(track))),
+    );
+    setSelectedResultIndexes([]);
+    setLastSelectedResultIndex(null);
+  };
+
+  const selectAllResultTracks = () => {
+    setSelectedResultIndexes(
+      displayedCurationResult.map((_, index) => index),
+    );
+    setLastSelectedResultIndex(
+      displayedCurationResult.length > 0 ? displayedCurationResult.length - 1 : null,
+    );
+  };
+
+  const deselectAllResultTracks = () => {
+    setSelectedResultIndexes([]);
+    setLastSelectedResultIndex(null);
+  };
+
   const clearSourceOnly = () => {
     setSourceText("");
     setSourceImportedLinks([]);
@@ -2356,11 +2775,20 @@ export default function CurationPage() {
     const nextSettings: SpaceApartSettings = {};
 
     nextModes[DUPLICATE_SPACE_KEY] =
-      spaceApartModes[DUPLICATE_SPACE_KEY] ?? "10";
+      spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
     nextSettings[DUPLICATE_SPACE_KEY] =
-      spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 10;
+      spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
+
+    groups.forEach((group) => {
+      nextModes[group.id] =
+        spaceApartModes[group.id] ?? spaceApartModes[DUPLICATE_SPACE_KEY] ?? "5";
+      nextSettings[group.id] =
+        spaceApartSettings[group.id] ?? spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 5;
+    });
 
     pushUndo();
+    setSelectedResultIndexes([]);
+    setLastSelectedResultIndex(null);
     setSpaceApartModes(nextModes);
     setSpaceApartSettings(nextSettings);
     setCurationBaseResult(output);
@@ -2387,6 +2815,9 @@ export default function CurationPage() {
       tracks: displayedCurationResult,
       trackCount: displayedCurationResult.length,
       createdAt: new Date().toISOString(),
+      duplicateGroups,
+      spaceApartSettings,
+      spaceApartModes,
     };
 
     const updated = [newSavedCuration, ...savedCurations];
@@ -2401,6 +2832,9 @@ export default function CurationPage() {
         name,
         account_id: activeAccountId,
         tracks: displayedCurationResult,
+        duplicate_groups: duplicateGroups,
+        space_apart_settings: spaceApartSettings,
+        space_apart_modes: spaceApartModes,
       });
       const normalized = normalizeSavedCuration(saved.item ?? saved);
       if (normalized) {
@@ -2417,7 +2851,15 @@ export default function CurationPage() {
   };
 
   const updateCuration = async () => {
-    if (!selectedCurationId || displayedCurationResult.length === 0) return;
+    if (displayedCurationResult.length === 0) {
+      setSendStatus("Run curation first before saving changes.");
+      return;
+    }
+
+    if (!selectedCurationId) {
+      setSendStatus("Select a saved curation first, then click Save Changes.");
+      return;
+    }
 
     let name = curationName.trim();
 
@@ -2428,29 +2870,66 @@ export default function CurationPage() {
 
     if (!name) return;
 
-    const next = savedCurations.map((curation) =>
-      curation.id === selectedCurationId
-        ? {
-            ...curation,
-            name,
-            tracks: displayedCurationResult,
-            trackCount: displayedCurationResult.length,
-            createdAt: new Date().toISOString(),
-          }
-        : curation,
+    const updatedCuration: SavedCuration = {
+      id: selectedCurationId,
+      name,
+      tracks: displayedCurationResult,
+      trackCount: displayedCurationResult.length,
+      createdAt: new Date().toISOString(),
+      duplicateGroups,
+      spaceApartSettings,
+      spaceApartModes,
+    };
+
+    const existsLocally = savedCurations.some(
+      (curation) => curation.id === selectedCurationId,
     );
 
+    const next = existsLocally
+      ? savedCurations.map((curation) =>
+          curation.id === selectedCurationId ? updatedCuration : curation,
+        )
+      : [updatedCuration, ...savedCurations];
+
     persistSavedCurations(next);
+    setSelectedCurationId(selectedCurationId);
     setCurationName(name);
+    setSendStatus("Curation changes saved.");
 
     try {
       await updateCurationInDatabase(selectedCurationId, {
         name,
         account_id: activeAccountId,
         tracks: displayedCurationResult,
+        duplicate_groups: duplicateGroups,
+        space_apart_settings: spaceApartSettings,
+        space_apart_modes: spaceApartModes,
       });
+      setSendStatus("Curation changes saved to database.");
     } catch {
-      setSendStatus("Updated locally. Database update failed.");
+      try {
+        const saved = await saveCurationToDatabase({
+          id: selectedCurationId,
+          name,
+          account_id: activeAccountId,
+          tracks: displayedCurationResult,
+          duplicate_groups: duplicateGroups,
+          space_apart_settings: spaceApartSettings,
+          space_apart_modes: spaceApartModes,
+        });
+        const normalized = normalizeSavedCuration(saved.item ?? saved);
+        if (normalized) {
+          const synced = [
+            normalized,
+            ...next.filter((item) => item.id !== normalized.id),
+          ];
+          persistSavedCurations(synced);
+          setSelectedCurationId(normalized.id);
+        }
+        setSendStatus("Curation changes saved to database.");
+      } catch {
+        setSendStatus("Updated locally. Database update failed.");
+      }
     }
   };
 
@@ -2461,8 +2940,8 @@ export default function CurationPage() {
     setSelectedCurationId(id);
     setCurationName(found.name);
     setCurationBaseResult(found.tracks);
-    setSpaceApartSettings({});
-    setSpaceApartModes({});
+    setSpaceApartSettings(found.spaceApartSettings ?? {});
+    setSpaceApartModes(found.spaceApartModes ?? {});
   };
 
   const deleteCuration = async (id: string) => {
@@ -2527,11 +3006,19 @@ export default function CurationPage() {
           </p>
         </div>
 
-        <div className="w-full max-w-[320px]">
+        <div className="flex w-full max-w-[390px] items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCsvImportOpen(true)}
+            className="h-12 whitespace-nowrap rounded-xl bg-green-600 px-6 text-sm font-semibold text-white transition hover:bg-green-500"
+          >
+            Import CSV
+          </button>
+
           <select
             value={selectedCurationId}
             onChange={(e) => loadCuration(e.target.value)}
-            className="h-12 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
+            className="h-12 w-[240px] rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
           >
             <option value="">Select saved curation</option>
             {savedCurations.map((item) => (
@@ -2556,6 +3043,12 @@ export default function CurationPage() {
             clearSide={clearSourceOnly}
             removeTrack={removeTrackFromSource}
             colorPalette={SOURCE_LINK_COLORS}
+            csvPlaylistOptions={sourceCsvPlaylists}
+            selectedCsvPlaylistId={selectedSourceCsvPlaylistId}
+            onSelectCsvPlaylist={(playlistId) => {
+              setSelectedSourceCsvPlaylistId(playlistId);
+              importCsvPlaylistOption("source", playlistId);
+            }}
             historySections={[
               {
                 side: "source",
@@ -2585,6 +3078,12 @@ export default function CurationPage() {
             clearSide={clearMyTracksOnly}
             removeTrack={removeTrackFromMyTracks}
             colorPalette={MY_LINK_COLORS}
+            csvPlaylistOptions={myCsvPlaylists}
+            selectedCsvPlaylistId={selectedMyCsvPlaylistId}
+            onSelectCsvPlaylist={(playlistId) => {
+              setSelectedMyCsvPlaylistId(playlistId);
+              importCsvPlaylistOption("my", playlistId);
+            }}
             historySections={[
               {
                 side: "source",
@@ -2661,8 +3160,33 @@ export default function CurationPage() {
         </div>
 
         <div className="mt-6 rounded-2xl border border-zinc-800 bg-black p-4">
-          <div className="mb-3 text-sm font-semibold text-white">
-            Curation Result
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold text-white">Curation Result</div>
+            {selectedResultIndexes.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={selectAllResultTracks}
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={deselectAllResultTracks}
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900"
+                >
+                  Deselect All
+                </button>
+                <button
+                  type="button"
+                  onClick={deleteSelectedResultTracks}
+                  className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/20"
+                >
+                  Delete Selected ({selectedResultIndexes.length})
+                </button>
+              </div>
+            ) : null}
           </div>
 
           {displayedCurationResult.length === 0 ? (
@@ -2688,13 +3212,16 @@ export default function CurationPage() {
                       ? MY_LINK_COLORS[myColorIndex % MY_LINK_COLORS.length]
                       : "bg-zinc-500";
 
-                const borderClass = isDuplicate
-                  ? "border-green-500 border-2"
-                  : isSource
-                    ? "border-red-500/20"
-                    : isMine
-                      ? "border-yellow-500/20"
-                      : "border-zinc-800";
+                const selected = selectedResultIndexes.includes(index);
+                const borderClass = selected
+                  ? "border-green-400 border-2"
+                  : isDuplicate
+                    ? "border-green-500 border-2"
+                    : isSource
+                      ? "border-red-500/20"
+                      : isMine
+                        ? "border-yellow-500/20"
+                        : "border-zinc-800";
 
                 return (
                   <div
@@ -2703,9 +3230,17 @@ export default function CurationPage() {
                     onDragStart={() => setResultDragIndex(index)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => reorderResultTrack(index)}
+                    onClick={(event) => handleResultTrackSelect(index, event.shiftKey)}
                     className={`flex cursor-move items-center justify-between rounded-xl border bg-zinc-950 px-4 py-3 ${borderClass}`}
                   >
                     <div className="flex min-w-0 items-center">
+                      <span
+                        className={`mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                          selected ? "border-green-400 bg-green-500" : "border-zinc-600 bg-black"
+                        }`}
+                      >
+                        {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
+                      </span>
                       <div className="mr-3 flex shrink-0 items-center gap-1.5">
                         <span className="h-2.5 w-2.5 rounded-full border border-white bg-white" />
                         <span
@@ -2718,7 +3253,10 @@ export default function CurationPage() {
                     </div>
 
                     <button
-                      onClick={() => deleteTrackFromResult(track)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteTrackFromResult(track);
+                      }}
                       className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300"
                     >
                       X
@@ -2835,6 +3373,82 @@ export default function CurationPage() {
           ) : null}
         </div>
       </div>
+
+      {csvImportOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCsvImportOpen(false);
+          }}
+        >
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-lg font-semibold text-white">Import CSV Dropdown</div>
+                <div className="mt-1 text-xs text-zinc-500">
+                  Columns: Source Playlist Tracks Playlist_ID, My Tracks Playlist_ID
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCsvImportOpen(false)}
+                className="rounded-lg border border-zinc-700 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-900"
+              >
+                X
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Import Mode
+                </label>
+                <select
+                  value={csvImportMode}
+                  onChange={(event) => setCsvImportMode(event.target.value as CsvImportMode)}
+                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none focus:border-green-500"
+                >
+                  <option value="replace">Replace playlists</option>
+                  <option value="add">Add playlists</option>
+                </select>
+                <div className="mt-2 text-xs text-zinc-500">
+                  Replace clears both dropdowns first. Add keeps the current dropdown playlists.
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-3">
+                <button
+                  type="button"
+                  onClick={downloadCurationCsvTemplate}
+                  className="text-sm font-bold text-white hover:text-green-300"
+                  title="Download CSV template"
+                >
+                  Download Template
+                </button>
+
+                <label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl bg-green-600 px-5 text-sm font-semibold text-white transition hover:bg-green-500">
+                  Upload CSV
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(event) => {
+                      void handleCurationCsvFile(event.target.files?.[0] ?? null);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+
+              {csvImportMessage ? (
+                <div className="rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3 text-sm text-green-300">
+                  {csvImportMessage}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <SavedCurationsCard
         savedCurations={savedCurations}

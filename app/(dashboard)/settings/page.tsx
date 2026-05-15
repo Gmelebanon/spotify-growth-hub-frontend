@@ -216,7 +216,7 @@ export default function SettingsPage() {
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-800 bg-black p-5">
               <div className="text-sm font-medium text-zinc-300">App version</div>
-              <div className="mt-1 text-sm text-zinc-500">Nerd Engine V1.2 050126</div>
+              <div className="mt-1 text-sm text-zinc-500">Nerd Engine V1.3 051026</div>
             </div>
 
             <div className="rounded-2xl border border-zinc-800 bg-black p-5">
