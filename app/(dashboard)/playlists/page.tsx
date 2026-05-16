@@ -164,8 +164,40 @@ function normalizeHistoryLabel(value?: string | null) {
   return clean;
 }
 
+function getDateKeyFromOffset(dayOffset: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - dayOffset);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeHistoryDateKey(value?: string | null) {
+  if (!value) return "";
+
+  const clean = String(value).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
+    return clean.slice(0, 10);
+  }
+
+  const labelMatch = clean.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (labelMatch) {
+    const currentYear = new Date().getFullYear();
+    const month = Number(labelMatch[2]);
+    const day = Number(labelMatch[1]);
+    return `${currentYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(clean);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return "";
+}
+
 function getNumericValue(value: unknown) {
-  if (typeof value === "number") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
   if (
     typeof value === "string" &&
     value.trim() !== "" &&
@@ -176,28 +208,59 @@ function getNumericValue(value: unknown) {
   return null;
 }
 
-function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
-  const label = formatDayLabel(dayOffset);
+function getFollowerCountForDay(playlist: PlaylistRow, dayOffset: number) {
+  const targetKey = getDateKeyFromOffset(dayOffset);
 
-  // First use backend-calculated daily_growth. This is the table value.
+  if (dayOffset === 0) {
+    const currentFollowers = getNumericValue(playlist.followers);
+    if (currentFollowers !== null) return currentFollowers;
+  }
+
+  const fromHistory = playlist.daily_history?.find(
+    (item) => normalizeHistoryDateKey(item.date) === targetKey,
+  );
+  const historyFollowers = getNumericValue(fromHistory?.followers);
+  if (historyFollowers !== null) return historyFollowers;
+
+  return null;
+}
+
+function getDirectGrowthForDay(playlist: PlaylistRow, dayOffset: number) {
+  const label = formatDayLabel(dayOffset);
+  const targetKey = getDateKeyFromOffset(dayOffset);
+
+  const fromHistory = playlist.daily_history?.find(
+    (item) => normalizeHistoryDateKey(item.date) === targetKey,
+  );
+  const historyGrowth = getNumericValue(fromHistory?.growth);
+  if (historyGrowth !== null) return historyGrowth;
+
   const fromDailyGrowth = playlist.daily_growth?.find(
     (item) =>
       normalizeHistoryLabel(item.label) === label ||
-      normalizeHistoryLabel(item.date) === label,
+      normalizeHistoryLabel(item.date) === label ||
+      normalizeHistoryDateKey(item.label) === targetKey ||
+      normalizeHistoryDateKey(item.date) === targetKey,
   );
+  const dailyGrowth = getNumericValue(fromDailyGrowth?.growth);
+  if (dailyGrowth !== null) return dailyGrowth;
 
-  if (fromDailyGrowth) {
-    return Number(fromDailyGrowth.growth ?? 0);
+  return null;
+}
+
+function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const followersToday = getFollowerCountForDay(playlist, dayOffset);
+  const followersPreviousDay = getFollowerCountForDay(playlist, dayOffset + 1);
+
+  // Correct daily stat logic:
+  // each date should show the change from the previous date, not the total
+  // follower count for that date.
+  if (followersToday !== null && followersPreviousDay !== null) {
+    return followersToday - followersPreviousDay;
   }
 
-  // Then use saved database daily_history if daily_growth is missing.
-  const fromHistory = playlist.daily_history?.find(
-    (item) => normalizeHistoryLabel(item.date) === label,
-  );
-
-  if (fromHistory) {
-    return Number(fromHistory.growth ?? 0);
-  }
+  const directGrowth = getDirectGrowthForDay(playlist, dayOffset);
+  if (directGrowth !== null) return directGrowth;
 
   // Final fallback for older API fields.
   const possibleKeys = [

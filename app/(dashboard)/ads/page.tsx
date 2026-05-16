@@ -5,7 +5,6 @@ import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { getAccounts } from "@/lib/api/accounts";
-import { getPlaylists } from "@/lib/api/playlists";
 import { useActiveAccountStore } from "@/lib/store/activeAccount";
 
 type CodeColor =
@@ -105,11 +104,6 @@ type PlaylistRow = {
     growth?: number;
   }>;
   updated_at?: string | null;
-  updatedAt?: string | null;
-  modified_at?: string | null;
-  modifiedAt?: string | null;
-  last_modified?: string | null;
-  lastModified?: string | null;
   last_update?: string | null;
   last_update_date?: string | null;
   synced_at?: string | null;
@@ -117,6 +111,7 @@ type PlaylistRow = {
   last_synced?: string | null;
   lastSyncedAt?: string | null;
   lastSynced?: string | null;
+  [key: string]: unknown;
 };
 
 type AdEntry = {
@@ -171,6 +166,33 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
+
+
+async function fetchPlaylistsWithHistory(
+  accountId: number,
+): Promise<PlaylistRow[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/accounts/${accountId}/playlists?ts=${Date.now()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(
+      message || `Failed to load playlists for account ${accountId}`,
+    );
+  }
+
+  const payload = await response.json();
+
+  if (Array.isArray(payload)) return payload as PlaylistRow[];
+  if (Array.isArray(payload?.items)) return payload.items as PlaylistRow[];
+  if (Array.isArray(payload?.playlists)) return payload.playlists as PlaylistRow[];
+
+  return [];
+}
 
 const defaultCategoryOptions = [
   "Category",
@@ -502,42 +524,22 @@ function formatDayMonth(offset: number) {
   return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
+
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
 }
 
 function getLastSyncedAt(playlist: PlaylistRow) {
-  const record = playlist as PlaylistRow & Record<string, unknown>;
-  const adsMeta = (record.ads_meta || {}) as Record<string, unknown>;
-
-  const candidates = [
-    record.last_synced_at,
-    record.last_synced,
-    record.lastSyncedAt,
-    record.lastSynced,
-    record.synced_at,
-    record.updated_at,
-    record.updatedAt,
-    record.modified_at,
-    record.modifiedAt,
-    record.last_modified,
-    record.lastModified,
-    record.last_update,
-    record.last_update_date,
-    adsMeta.last_synced,
-    adsMeta.last_synced_at,
-    adsMeta.synced_at,
-    adsMeta.updated_at,
-  ];
-
-  const valid = candidates.find((value) => {
-    if (!value) return false;
-    const date = new Date(String(value));
-    return !Number.isNaN(date.getTime());
-  });
-
-  return valid ? String(valid) : null;
+  return (
+    playlist.last_synced_at ??
+    playlist.last_synced ??
+    playlist.lastSyncedAt ??
+    playlist.lastSynced ??
+    playlist.synced_at ??
+    null
+  );
 }
 
 function readNumber(value: unknown) {
@@ -573,52 +575,35 @@ function getTrackCount(playlist: PlaylistRow) {
 }
 
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  const historyItem =
-    playlist.daily_history?.[offset] ?? playlist.daily_growth?.[offset];
+  return getGrowthValue(playlist, offset);
+}
 
-  const historyFollowers =
-    readNumber(historyItem?.followers) ??
-    readNumber(historyItem?.followers_count) ??
-    readNumber(historyItem?.count) ??
-    readNumber(historyItem?.value);
 
-  if (historyFollowers !== null) return historyFollowers;
+function getDateKeyForOffset(offset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - offset);
+  return date.toISOString().slice(0, 10);
+}
 
-  const record = playlist as unknown as Record<string, unknown>;
+function getDailyValue(playlist: PlaylistRow, offset: number) {
+  const targetDate = getDateKeyForOffset(offset);
 
-  if (offset === 0) {
-    return (
-      readNumber(record.followers_today) ??
-      readNumber(record.today_followers) ??
-      readNumber(record.followers) ??
-      readNumber(playlist.followers) ??
-      readNumber(record.today) ??
-      readNumber(record.today_growth) ??
-      readNumber(record.growth_today) ??
-      readNumber(record.growth_24h) ??
-      readNumber(record.growth) ??
-      0
-    );
+  const row =
+    playlist.daily_growth?.find((item) => item.date === targetDate) ??
+    playlist.daily_history?.find((item) => item.date === targetDate);
+
+  return Number(row?.growth ?? 0);
+}
+
+
+function getFollowerGainSum(playlist: PlaylistRow, days: 7 | 30) {
+  let total = 0;
+
+  for (let offset = 0; offset < days; offset += 1) {
+    total += getDailyValue(playlist, offset);
   }
 
-  const keys = [
-    `followers_day_${offset}`,
-    `followers_today_minus_${offset}`,
-    `today_minus_${offset}_followers`,
-    `day_${offset}_followers`,
-    `today_minus_${offset}`,
-    `day_${offset}`,
-  ];
-
-  for (const key of keys) {
-    const value = readNumber(record[key]);
-    if (value !== null) return value;
-  }
-
-  const fallbackGrowth = readNumber(historyItem?.growth);
-  if (fallbackGrowth !== null) return fallbackGrowth;
-
-  return 0;
+  return total;
 }
 
 function isWithinLastDays(value: string | null | undefined, days: number) {
@@ -980,14 +965,14 @@ export default function AdsPage() {
 
   const singleAccountQuery = useQuery({
     queryKey: ["ads-playlists", activeAccountId],
-    queryFn: () => getPlaylists(activeAccountId as number),
+    queryFn: () => fetchPlaylistsWithHistory(activeAccountId as number),
     enabled: !!activeAccountId && activeAccountId !== ALL_ACCOUNTS_ID,
   });
 
   const allAccountQueries = useQueries({
     queries: accounts.map((account) => ({
       queryKey: ["ads-playlists", account.id],
-      queryFn: () => getPlaylists(account.id),
+      queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: activeAccountId === ALL_ACCOUNTS_ID,
     })),
   });
@@ -1061,6 +1046,106 @@ export default function AdsPage() {
       cancelled = true;
     };
   }, [playlists]);
+
+
+  const playlistManagerStateQuery = useQuery({
+    queryKey: ["playlist-manager-state-for-ads"],
+    queryFn: async () => {
+      const response = await fetch(
+        `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) return null;
+
+      const payload = await response.json();
+      return payload?.state ?? null;
+    },
+    retry: false,
+  });
+
+  const playlistManagerSyncMap = useMemo(() => {
+    const state = playlistManagerStateQuery.data as
+      | {
+          syncedPlaylists?: Array<Record<string, unknown>>;
+          synced_playlists?: Array<Record<string, unknown>>;
+          masterPlaylists?: Array<Record<string, unknown>>;
+          master_playlists?: Array<Record<string, unknown>>;
+        }
+      | null
+      | undefined;
+
+    const items = [
+      ...(state?.syncedPlaylists ?? []),
+      ...(state?.synced_playlists ?? []),
+      ...(state?.masterPlaylists ?? []),
+      ...(state?.master_playlists ?? []),
+    ];
+
+    const map = new Map<string, string>();
+
+    for (const item of items) {
+      const lastSyncedAt =
+        (item.lastSyncedAt as string | undefined) ??
+        (item.last_synced_at as string | undefined) ??
+        (item.lastSynced as string | undefined) ??
+        (item.last_synced as string | undefined) ??
+        (item.syncedAt as string | undefined) ??
+        (item.synced_at as string | undefined) ??
+        (item.updatedAt as string | undefined) ??
+        (item.updated_at as string | undefined) ??
+        null;
+
+      if (!lastSyncedAt) continue;
+
+      const accountId = item.accountId ?? item.account_id;
+      const playlistId =
+        item.playlistId ??
+        item.playlist_id ??
+        item.id ??
+        item.spotify_id ??
+        item.spotifyPlaylistId ??
+        item.spotify_playlist_id;
+      const spotifyId =
+        item.spotifyId ??
+        item.spotify_id ??
+        item.spotifyPlaylistId ??
+        item.spotify_playlist_id;
+      const name = item.name ?? item.title ?? item.playlistName ?? item.display_name;
+
+      for (const key of [
+        accountId && playlistId ? `${accountId}-${playlistId}` : null,
+        accountId && spotifyId ? `${accountId}-${spotifyId}` : null,
+        playlistId ? String(playlistId) : null,
+        spotifyId ? String(spotifyId) : null,
+        name ? String(name) : null,
+      ]) {
+        if (key) map.set(key, lastSyncedAt);
+      }
+    }
+
+    return map;
+  }, [playlistManagerStateQuery.data]);
+
+  const getPlaylistManagerLastSynced = (playlist: PlaylistRow) => {
+    const possibleKeys = [
+      `${playlist.account_id ?? ""}-${playlist.id}`,
+      `${playlist.account_id ?? ""}-${playlist.spotify_id ?? ""}`,
+      `${playlist.account_id ?? ""}-${playlist.spotify_playlist_id ?? ""}`,
+      String(playlist.id ?? ""),
+      String(playlist.spotify_id ?? ""),
+      String(playlist.spotify_playlist_id ?? ""),
+      playlist.name,
+      playlist.title,
+    ].filter((item) => item && item !== "-");
+
+    for (const key of possibleKeys) {
+      const value = playlistManagerSyncMap.get(String(key));
+      if (value) return value;
+    }
+
+    return getLastSyncedAt(playlist);
+  };
 
   const isLoading =
     activeAccountId === ALL_ACCOUNTS_ID
@@ -1185,9 +1270,9 @@ export default function AdsPage() {
       if (sortField === "today4")
         return (getTodayValue(a, 4) - getTodayValue(b, 4)) * dir;
       if (sortField === "growth7d")
-        return ((a.growth_7d ?? 0) - (b.growth_7d ?? 0)) * dir;
+        return (getFollowerGainSum(a, 7) - getFollowerGainSum(b, 7)) * dir;
       if (sortField === "growth30d")
-        return ((a.growth_30d ?? 0) - (b.growth_30d ?? 0)) * dir;
+        return (getFollowerGainSum(a, 30) - getFollowerGainSum(b, 30)) * dir;
       if (sortField === "country")
         return rowA.country.localeCompare(rowB.country) * dir;
       return 0;
@@ -1575,14 +1660,14 @@ export default function AdsPage() {
         playlist.followers ?? 0,
         data.ads.length,
         getTrackCount(playlist),
-        formatDate(getLastSyncedAt(playlist)),
+        formatDate(getPlaylistManagerLastSynced(playlist)),
         getTodayValue(playlist, 0),
         getTodayValue(playlist, 1),
         getTodayValue(playlist, 2),
         getTodayValue(playlist, 3),
         getTodayValue(playlist, 4),
-        playlist.growth_7d ?? 0,
-        playlist.growth_30d ?? 0,
+        getFollowerGainSum(playlist, 7),
+        getFollowerGainSum(playlist, 30),
         data.country,
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
@@ -2117,7 +2202,7 @@ export default function AdsPage() {
                       <div className="px-2">{data.ads.length}</div>
                       <div className="px-2">{getTrackCount(playlist)}</div>
                       <div className="px-2 text-[11px]">
-                        {formatDate(getLastSyncedAt(playlist))}
+                        {formatDate(getPlaylistManagerLastSynced(playlist))}
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 0)} />
@@ -2135,10 +2220,10 @@ export default function AdsPage() {
                         <GrowthCell value={getTodayValue(playlist, 4)} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={playlist.growth_7d} />
+                        <GrowthCell value={getFollowerGainSum(playlist, 7)} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={playlist.growth_30d} />
+                        <GrowthCell value={getFollowerGainSum(playlist, 30)} />
                       </div>
                       <div className="px-.5">
                         <select
