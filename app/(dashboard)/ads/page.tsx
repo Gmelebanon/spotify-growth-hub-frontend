@@ -546,6 +546,19 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function readNumericValue(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/^\+/, "").trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
 function formatAdDateDisplay(value: string) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
@@ -574,6 +587,92 @@ function getTrackCount(playlist: PlaylistRow) {
   return playlist.tracks_count ?? playlist.total_tracks ?? 0;
 }
 
+type DailyStatRow = NonNullable<PlaylistRow["daily_growth"]>[number];
+
+function getDailyRows(playlist: PlaylistRow): DailyStatRow[] {
+  return [...(playlist.daily_growth ?? []), ...(playlist.daily_history ?? [])];
+}
+
+function getDailyRowForOffset(playlist: PlaylistRow, offset: number) {
+  const targetDate = getDateKeyForOffset(offset);
+  return getDailyRows(playlist).find((item) => item.date === targetDate) ?? null;
+}
+
+function looksLikeFollowerSnapshot(value: number, playlist: PlaylistRow) {
+  const followers = readNumericValue(playlist.followers);
+
+  if (followers !== null && followers > 0) {
+    return value >= followers * 0.6;
+  }
+
+  return Math.abs(value) > 100;
+}
+
+function getSnapshotFromDailyRow(row: DailyStatRow | null, playlist: PlaylistRow) {
+  if (!row) return null;
+
+  const explicitSnapshot =
+    readNumericValue(row.followers) ??
+    readNumericValue(row.followers_count) ??
+    readNumericValue(row.count) ??
+    readNumericValue(row.value);
+
+  if (explicitSnapshot !== null) return explicitSnapshot;
+
+  const growthValue = readNumericValue(row.growth);
+  if (growthValue !== null && looksLikeFollowerSnapshot(growthValue, playlist)) {
+    return growthValue;
+  }
+
+  return null;
+}
+
+function getFallbackGrowthValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
+  const directValues = [
+    playlist.today ?? playlist.today_growth ?? playlist.growth_today ?? playlist.growth_24h,
+    playlist.today_minus_1 ?? playlist.day_1,
+    playlist.today_minus_2 ?? playlist.day_2,
+    playlist.today_minus_3 ?? playlist.day_3,
+    playlist.today_minus_4 ?? playlist.day_4,
+  ];
+
+  const snapshotValues = [
+    playlist.followers_today ?? playlist.followers,
+    playlist.followers_day_1,
+    playlist.followers_day_2,
+    playlist.followers_day_3,
+    playlist.followers_day_4,
+  ];
+
+  const currentSnapshot = readNumericValue(snapshotValues[offset]);
+  const nextSnapshot = readNumericValue(snapshotValues[offset + 1]);
+
+  if (currentSnapshot !== null && nextSnapshot !== null) {
+    return currentSnapshot - nextSnapshot;
+  }
+
+  return readNumericValue(directValues[offset]) ?? 0;
+}
+
+function getGrowthValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
+  const row = getDailyRowForOffset(playlist, offset);
+  const previousRow = getDailyRowForOffset(playlist, offset + 1);
+  const rowGrowth = readNumericValue(row?.growth);
+
+  const currentSnapshot = getSnapshotFromDailyRow(row, playlist);
+  const previousSnapshot = getSnapshotFromDailyRow(previousRow, playlist);
+
+  if (currentSnapshot !== null && previousSnapshot !== null) {
+    return currentSnapshot - previousSnapshot;
+  }
+
+  if (rowGrowth !== null && !looksLikeFollowerSnapshot(rowGrowth, playlist)) {
+    return rowGrowth;
+  }
+
+  return getFallbackGrowthValue(playlist, offset);
+}
+
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
   return getGrowthValue(playlist, offset);
 }
@@ -586,13 +685,28 @@ function getDateKeyForOffset(offset: number) {
 }
 
 function getDailyValue(playlist: PlaylistRow, offset: number) {
-  const targetDate = getDateKeyForOffset(offset);
+  const safeOffset = offset as 0 | 1 | 2 | 3 | 4;
 
-  const row =
-    playlist.daily_growth?.find((item) => item.date === targetDate) ??
-    playlist.daily_history?.find((item) => item.date === targetDate);
+  if (offset >= 0 && offset <= 4) {
+    return getGrowthValue(playlist, safeOffset);
+  }
 
-  return Number(row?.growth ?? 0);
+  const row = getDailyRowForOffset(playlist, offset);
+  const previousRow = getDailyRowForOffset(playlist, offset + 1);
+  const rowGrowth = readNumericValue(row?.growth);
+
+  const currentSnapshot = getSnapshotFromDailyRow(row, playlist);
+  const previousSnapshot = getSnapshotFromDailyRow(previousRow, playlist);
+
+  if (currentSnapshot !== null && previousSnapshot !== null) {
+    return currentSnapshot - previousSnapshot;
+  }
+
+  if (rowGrowth !== null && !looksLikeFollowerSnapshot(rowGrowth, playlist)) {
+    return rowGrowth;
+  }
+
+  return 0;
 }
 
 
