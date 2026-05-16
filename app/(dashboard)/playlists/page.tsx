@@ -79,7 +79,8 @@ type CreatedPlaylistDetails = {
 
 const ALL_ACCOUNTS_ID = -1;
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "https://spotify-growth-hub-backend.onrender.com";
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 
 async function fetchPlaylistsWithHistory(
@@ -147,28 +148,15 @@ function formatDayLabel(dayOffset: number) {
   return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
-function normalizeHistoryLabel(value?: string | null) {
-  if (!value) return "";
-
-  const clean = String(value).trim();
-
-  // Already returned by backend as "5/5".
-  if (/^\d{1,2}\/\d{1,2}$/.test(clean)) return clean;
-
-  // ISO date like 2026-05-05 or full ISO datetime.
-  const parsed = new Date(clean);
-  if (!Number.isNaN(parsed.getTime())) {
-    return `${parsed.getDate()}/${parsed.getMonth() + 1}`;
-  }
-
-  return clean;
+function toLocalDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function getDateKeyFromOffset(dayOffset: number) {
   const date = new Date();
   date.setHours(12, 0, 0, 0);
   date.setDate(date.getDate() - dayOffset);
-  return date.toISOString().slice(0, 10);
+  return toLocalDateKey(date);
 }
 
 function normalizeHistoryDateKey(value?: string | null) {
@@ -190,79 +178,167 @@ function normalizeHistoryDateKey(value?: string | null) {
 
   const parsed = new Date(clean);
   if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
+    return toLocalDateKey(parsed);
   }
 
   return "";
 }
 
+function normalizeHistoryLabel(value?: string | null) {
+  if (!value) return "";
+
+  const clean = String(value).trim();
+
+  if (/^\d{1,2}\/\d{1,2}$/.test(clean)) return clean;
+
+  const key = normalizeHistoryDateKey(clean);
+  if (!key) return clean;
+
+  const [, month, day] = key.match(/^\d{4}-(\d{2})-(\d{2})$/) ?? [];
+  return month && day ? `${Number(day)}/${Number(month)}` : clean;
+}
+
 function getNumericValue(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (
-    typeof value === "string" &&
-    value.trim() !== "" &&
-    !Number.isNaN(Number(value))
-  ) {
-    return Number(value);
+  if (typeof value === "string") {
+    const normalized = value.replace("+", "").trim();
+    if (normalized !== "" && !Number.isNaN(Number(normalized))) {
+      return Number(normalized);
+    }
   }
   return null;
 }
 
-function getFollowerCountForDay(playlist: PlaylistRow, dayOffset: number) {
-  const targetKey = getDateKeyFromOffset(dayOffset);
+type HistorySourceItem = {
+  date?: string | null;
+  label?: string | null;
+  snapshot_date?: string | null;
+  recorded_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  followers?: number | string | null;
+  follower_count?: number | string | null;
+  followers_count?: number | string | null;
+  total_followers?: number | string | null;
+  growth?: number | string | null;
+  daily_growth?: number | string | null;
+  change?: number | string | null;
+  delta?: number | string | null;
+  [key: string]: unknown;
+};
 
+function getItemDateKey(item: HistorySourceItem) {
+  return (
+    normalizeHistoryDateKey(item.date) ||
+    normalizeHistoryDateKey(item.snapshot_date) ||
+    normalizeHistoryDateKey(item.recorded_at) ||
+    normalizeHistoryDateKey(item.created_at) ||
+    normalizeHistoryDateKey(item.updated_at) ||
+    normalizeHistoryDateKey(item.label)
+  );
+}
+
+function getFollowerSnapshotFromItem(item: HistorySourceItem) {
+  return (
+    getNumericValue(item.followers) ??
+    getNumericValue(item.follower_count) ??
+    getNumericValue(item.followers_count) ??
+    getNumericValue(item.total_followers)
+  );
+}
+
+function getDirectGrowthFromItem(item: HistorySourceItem) {
+  return (
+    getNumericValue(item.daily_growth) ??
+    getNumericValue(item.growth) ??
+    getNumericValue(item.change) ??
+    getNumericValue(item.delta)
+  );
+}
+
+function getHistoryItems(playlist: PlaylistRow): HistorySourceItem[] {
+  const items: HistorySourceItem[] = [];
+
+  if (Array.isArray(playlist.daily_history)) {
+    items.push(...(playlist.daily_history as HistorySourceItem[]));
+  }
+
+  if (Array.isArray(playlist.daily_growth)) {
+    items.push(...(playlist.daily_growth as HistorySourceItem[]));
+  }
+
+  const possibleArrays = [
+    playlist.history,
+    playlist.follower_history,
+    playlist.followers_history,
+    playlist.stats_history,
+    playlist.daily_stats,
+    playlist.snapshots,
+  ];
+
+  possibleArrays.forEach((value) => {
+    if (Array.isArray(value)) items.push(...(value as HistorySourceItem[]));
+  });
+
+  return items;
+}
+
+function looksLikeFollowerSnapshot(playlist: PlaylistRow, value: number) {
+  const currentFollowers = getNumericValue(playlist.followers);
+
+  if (currentFollowers === null || currentFollowers <= 0) {
+    return Math.abs(value) >= 100;
+  }
+
+  const lowerBound = Math.max(50, currentFollowers * 0.35);
+  const upperBound = currentFollowers + Math.max(50, currentFollowers * 0.35);
+
+  return value >= lowerBound && value <= upperBound;
+}
+
+function getFollowerCountForDay(playlist: PlaylistRow, dayOffset: number) {
   if (dayOffset === 0) {
     const currentFollowers = getNumericValue(playlist.followers);
     if (currentFollowers !== null) return currentFollowers;
   }
 
-  const fromHistory = playlist.daily_history?.find(
-    (item) => normalizeHistoryDateKey(item.date) === targetKey,
-  );
-  const historyFollowers = getNumericValue(fromHistory?.followers);
-  if (historyFollowers !== null) return historyFollowers;
+  const targetKey = getDateKeyFromOffset(dayOffset);
+  const targetLabel = formatDayLabel(dayOffset);
+
+  for (const item of getHistoryItems(playlist)) {
+    const itemKey = getItemDateKey(item);
+    const itemLabel = normalizeHistoryLabel(item.label) || normalizeHistoryLabel(item.date);
+
+    if (itemKey !== targetKey && itemLabel !== targetLabel) continue;
+
+    const followerSnapshot = getFollowerSnapshotFromItem(item);
+    if (followerSnapshot !== null) return followerSnapshot;
+
+    const growthField = getDirectGrowthFromItem(item);
+    if (growthField !== null && looksLikeFollowerSnapshot(playlist, growthField)) {
+      return growthField;
+    }
+  }
 
   return null;
 }
 
 function getDirectGrowthForDay(playlist: PlaylistRow, dayOffset: number) {
-  const label = formatDayLabel(dayOffset);
   const targetKey = getDateKeyFromOffset(dayOffset);
+  const targetLabel = formatDayLabel(dayOffset);
 
-  const fromHistory = playlist.daily_history?.find(
-    (item) => normalizeHistoryDateKey(item.date) === targetKey,
-  );
-  const historyGrowth = getNumericValue(fromHistory?.growth);
-  if (historyGrowth !== null) return historyGrowth;
+  for (const item of getHistoryItems(playlist)) {
+    const itemKey = getItemDateKey(item);
+    const itemLabel = normalizeHistoryLabel(item.label) || normalizeHistoryLabel(item.date);
 
-  const fromDailyGrowth = playlist.daily_growth?.find(
-    (item) =>
-      normalizeHistoryLabel(item.label) === label ||
-      normalizeHistoryLabel(item.date) === label ||
-      normalizeHistoryDateKey(item.label) === targetKey ||
-      normalizeHistoryDateKey(item.date) === targetKey,
-  );
-  const dailyGrowth = getNumericValue(fromDailyGrowth?.growth);
-  if (dailyGrowth !== null) return dailyGrowth;
+    if (itemKey !== targetKey && itemLabel !== targetLabel) continue;
 
-  return null;
-}
-
-function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
-  const followersToday = getFollowerCountForDay(playlist, dayOffset);
-  const followersPreviousDay = getFollowerCountForDay(playlist, dayOffset + 1);
-
-  // Correct daily stat logic:
-  // each date should show the change from the previous date, not the total
-  // follower count for that date.
-  if (followersToday !== null && followersPreviousDay !== null) {
-    return followersToday - followersPreviousDay;
+    const directGrowth = getDirectGrowthFromItem(item);
+    if (directGrowth !== null && !looksLikeFollowerSnapshot(playlist, directGrowth)) {
+      return directGrowth;
+    }
   }
 
-  const directGrowth = getDirectGrowthForDay(playlist, dayOffset);
-  if (directGrowth !== null) return directGrowth;
-
-  // Final fallback for older API fields.
   const possibleKeys = [
     dayOffset === 0 ? "today" : `today_minus_${dayOffset}`,
     dayOffset === 0 ? "growth_24h" : `growth_day_${dayOffset}`,
@@ -273,8 +349,25 @@ function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
 
   for (const key of possibleKeys) {
     const value = getNumericValue(playlist[key]);
-    if (value !== null) return value;
+    if (value !== null && !looksLikeFollowerSnapshot(playlist, value)) return value;
   }
+
+  return null;
+}
+
+function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const followersToday = getFollowerCountForDay(playlist, dayOffset);
+  const followersPreviousDay = getFollowerCountForDay(playlist, dayOffset + 1);
+
+  // Preferred database logic: if the database provides follower snapshots,
+  // display the real daily change between consecutive snapshots.
+  if (followersToday !== null && followersPreviousDay !== null) {
+    return followersToday - followersPreviousDay;
+  }
+
+  // Fallback only when the backend already provides a real growth/change value.
+  const directGrowth = getDirectGrowthForDay(playlist, dayOffset);
+  if (directGrowth !== null) return directGrowth;
 
   return 0;
 }
