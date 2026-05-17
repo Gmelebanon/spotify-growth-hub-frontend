@@ -975,6 +975,7 @@ export default function AdsPage() {
     master: "",
   });
   const [selectedRows, setSelectedRows] = useState<Record<string, boolean>>({});
+  const [visibleRowLimit, setVisibleRowLimit] = useState(120);
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<
     number | null
   >(null);
@@ -1383,6 +1384,15 @@ export default function AdsPage() {
     });
   }, [playlists, search, filters, sortField, sortOrder, rowData, accounts]);
 
+  useEffect(() => {
+    setVisibleRowLimit(120);
+  }, [search, filters, sortField, sortOrder, activeAccountId]);
+
+  const visibleRows = useMemo(
+    () => filtered.slice(0, visibleRowLimit),
+    [filtered, visibleRowLimit],
+  );
+
   const selectedRowKeys = useMemo(
     () => filtered.map(playlistKey).filter((key) => selectedRows[key]),
     [filtered, selectedRows],
@@ -1395,7 +1405,7 @@ export default function AdsPage() {
   );
 
   const maxAdColumns = Math.min(
-    Math.max(0, ...filtered.map((p) => getRowData(p).ads.length)),
+    Math.max(0, ...visibleRows.map((p) => getRowData(p).ads.length)),
     12,
   );
   const adColumnCount = Math.max(maxAdColumns, 1);
@@ -1406,14 +1416,14 @@ export default function AdsPage() {
       playlist: PlaylistRow;
       adIndex: number;
     }> = [];
-    filtered.forEach((playlist) => {
+    visibleRows.forEach((playlist) => {
       const rowKey = playlistKey(playlist);
       getRowData(playlist).ads.forEach((_, adIndex) => {
         items.push({ key: `${rowKey}::${adIndex}`, playlist, adIndex });
       });
     });
     return items;
-  }, [filtered, rowData]);
+  }, [visibleRows, rowData]);
 
   const gridTemplate = `46px 46px 46px 230px 122px 122px 124px 142px 54px 46px 64px 88px 48px 44px 44px 44px 44px 44px 48px 48px 118px 48px ${Array.from(
     { length: adColumnCount },
@@ -2180,7 +2190,7 @@ export default function AdsPage() {
                     Updating playlist stats...
                   </div>
                 ) : null}
-                {filtered.map((playlist, rowIndex) => {
+                {visibleRows.map((playlist, rowIndex) => {
                   const key = playlistKey(playlist);
                   const data = getRowData(playlist);
                   const titleColor = getColorOption(data.color).textClass;
@@ -2398,6 +2408,17 @@ export default function AdsPage() {
                     </div>
                   );
                 })}
+                {visibleRows.length < filtered.length ? (
+                  <div className="flex items-center justify-center border-b border-zinc-900 px-5 py-4">
+                    <button
+                      type="button"
+                      onClick={() => setVisibleRowLimit((current) => current + 120)}
+                      className="rounded-xl border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400"
+                    >
+                      Show more rows ({visibleRows.length} of {filtered.length})
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
