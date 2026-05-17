@@ -716,6 +716,10 @@ function DownloadIcon() {
   return <span className="text-[15px] leading-none">↓</span>;
 }
 
+function UndoIcon() {
+  return <span className="inline-block rotate-90 text-[16px] leading-none">↶</span>;
+}
+
 function UploadIcon() {
   return <span className="text-[15px] leading-none">↑</span>;
 }
@@ -944,6 +948,7 @@ export default function AdsPage() {
     number | null
   >(null);
   const [rowData, setRowData] = useState<Record<string, RowMeta>>({});
+  const [undoStack, setUndoStack] = useState<Record<string, RowMeta>[]>([]);
   const [adModalKey, setAdModalKey] = useState<string | null>(null);
   const [bulkAdModalOpen, setBulkAdModalOpen] = useState(false);
   const [modalAdIndex, setModalAdIndex] = useState<number | null>(null);
@@ -1249,8 +1254,25 @@ export default function AdsPage() {
     rowData[playlistKey(playlist)] ?? getDefaultRowData(playlist);
 
   const persistRowData = (nextData: Record<string, RowMeta>) => {
+    setUndoStack((current) => [rowData, ...current].slice(0, 20));
     setRowData(nextData);
     window.localStorage.setItem(ADS_DATA_STORAGE_KEY, JSON.stringify(nextData));
+  };
+
+  const undoLastChange = () => {
+    setUndoStack((current) => {
+      const [previous, ...rest] = current;
+      if (!previous) return current;
+
+      setRowData(previous);
+      window.localStorage.setItem(ADS_DATA_STORAGE_KEY, JSON.stringify(previous));
+      setSelectedAds({});
+      setLastSelectedAdKey(null);
+      setSelectedRows({});
+      setLastSelectedRowIndex(null);
+
+      return rest;
+    });
   };
 
   const updateRowData = (playlist: PlaylistRow, updates: Partial<RowMeta>) => {
@@ -1389,7 +1411,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 46px 46px 230px 122px 122px 124px 142px 54px 46px 64px 88px 48px 44px 44px 44px 44px 44px 48px 48px 118px 48px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 124px 124px 92px 84px 142px 54px 46px 64px 88px 48px 44px 44px 44px 44px 48px 48px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -1709,6 +1731,7 @@ export default function AdsPage() {
       "Title",
       "Category",
       "Genre",
+      "Country",
       "Account",
       "Master",
       "Followers",
@@ -1722,7 +1745,6 @@ export default function AdsPage() {
       formatDayMonth(4),
       "7D",
       "30D",
-      "Country",
       "Ad Dates",
     ];
     const rows = filtered.map((playlist) => {
@@ -1733,6 +1755,7 @@ export default function AdsPage() {
         playlist.name,
         data.category,
         data.genre,
+        data.country,
         getAccountName(playlist.account_id),
         data.master,
         playlist.followers ?? 0,
@@ -1746,7 +1769,6 @@ export default function AdsPage() {
         getTodayValue(playlist, 4),
         getFollowerGainSum(playlist, 7),
         getFollowerGainSum(playlist, 30),
-        data.country,
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
     });
@@ -1923,6 +1945,15 @@ export default function AdsPage() {
           >
             <DownloadIcon />
           </button>
+          <button
+            type="button"
+            onClick={undoLastChange}
+            disabled={undoStack.length === 0}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:text-zinc-300"
+            title="Undo last ads table edit"
+          >
+            <UndoIcon />
+          </button>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -1999,7 +2030,7 @@ export default function AdsPage() {
         <div className="h-[calc(100vh-155px)] w-full max-w-full overflow-auto overscroll-contain pb-3 [scrollbar-color:#22c55e_#18181b] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-3 [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar-corner]:bg-zinc-950 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-900 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-500">
           <div className="min-w-max">
             <div
-              className="sticky top-0 z-10 grid border-b border-zinc-800 bg-zinc-950/95 backdrop-blur"
+              className="sticky top-0 z-10 grid min-h-[50px] items-center border-b border-zinc-800 bg-zinc-950/95 backdrop-blur"
               style={{ gridTemplateColumns: gridTemplate }}
             >
               <div className="px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
@@ -2040,6 +2071,12 @@ export default function AdsPage() {
                 >
                   +
                 </button>
+              </div>
+              <div
+                className={headerClass("country")}
+                onClick={() => toggleSort("country")}
+              >
+                Country {arrowFor("country")}
               </div>
               <div
                 className={headerClass("account")}
@@ -2115,12 +2152,6 @@ export default function AdsPage() {
                 onClick={() => toggleSort("growth30d")}
               >
                 30D {arrowFor("growth30d")}
-              </div>
-              <div
-                className={headerClass("country")}
-                onClick={() => toggleSort("country")}
-              >
-                Country {arrowFor("country")}
               </div>
               <div className="px-2 py-3 text-center text-[10px] font-semibold uppercase text-zinc-400">
                 Ad Date
@@ -2259,6 +2290,26 @@ export default function AdsPage() {
                           ))}
                         </select>
                       </div>
+                      <div className="px-1">
+                        <select
+                          value={data.country}
+                          onChange={(e) =>
+                            updateRowData(playlist, { country: e.target.value })
+                          }
+                          className="h-8 w-[80px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
+                          title={data.country || "Country"}
+                        >
+                          <option value="">Country</option>
+                          {countryOptions.map((country, index) => (
+                            <option
+                              key={`country-${country}-${index}`}
+                              value={country}
+                            >
+                              {country}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="truncate px-2 text-zinc-400">
                         {getAccountName(playlist.account_id)}
                       </div>
@@ -2307,26 +2358,6 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getFollowerGainSum(playlist, 30)} />
-                      </div>
-                      <div className="px-.5">
-                        <select
-                          value={data.country}
-                          onChange={(e) =>
-                            updateRowData(playlist, { country: e.target.value })
-                          }
-                          className="h-8 w-[80px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                          title={data.country || "Country"}
-                        >
-                          <option value="">Country</option>
-                          {countryOptions.map((country, index) => (
-                            <option
-                              key={`country-${country}-${index}`}
-                              value={country}
-                            >
-                              {country}
-                            </option>
-                          ))}
-                        </select>
                       </div>
                       <div className="flex items-center justify-center px-2">
                         <button
