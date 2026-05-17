@@ -1001,6 +1001,8 @@ export default function AdsPage() {
   const accountsQuery = useQuery<AccountRow[]>({
     queryKey: ["accounts"],
     queryFn: getAccounts,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
   const accounts = accountsQuery.data ?? [];
 
@@ -1085,6 +1087,8 @@ export default function AdsPage() {
     queryKey: ["ads-playlists", activeAccountId],
     queryFn: () => fetchPlaylistsWithHistory(activeAccountId as number),
     enabled: !!activeAccountId && activeAccountId !== ALL_ACCOUNTS_ID,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const allAccountQueries = useQueries({
@@ -1092,6 +1096,8 @@ export default function AdsPage() {
       queryKey: ["ads-playlists", account.id],
       queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: activeAccountId === ALL_ACCOUNTS_ID,
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
     })),
   });
 
@@ -1109,6 +1115,8 @@ export default function AdsPage() {
       return payload?.state ?? null;
     },
     retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const playlists = useMemo(() => {
@@ -1236,13 +1244,20 @@ export default function AdsPage() {
     return getLastSyncedAt(playlist);
   };
 
-  const isLoading =
+  const hasPlaylistRows = playlists.length > 0;
+  const isAnyPlaylistQueryLoading =
     activeAccountId === ALL_ACCOUNTS_ID
       ? allAccountQueries.some((query) => query.isLoading)
       : singleAccountQuery.isLoading;
+  const isAnyPlaylistQueryFetching =
+    activeAccountId === ALL_ACCOUNTS_ID
+      ? allAccountQueries.some((query) => query.isFetching)
+      : singleAccountQuery.isFetching;
+  const isLoading = isAnyPlaylistQueryLoading && !hasPlaylistRows;
+  const isUpdatingPlaylistStats = isAnyPlaylistQueryFetching && hasPlaylistRows;
   const isError =
     activeAccountId === ALL_ACCOUNTS_ID
-      ? allAccountQueries.some((query) => query.isError)
+      ? allAccountQueries.every((query) => query.isError)
       : singleAccountQuery.isError;
 
   const getAccountName = (accountId?: number) => {
@@ -2160,6 +2175,11 @@ export default function AdsPage() {
               </div>
             ) : (
               <div>
+                {isUpdatingPlaylistStats ? (
+                  <div className="border-b border-zinc-900 px-5 py-3 text-xs text-zinc-400">
+                    Updating playlist stats...
+                  </div>
+                ) : null}
                 {filtered.map((playlist, rowIndex) => {
                   const key = playlistKey(playlist);
                   const data = getRowData(playlist);
