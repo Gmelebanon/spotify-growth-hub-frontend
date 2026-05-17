@@ -156,7 +156,6 @@ type AdsSettingsRow = {
   } | null;
 };
 
-
 type AdsFilterOptionRow = {
   id?: string;
   option_type?: string;
@@ -171,7 +170,6 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
-
 
 async function fetchPlaylistsWithHistory(
   accountId: number,
@@ -194,7 +192,8 @@ async function fetchPlaylistsWithHistory(
 
   if (Array.isArray(payload)) return payload as PlaylistRow[];
   if (Array.isArray(payload?.items)) return payload.items as PlaylistRow[];
-  if (Array.isArray(payload?.playlists)) return payload.playlists as PlaylistRow[];
+  if (Array.isArray(payload?.playlists))
+    return payload.playlists as PlaylistRow[];
 
   return [];
 }
@@ -252,12 +251,17 @@ const defaultGenreOptions = [
   "World EDM",
 ];
 
-function mergeDropdownOptions(defaults: string[], saved: string[] | null | undefined) {
+function mergeDropdownOptions(
+  defaults: string[],
+  saved: string[] | null | undefined,
+) {
   const merged: string[] = [];
   [...defaults, ...(saved ?? [])].forEach((item) => {
     const clean = String(item || "").trim();
     if (!clean) return;
-    if (!merged.some((existing) => existing.toLowerCase() === clean.toLowerCase())) {
+    if (
+      !merged.some((existing) => existing.toLowerCase() === clean.toLowerCase())
+    ) {
       merged.push(clean);
     }
   });
@@ -632,93 +636,53 @@ function adsGetNumericValue(value: unknown) {
   return null;
 }
 
-function getSortedFollowerHistoryRows(playlist: PlaylistRow) {
-  const rows = [
-    ...(playlist.daily_history ?? []),
-    ...(playlist.daily_growth ?? []),
-  ];
-
-  const latestByDate = new Map<
-    string,
-    {
-      date: string;
-      followers?: number;
-      followers_count?: number;
-      count?: number;
-      value?: number;
-      growth?: number;
-    }
-  >();
-
-  for (const item of rows) {
-    if (!item?.date) continue;
-
-    const label = adsNormalizeHistoryLabel(item.label || item.date);
-    if (!label) continue;
-
-    const followers =
-      adsGetNumericValue(item.followers) ??
-      adsGetNumericValue(item.followers_count) ??
-      adsGetNumericValue(item.count) ??
-      adsGetNumericValue(item.value);
-
-    const growth = adsGetNumericValue(item.growth);
-
-    if (followers === null && growth === null) continue;
-
-    latestByDate.set(label, {
-      ...item,
-      date: label,
-      followers: followers ?? undefined,
-      followers_count: followers ?? undefined,
-      count: followers ?? growth ?? undefined,
-      value: followers ?? growth ?? undefined,
-      growth: growth ?? undefined,
-    });
-  }
-
-  return Array.from(latestByDate.values()).sort((a, b) => {
-    const toNumber = (value: string) => {
-      const [day, month] = value.split("/").map(Number);
-      return (month || 0) * 100 + (day || 0);
-    };
-
-    return toNumber(b.date) - toNumber(a.date);
-  });
-}
-
-function getFollowerCountByOffset(playlist: PlaylistRow, offset: number) {
-  const row = getSortedFollowerHistoryRows(playlist)[offset];
-
+function adsHistoryValue(
+  item:
+    | NonNullable<PlaylistRow["daily_growth"]>[number]
+    | NonNullable<PlaylistRow["daily_history"]>[number]
+    | undefined,
+) {
   return (
-    adsGetNumericValue(row?.followers) ??
-    adsGetNumericValue(row?.followers_count) ??
-    adsGetNumericValue(row?.count) ??
-    adsGetNumericValue(row?.value) ??
-    null
+    adsGetNumericValue(item?.growth) ??
+    adsGetNumericValue(item?.value) ??
+    adsGetNumericValue(item?.count) ??
+    adsGetNumericValue(item?.followers) ??
+    adsGetNumericValue(item?.followers_count) ??
+    0
   );
 }
 
-function adsGetGrowthValue(playlist: PlaylistRow, dayOffset: number) {
-  const currentFollowers = getFollowerCountByOffset(playlist, dayOffset);
-  const previousFollowers = getFollowerCountByOffset(playlist, dayOffset + 1);
+function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
+  const targetLabel = adsFormatDayLabel(dayOffset);
 
-  if (currentFollowers !== null && previousFollowers !== null) {
-    return currentFollowers - previousFollowers;
-  }
+  // The backend now sends daily stat values directly. Match the exact date
+  // column instead of subtracting follower snapshots or shifting by array index.
+  const dailyGrowthRow = (playlist.daily_growth ?? []).find((item) => {
+    const label = adsNormalizeHistoryLabel(item.label || item.date);
+    return label === targetLabel;
+  });
+
+  if (dailyGrowthRow) return adsHistoryValue(dailyGrowthRow);
+
+  const dailyHistoryRow = (playlist.daily_history ?? []).find((item) => {
+    const label = adsNormalizeHistoryLabel(item.label || item.date);
+    return label === targetLabel;
+  });
+
+  if (dailyHistoryRow) return adsHistoryValue(dailyHistoryRow);
 
   return 0;
 }
 
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  return adsGetGrowthValue(playlist, offset);
+  return getDailyStatValue(playlist, offset);
 }
 
 function getFollowerGainSum(playlist: PlaylistRow, days: 7 | 30) {
   let total = 0;
 
   for (let offset = 0; offset < days; offset += 1) {
-    total += adsGetGrowthValue(playlist, offset);
+    total += getDailyStatValue(playlist, offset);
   }
 
   return total;
@@ -1780,8 +1744,8 @@ export default function AdsPage() {
         getTodayValue(playlist, 2),
         getTodayValue(playlist, 3),
         getTodayValue(playlist, 4),
-        (playlist.growth_7d ?? 0),
-        (playlist.growth_30d ?? 0),
+        getFollowerGainSum(playlist, 7),
+        getFollowerGainSum(playlist, 30),
         data.country,
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
@@ -2339,10 +2303,10 @@ export default function AdsPage() {
                         <GrowthCell value={getTodayValue(playlist, 4)} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={playlist.growth_7d ?? 0} />
+                        <GrowthCell value={getFollowerGainSum(playlist, 7)} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={playlist.growth_30d ?? 0} />
+                        <GrowthCell value={getFollowerGainSum(playlist, 30)} />
                       </div>
                       <div className="px-.5">
                         <select
@@ -2412,7 +2376,9 @@ export default function AdsPage() {
                   <div className="flex items-center justify-center border-b border-zinc-900 px-5 py-4">
                     <button
                       type="button"
-                      onClick={() => setVisibleRowLimit((current) => current + 120)}
+                      onClick={() =>
+                        setVisibleRowLimit((current) => current + 120)
+                      }
                       className="rounded-xl border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400"
                     >
                       Show more rows ({visibleRows.length} of {filtered.length})
