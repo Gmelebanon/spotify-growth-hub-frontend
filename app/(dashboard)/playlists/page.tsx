@@ -472,8 +472,17 @@ export default function PlaylistsPage() {
     });
   }, [accounts, playlistQueries]);
 
+  const hasLoadedAnyPlaylistQuery = playlistQueries.some(
+    (query) => Array.isArray(query.data) && query.data.length > 0,
+  );
+
   const isLoading =
-    accountsQuery.isLoading || playlistQueries.some((query) => query.isLoading);
+    accountsQuery.isLoading ||
+    (playlistQueries.length > 0 &&
+      playlistQueries.some((query) => query.isLoading) &&
+      !hasLoadedAnyPlaylistQuery);
+  const isRefreshing =
+    playlistQueries.some((query) => query.isFetching) && hasLoadedAnyPlaylistQuery;
   const isError =
     accountsQuery.isError || playlistQueries.some((query) => query.isError);
 
@@ -737,6 +746,10 @@ export default function PlaylistsPage() {
           </button>
         </div>
       </div>
+
+      {isRefreshing ? (
+        <div className="mb-2 text-xs text-zinc-500">Updating playlist stats...</div>
+      ) : null}
 
       <div className="w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
         <div className="max-h-[calc(100vh-165px)] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-black [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-500">

@@ -1755,8 +1755,8 @@ export default function AdsPage() {
         getTodayValue(playlist, 2),
         getTodayValue(playlist, 3),
         getTodayValue(playlist, 4),
-        getFollowerGainSum(playlist, 7),
-        getFollowerGainSum(playlist, 30),
+        (playlist.growth_7d ?? 0),
+        (playlist.growth_30d ?? 0),
         data.country,
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
@@ -2309,10 +2309,10 @@ export default function AdsPage() {
                         <GrowthCell value={getTodayValue(playlist, 4)} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={getFollowerGainSum(playlist, 7)} />
+                        <GrowthCell value={playlist.growth_7d ?? 0} />
                       </div>
                       <div className="px-1">
-                        <GrowthCell value={getFollowerGainSum(playlist, 30)} />
+                        <GrowthCell value={playlist.growth_30d ?? 0} />
                       </div>
                       <div className="px-.5">
                         <select
