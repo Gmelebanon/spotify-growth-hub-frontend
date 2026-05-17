@@ -79,8 +79,7 @@ type CreatedPlaylistDetails = {
 
 const ALL_ACCOUNTS_ID = -1;
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  "https://spotify-growth-hub-backend.onrender.com";
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 
 async function fetchPlaylistsWithHistory(
@@ -148,197 +147,59 @@ function formatDayLabel(dayOffset: number) {
   return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
-function toLocalDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function getDateKeyFromOffset(dayOffset: number) {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() - dayOffset);
-  return toLocalDateKey(date);
-}
-
-function normalizeHistoryDateKey(value?: string | null) {
-  if (!value) return "";
-
-  const clean = String(value).trim();
-
-  if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
-    return clean.slice(0, 10);
-  }
-
-  const labelMatch = clean.match(/^(\d{1,2})\/(\d{1,2})$/);
-  if (labelMatch) {
-    const currentYear = new Date().getFullYear();
-    const month = Number(labelMatch[2]);
-    const day = Number(labelMatch[1]);
-    return `${currentYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  }
-
-  const parsed = new Date(clean);
-  if (!Number.isNaN(parsed.getTime())) {
-    return toLocalDateKey(parsed);
-  }
-
-  return "";
-}
-
 function normalizeHistoryLabel(value?: string | null) {
   if (!value) return "";
 
   const clean = String(value).trim();
 
+  // Already returned by backend as "5/5".
   if (/^\d{1,2}\/\d{1,2}$/.test(clean)) return clean;
 
-  const key = normalizeHistoryDateKey(clean);
-  if (!key) return clean;
+  // ISO date like 2026-05-05 or full ISO datetime.
+  const parsed = new Date(clean);
+  if (!Number.isNaN(parsed.getTime())) {
+    return `${parsed.getDate()}/${parsed.getMonth() + 1}`;
+  }
 
-  const [, month, day] = key.match(/^\d{4}-(\d{2})-(\d{2})$/) ?? [];
-  return month && day ? `${Number(day)}/${Number(month)}` : clean;
+  return clean;
 }
 
 function getNumericValue(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const normalized = value.replace("+", "").trim();
-    if (normalized !== "" && !Number.isNaN(Number(normalized))) {
-      return Number(normalized);
-    }
+  if (typeof value === "number") return value;
+  if (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    !Number.isNaN(Number(value))
+  ) {
+    return Number(value);
   }
   return null;
 }
 
-type HistorySourceItem = {
-  date?: string | null;
-  label?: string | null;
-  snapshot_date?: string | null;
-  recorded_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  followers?: number | string | null;
-  follower_count?: number | string | null;
-  followers_count?: number | string | null;
-  total_followers?: number | string | null;
-  growth?: number | string | null;
-  daily_growth?: number | string | null;
-  change?: number | string | null;
-  delta?: number | string | null;
-  [key: string]: unknown;
-};
+function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const label = formatDayLabel(dayOffset);
 
-function getItemDateKey(item: HistorySourceItem) {
-  return (
-    normalizeHistoryDateKey(item.date) ||
-    normalizeHistoryDateKey(item.snapshot_date) ||
-    normalizeHistoryDateKey(item.recorded_at) ||
-    normalizeHistoryDateKey(item.created_at) ||
-    normalizeHistoryDateKey(item.updated_at) ||
-    normalizeHistoryDateKey(item.label)
+  // First use backend-calculated daily_growth. This is the table value.
+  const fromDailyGrowth = playlist.daily_growth?.find(
+    (item) =>
+      normalizeHistoryLabel(item.label) === label ||
+      normalizeHistoryLabel(item.date) === label,
   );
-}
 
-function getFollowerSnapshotFromItem(item: HistorySourceItem) {
-  return (
-    getNumericValue(item.followers) ??
-    getNumericValue(item.follower_count) ??
-    getNumericValue(item.followers_count) ??
-    getNumericValue(item.total_followers)
+  if (fromDailyGrowth) {
+    return Number(fromDailyGrowth.growth ?? 0);
+  }
+
+  // Then use saved database daily_history if daily_growth is missing.
+  const fromHistory = playlist.daily_history?.find(
+    (item) => normalizeHistoryLabel(item.date) === label,
   );
-}
 
-function getDirectGrowthFromItem(item: HistorySourceItem) {
-  return (
-    getNumericValue(item.daily_growth) ??
-    getNumericValue(item.growth) ??
-    getNumericValue(item.change) ??
-    getNumericValue(item.delta)
-  );
-}
-
-function getHistoryItems(playlist: PlaylistRow): HistorySourceItem[] {
-  const items: HistorySourceItem[] = [];
-
-  if (Array.isArray(playlist.daily_history)) {
-    items.push(...(playlist.daily_history as HistorySourceItem[]));
+  if (fromHistory) {
+    return Number(fromHistory.growth ?? 0);
   }
 
-  if (Array.isArray(playlist.daily_growth)) {
-    items.push(...(playlist.daily_growth as HistorySourceItem[]));
-  }
-
-  const possibleArrays = [
-    playlist.history,
-    playlist.follower_history,
-    playlist.followers_history,
-    playlist.stats_history,
-    playlist.daily_stats,
-    playlist.snapshots,
-  ];
-
-  possibleArrays.forEach((value) => {
-    if (Array.isArray(value)) items.push(...(value as HistorySourceItem[]));
-  });
-
-  return items;
-}
-
-function looksLikeFollowerSnapshot(playlist: PlaylistRow, value: number) {
-  const currentFollowers = getNumericValue(playlist.followers);
-
-  if (currentFollowers === null || currentFollowers <= 0) {
-    return Math.abs(value) >= 100;
-  }
-
-  const lowerBound = Math.max(50, currentFollowers * 0.35);
-  const upperBound = currentFollowers + Math.max(50, currentFollowers * 0.35);
-
-  return value >= lowerBound && value <= upperBound;
-}
-
-function getFollowerCountForDay(playlist: PlaylistRow, dayOffset: number) {
-  if (dayOffset === 0) {
-    const currentFollowers = getNumericValue(playlist.followers);
-    if (currentFollowers !== null) return currentFollowers;
-  }
-
-  const targetKey = getDateKeyFromOffset(dayOffset);
-  const targetLabel = formatDayLabel(dayOffset);
-
-  for (const item of getHistoryItems(playlist)) {
-    const itemKey = getItemDateKey(item);
-    const itemLabel = normalizeHistoryLabel(item.label) || normalizeHistoryLabel(item.date);
-
-    if (itemKey !== targetKey && itemLabel !== targetLabel) continue;
-
-    const followerSnapshot = getFollowerSnapshotFromItem(item);
-    if (followerSnapshot !== null) return followerSnapshot;
-
-    const growthField = getDirectGrowthFromItem(item);
-    if (growthField !== null && looksLikeFollowerSnapshot(playlist, growthField)) {
-      return growthField;
-    }
-  }
-
-  return null;
-}
-
-function getDirectGrowthForDay(playlist: PlaylistRow, dayOffset: number) {
-  const targetKey = getDateKeyFromOffset(dayOffset);
-  const targetLabel = formatDayLabel(dayOffset);
-
-  for (const item of getHistoryItems(playlist)) {
-    const itemKey = getItemDateKey(item);
-    const itemLabel = normalizeHistoryLabel(item.label) || normalizeHistoryLabel(item.date);
-
-    if (itemKey !== targetKey && itemLabel !== targetLabel) continue;
-
-    const directGrowth = getDirectGrowthFromItem(item);
-    if (directGrowth !== null && !looksLikeFollowerSnapshot(playlist, directGrowth)) {
-      return directGrowth;
-    }
-  }
-
+  // Final fallback for older API fields.
   const possibleKeys = [
     dayOffset === 0 ? "today" : `today_minus_${dayOffset}`,
     dayOffset === 0 ? "growth_24h" : `growth_day_${dayOffset}`,
@@ -349,25 +210,8 @@ function getDirectGrowthForDay(playlist: PlaylistRow, dayOffset: number) {
 
   for (const key of possibleKeys) {
     const value = getNumericValue(playlist[key]);
-    if (value !== null && !looksLikeFollowerSnapshot(playlist, value)) return value;
+    if (value !== null) return value;
   }
-
-  return null;
-}
-
-function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
-  const followersToday = getFollowerCountForDay(playlist, dayOffset);
-  const followersPreviousDay = getFollowerCountForDay(playlist, dayOffset + 1);
-
-  // Preferred database logic: if the database provides follower snapshots,
-  // display the real daily change between consecutive snapshots.
-  if (followersToday !== null && followersPreviousDay !== null) {
-    return followersToday - followersPreviousDay;
-  }
-
-  // Fallback only when the backend already provides a real growth/change value.
-  const directGrowth = getDirectGrowthForDay(playlist, dayOffset);
-  if (directGrowth !== null) return directGrowth;
 
   return 0;
 }
@@ -400,8 +244,8 @@ export default function PlaylistsPage() {
   const [search, setSearch] = useState("");
   const [accountFilter, setAccountFilter] = useState<number>(ALL_ACCOUNTS_ID);
   const [genreFilter, setGenreFilter] = useState("all");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [sortField, setSortField] = useState("playlist");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [sortField, setSortField] = useState("day-0");
   const [adsGenres, setAdsGenres] = useState<Record<string, string>>({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createAccountId, setCreateAccountId] = useState<number | "">("");
@@ -459,6 +303,8 @@ export default function PlaylistsPage() {
       queryKey: ["playlists", account.id],
       queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: accounts.length > 0,
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
     })),
   });
 
@@ -472,17 +318,11 @@ export default function PlaylistsPage() {
     });
   }, [accounts, playlistQueries]);
 
-  const hasLoadedAnyPlaylistQuery = playlistQueries.some(
-    (query) => Array.isArray(query.data) && query.data.length > 0,
-  );
-
-  const isLoading =
+  const isInitialLoading =
     accountsQuery.isLoading ||
-    (playlistQueries.length > 0 &&
-      playlistQueries.some((query) => query.isLoading) &&
-      !hasLoadedAnyPlaylistQuery);
-  const isRefreshing =
-    playlistQueries.some((query) => query.isFetching) && hasLoadedAnyPlaylistQuery;
+    (playlists.length === 0 && playlistQueries.some((query) => query.isLoading));
+  const isUpdating =
+    playlists.length > 0 && playlistQueries.some((query) => query.isFetching);
   const isError =
     accountsQuery.isError || playlistQueries.some((query) => query.isError);
 
@@ -634,6 +474,14 @@ export default function PlaylistsPage() {
     });
   };
 
+  const getDefaultSortOrder = (field: string): "asc" | "desc" => {
+    if (field === "playlist" || field === "genre" || field === "account") {
+      return "asc";
+    }
+
+    return "desc";
+  };
+
   const handleSort = (field: string) => {
     if (sortField === field) {
       setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
@@ -641,12 +489,21 @@ export default function PlaylistsPage() {
     }
 
     setSortField(field);
-    setSortOrder("asc");
+    setSortOrder(getDefaultSortOrder(field));
   };
 
   const sortIndicator = (field: string) => {
-    if (sortField !== field) return "↕";
+    if (sortField !== field) return "";
     return sortOrder === "asc" ? "↑" : "↓";
+  };
+
+  const sortableHeaderClass = (field: string, align: "left" | "center" = "left") => {
+    const isActive = sortField === field;
+    const alignment = align === "center" ? "text-center" : "text-left";
+
+    return `${alignment} transition hover:text-green-400 ${
+      isActive ? "font-bold text-green-400" : "font-medium text-zinc-400"
+    }`;
   };
 
   const downloadCsv = () => {
@@ -747,39 +604,35 @@ export default function PlaylistsPage() {
         </div>
       </div>
 
-      {isRefreshing ? (
-        <div className="mb-2 text-xs text-zinc-500">Updating playlist stats...</div>
-      ) : null}
-
       <div className="w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
         <div className="max-h-[calc(100vh-165px)] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-black [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-500">
           <div className="w-full min-w-0">
-            <div className="sticky top-0 z-20 grid grid-cols-[minmax(220px,2fr)_80px_110px_65px_repeat(30,minmax(22px,1fr))] border-b border-zinc-800 bg-zinc-950 px-3 py-3 text-[9px] font-bold uppercase tracking-wide text-zinc-400">
+            <div className="sticky top-0 z-20 grid grid-cols-[minmax(220px,2fr)_80px_110px_65px_repeat(30,minmax(22px,1fr))] border-b border-zinc-800 bg-zinc-950 px-3 py-3 text-[9px] font-medium uppercase tracking-wide text-zinc-400">
               <button
                 type="button"
                 onClick={() => handleSort("playlist")}
-                className="text-left text-green-400 hover:text-green-300"
+                className={sortableHeaderClass("playlist")}
               >
                 Playlist A&gt;Z {sortIndicator("playlist")}
               </button>
               <button
                 type="button"
                 onClick={() => handleSort("genre")}
-                className="text-left hover:text-green-400"
+                className={sortableHeaderClass("genre")}
               >
                 Genre {sortIndicator("genre")}
               </button>
               <button
                 type="button"
                 onClick={() => handleSort("account")}
-                className="text-left hover:text-green-400"
+                className={sortableHeaderClass("account")}
               >
                 Account {sortIndicator("account")}
               </button>
               <button
                 type="button"
                 onClick={() => handleSort("followers")}
-                className="text-left hover:text-green-400"
+                className={sortableHeaderClass("followers")}
               >
                 Followers {sortIndicator("followers")}
               </button>
@@ -788,14 +641,20 @@ export default function PlaylistsPage() {
                   type="button"
                   key={`header-day-${day}`}
                   onClick={() => handleSort(`day-${day}`)}
-                  className="text-center hover:text-green-400"
+                  className={sortableHeaderClass(`day-${day}`, "center")}
                 >
                   {formatDayLabel(day)} {sortIndicator(`day-${day}`)}
                 </button>
               ))}
             </div>
 
-            {isLoading ? (
+            {isUpdating ? (
+              <div className="border-b border-zinc-900 px-4 py-2 text-xs font-medium text-green-400">
+                Updating playlist stats...
+              </div>
+            ) : null}
+
+            {isInitialLoading ? (
               <div className="px-4 py-10 text-sm text-zinc-500">
                 Loading playlists...
               </div>
