@@ -104,6 +104,11 @@ type PlaylistRow = {
     growth?: number;
   }>;
   updated_at?: string | null;
+  updatedAt?: string | null;
+  modified_at?: string | null;
+  modifiedAt?: string | null;
+  last_modified?: string | null;
+  lastModified?: string | null;
   last_update?: string | null;
   last_update_date?: string | null;
   synced_at?: string | null;
@@ -524,39 +529,46 @@ function formatDayMonth(offset: number) {
   return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
-
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
 }
 
 function getLastSyncedAt(playlist: PlaylistRow) {
-  return (
-    playlist.last_synced_at ??
-    playlist.last_synced ??
-    playlist.lastSyncedAt ??
-    playlist.lastSynced ??
-    playlist.synced_at ??
-    null
-  );
+  const record = playlist as PlaylistRow & Record<string, unknown>;
+  const adsMeta = (record.ads_meta || {}) as Record<string, unknown>;
+
+  const candidates = [
+    record.last_synced_at,
+    record.last_synced,
+    record.lastSyncedAt,
+    record.lastSynced,
+    record.synced_at,
+    record.updated_at,
+    record.updatedAt,
+    record.modified_at,
+    record.modifiedAt,
+    record.last_modified,
+    record.lastModified,
+    record.last_update,
+    record.last_update_date,
+    adsMeta.last_synced,
+    adsMeta.last_synced_at,
+    adsMeta.synced_at,
+    adsMeta.updated_at,
+  ];
+
+  const valid = candidates.find((value) => {
+    if (!value) return false;
+    const date = new Date(String(value));
+    return !Number.isNaN(date.getTime());
+  });
+
+  return valid ? String(valid) : null;
 }
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readNumericValue(value: unknown) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/^\+/, "").trim());
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
 }
 
 function formatAdDateDisplay(value: string) {
@@ -587,134 +599,126 @@ function getTrackCount(playlist: PlaylistRow) {
   return playlist.tracks_count ?? playlist.total_tracks ?? 0;
 }
 
-type DailyStatRow = NonNullable<PlaylistRow["daily_growth"]>[number];
-
-function getDailyRows(playlist: PlaylistRow): DailyStatRow[] {
-  return [...(playlist.daily_growth ?? []), ...(playlist.daily_history ?? [])];
+function adsFormatDayLabel(dayOffset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - dayOffset);
+  return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
-function getDailyRowForOffset(playlist: PlaylistRow, offset: number) {
-  const targetDate = getDateKeyForOffset(offset);
-  return getDailyRows(playlist).find((item) => item.date === targetDate) ?? null;
-}
+function adsNormalizeHistoryLabel(value?: string | null) {
+  if (!value) return "";
 
-function looksLikeFollowerSnapshot(value: number, playlist: PlaylistRow) {
-  const followers = readNumericValue(playlist.followers);
+  const clean = String(value).trim();
 
-  if (followers !== null && followers > 0) {
-    return value >= followers * 0.6;
+  if (/^\d{1,2}\/\d{1,2}$/.test(clean)) return clean;
+
+  const parsed = new Date(clean);
+  if (!Number.isNaN(parsed.getTime())) {
+    return `${parsed.getDate()}/${parsed.getMonth() + 1}`;
   }
 
-  return Math.abs(value) > 100;
+  return clean;
 }
 
-function getSnapshotFromDailyRow(row: DailyStatRow | null, playlist: PlaylistRow) {
-  if (!row) return null;
-
-  const explicitSnapshot =
-    readNumericValue(row.followers) ??
-    readNumericValue(row.followers_count) ??
-    readNumericValue(row.count) ??
-    readNumericValue(row.value);
-
-  if (explicitSnapshot !== null) return explicitSnapshot;
-
-  const growthValue = readNumericValue(row.growth);
-  if (growthValue !== null && looksLikeFollowerSnapshot(growthValue, playlist)) {
-    return growthValue;
+function adsGetNumericValue(value: unknown) {
+  if (typeof value === "number") return value;
+  if (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    !Number.isNaN(Number(value))
+  ) {
+    return Number(value);
   }
-
   return null;
 }
 
-function getFallbackGrowthValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  const directValues = [
-    playlist.today ?? playlist.today_growth ?? playlist.growth_today ?? playlist.growth_24h,
-    playlist.today_minus_1 ?? playlist.day_1,
-    playlist.today_minus_2 ?? playlist.day_2,
-    playlist.today_minus_3 ?? playlist.day_3,
-    playlist.today_minus_4 ?? playlist.day_4,
+function getSortedFollowerHistoryRows(playlist: PlaylistRow) {
+  const rows = [
+    ...(playlist.daily_history ?? []),
+    ...(playlist.daily_growth ?? []),
   ];
 
-  const snapshotValues = [
-    playlist.followers_today ?? playlist.followers,
-    playlist.followers_day_1,
-    playlist.followers_day_2,
-    playlist.followers_day_3,
-    playlist.followers_day_4,
-  ];
+  const latestByDate = new Map<
+    string,
+    {
+      date: string;
+      followers?: number;
+      followers_count?: number;
+      count?: number;
+      value?: number;
+      growth?: number;
+    }
+  >();
 
-  const currentSnapshot = readNumericValue(snapshotValues[offset]);
-  const nextSnapshot = readNumericValue(snapshotValues[offset + 1]);
+  for (const item of rows) {
+    if (!item?.date) continue;
 
-  if (currentSnapshot !== null && nextSnapshot !== null) {
-    return currentSnapshot - nextSnapshot;
+    const label = adsNormalizeHistoryLabel(item.label || item.date);
+    if (!label) continue;
+
+    const followers =
+      adsGetNumericValue(item.followers) ??
+      adsGetNumericValue(item.followers_count) ??
+      adsGetNumericValue(item.count) ??
+      adsGetNumericValue(item.value);
+
+    const growth = adsGetNumericValue(item.growth);
+
+    if (followers === null && growth === null) continue;
+
+    latestByDate.set(label, {
+      ...item,
+      date: label,
+      followers: followers ?? undefined,
+      followers_count: followers ?? undefined,
+      count: followers ?? growth ?? undefined,
+      value: followers ?? growth ?? undefined,
+      growth: growth ?? undefined,
+    });
   }
 
-  return readNumericValue(directValues[offset]) ?? 0;
+  return Array.from(latestByDate.values()).sort((a, b) => {
+    const toNumber = (value: string) => {
+      const [day, month] = value.split("/").map(Number);
+      return (month || 0) * 100 + (day || 0);
+    };
+
+    return toNumber(b.date) - toNumber(a.date);
+  });
 }
 
-function getGrowthValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  const row = getDailyRowForOffset(playlist, offset);
-  const previousRow = getDailyRowForOffset(playlist, offset + 1);
-  const rowGrowth = readNumericValue(row?.growth);
+function getFollowerCountByOffset(playlist: PlaylistRow, offset: number) {
+  const row = getSortedFollowerHistoryRows(playlist)[offset];
 
-  const currentSnapshot = getSnapshotFromDailyRow(row, playlist);
-  const previousSnapshot = getSnapshotFromDailyRow(previousRow, playlist);
-
-  if (currentSnapshot !== null && previousSnapshot !== null) {
-    return currentSnapshot - previousSnapshot;
-  }
-
-  if (rowGrowth !== null && !looksLikeFollowerSnapshot(rowGrowth, playlist)) {
-    return rowGrowth;
-  }
-
-  return getFallbackGrowthValue(playlist, offset);
+  return (
+    adsGetNumericValue(row?.followers) ??
+    adsGetNumericValue(row?.followers_count) ??
+    adsGetNumericValue(row?.count) ??
+    adsGetNumericValue(row?.value) ??
+    null
+  );
 }
 
-function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
-  return getGrowthValue(playlist, offset);
-}
+function adsGetGrowthValue(playlist: PlaylistRow, dayOffset: number) {
+  const currentFollowers = getFollowerCountByOffset(playlist, dayOffset);
+  const previousFollowers = getFollowerCountByOffset(playlist, dayOffset + 1);
 
-
-function getDateKeyForOffset(offset: number) {
-  const date = new Date();
-  date.setDate(date.getDate() - offset);
-  return date.toISOString().slice(0, 10);
-}
-
-function getDailyValue(playlist: PlaylistRow, offset: number) {
-  const safeOffset = offset as 0 | 1 | 2 | 3 | 4;
-
-  if (offset >= 0 && offset <= 4) {
-    return getGrowthValue(playlist, safeOffset);
-  }
-
-  const row = getDailyRowForOffset(playlist, offset);
-  const previousRow = getDailyRowForOffset(playlist, offset + 1);
-  const rowGrowth = readNumericValue(row?.growth);
-
-  const currentSnapshot = getSnapshotFromDailyRow(row, playlist);
-  const previousSnapshot = getSnapshotFromDailyRow(previousRow, playlist);
-
-  if (currentSnapshot !== null && previousSnapshot !== null) {
-    return currentSnapshot - previousSnapshot;
-  }
-
-  if (rowGrowth !== null && !looksLikeFollowerSnapshot(rowGrowth, playlist)) {
-    return rowGrowth;
+  if (currentFollowers !== null && previousFollowers !== null) {
+    return currentFollowers - previousFollowers;
   }
 
   return 0;
 }
 
+function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
+  return adsGetGrowthValue(playlist, offset);
+}
 
 function getFollowerGainSum(playlist: PlaylistRow, days: 7 | 30) {
   let total = 0;
 
   for (let offset = 0; offset < days; offset += 1) {
-    total += getDailyValue(playlist, offset);
+    total += adsGetGrowthValue(playlist, offset);
   }
 
   return total;
@@ -1091,6 +1095,22 @@ export default function AdsPage() {
     })),
   });
 
+  const playlistManagerStateQuery = useQuery({
+    queryKey: ["playlist-manager-state-for-ads"],
+    queryFn: async () => {
+      const response = await fetch(
+        `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) return null;
+
+      const payload = await response.json();
+      return payload?.state ?? null;
+    },
+    retry: false,
+  });
+
   const playlists = useMemo(() => {
     if (activeAccountId === ALL_ACCOUNTS_ID) {
       return allAccountQueries.flatMap((query, index) => {
@@ -1161,53 +1181,20 @@ export default function AdsPage() {
     };
   }, [playlists]);
 
-
-  const playlistManagerStateQuery = useQuery({
-    queryKey: ["playlist-manager-state-for-ads"],
-    queryFn: async () => {
-      const response = await fetch(
-        `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        { cache: "no-store" },
-      );
-
-      if (!response.ok) return null;
-
-      const payload = await response.json();
-      return payload?.state ?? null;
-    },
-    retry: false,
-  });
-
   const playlistManagerSyncMap = useMemo(() => {
     const state = playlistManagerStateQuery.data as
-      | {
-          syncedPlaylists?: Array<Record<string, unknown>>;
-          synced_playlists?: Array<Record<string, unknown>>;
-          masterPlaylists?: Array<Record<string, unknown>>;
-          master_playlists?: Array<Record<string, unknown>>;
-        }
+      | { syncedPlaylists?: Array<Record<string, unknown>> }
       | null
       | undefined;
 
-    const items = [
-      ...(state?.syncedPlaylists ?? []),
-      ...(state?.synced_playlists ?? []),
-      ...(state?.masterPlaylists ?? []),
-      ...(state?.master_playlists ?? []),
-    ];
-
     const map = new Map<string, string>();
 
-    for (const item of items) {
+    for (const item of state?.syncedPlaylists ?? []) {
       const lastSyncedAt =
         (item.lastSyncedAt as string | undefined) ??
         (item.last_synced_at as string | undefined) ??
-        (item.lastSynced as string | undefined) ??
-        (item.last_synced as string | undefined) ??
         (item.syncedAt as string | undefined) ??
         (item.synced_at as string | undefined) ??
-        (item.updatedAt as string | undefined) ??
-        (item.updated_at as string | undefined) ??
         null;
 
       if (!lastSyncedAt) continue;
@@ -1216,25 +1203,15 @@ export default function AdsPage() {
       const playlistId =
         item.playlistId ??
         item.playlist_id ??
-        item.id ??
         item.spotify_id ??
-        item.spotifyPlaylistId ??
         item.spotify_playlist_id;
-      const spotifyId =
-        item.spotifyId ??
-        item.spotify_id ??
-        item.spotifyPlaylistId ??
-        item.spotify_playlist_id;
-      const name = item.name ?? item.title ?? item.playlistName ?? item.display_name;
 
-      for (const key of [
-        accountId && playlistId ? `${accountId}-${playlistId}` : null,
-        accountId && spotifyId ? `${accountId}-${spotifyId}` : null,
-        playlistId ? String(playlistId) : null,
-        spotifyId ? String(spotifyId) : null,
-        name ? String(name) : null,
-      ]) {
-        if (key) map.set(key, lastSyncedAt);
+      if (accountId && playlistId) {
+        map.set(`${accountId}-${playlistId}`, lastSyncedAt);
+      }
+
+      if (playlistId) {
+        map.set(String(playlistId), lastSyncedAt);
       }
     }
 
@@ -1249,12 +1226,10 @@ export default function AdsPage() {
       String(playlist.id ?? ""),
       String(playlist.spotify_id ?? ""),
       String(playlist.spotify_playlist_id ?? ""),
-      playlist.name,
-      playlist.title,
     ].filter((item) => item && item !== "-");
 
     for (const key of possibleKeys) {
-      const value = playlistManagerSyncMap.get(String(key));
+      const value = playlistManagerSyncMap.get(key);
       if (value) return value;
     }
 
