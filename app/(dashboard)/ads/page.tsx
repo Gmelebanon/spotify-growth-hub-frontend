@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { getAccounts } from "@/lib/api/accounts";
@@ -30,7 +30,8 @@ type SortField =
   | "today4"
   | "growth7d"
   | "growth30d"
-  | "country";
+  | "country"
+  | "adDate";
 
 type SortOrder = "asc" | "desc";
 
@@ -166,6 +167,7 @@ const ALL_ACCOUNTS_ID = -1;
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 const ADS_CATEGORY_OPTIONS_STORAGE_KEY = "ads-page-category-options-v17";
 const ADS_GENRE_OPTIONS_STORAGE_KEY = "ads-page-genre-options-v17";
+const ADS_HIDDEN_ROWS_STORAGE_KEY = "ads-page-hidden-rows-v1";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -265,7 +267,13 @@ function mergeDropdownOptions(
       merged.push(clean);
     }
   });
-  return merged;
+
+  const placeholders = merged.filter((item) => item === "Category" || item === "Genre");
+  const realOptions = merged
+    .filter((item) => item !== "Category" && item !== "Genre")
+    .sort((a, b) => a.localeCompare(b));
+
+  return [...placeholders, ...realOptions];
 }
 
 const colorOptions: Array<{
@@ -704,6 +712,25 @@ function uniqueValues(values: Array<string | null | undefined>) {
   ).sort();
 }
 
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) return 0;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function parseDateOnlyTimestamp(value: string | null | undefined) {
+  if (!value) return 0;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function getLatestAdTimestamp(ads: AdEntry[]) {
+  return ads.reduce((latest, ad) => {
+    const stamp = parseDateOnlyTimestamp(ad.date);
+    return Math.max(latest, stamp);
+  }, 0);
+}
+
 function CopyIcon() {
   return <span className="text-[13px] leading-none">⧉</span>;
 }
@@ -718,6 +745,47 @@ function DownloadIcon() {
 
 function UndoIcon() {
   return <span className="inline-block rotate-90 text-[16px] leading-none">↶</span>;
+}
+
+function EyeIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 3l18 18" />
+      <path d="M10.7 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a17.4 17.4 0 0 1-3.2 4.3" />
+      <path d="M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7 10 7c1.8 0 3.4-.5 4.7-1.2" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      <path d="M14.1 9.9A3 3 0 0 0 12 9" />
+    </svg>
+  );
 }
 
 function UploadIcon() {
@@ -944,6 +1012,10 @@ export default function AdsPage() {
   });
   const [selectedRows, setSelectedRows] = useState<Record<string, boolean>>({});
   const [visibleRowLimit, setVisibleRowLimit] = useState(120);
+  const [rowPage, setRowPage] = useState(1);
+  const [showAllRows, setShowAllRows] = useState(false);
+  const [hiddenRows, setHiddenRows] = useState<Record<string, boolean>>({});
+  const [hiddenMode, setHiddenMode] = useState<"visible" | "hidden" | "all">("visible");
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<
     number | null
   >(null);
@@ -993,6 +1065,8 @@ export default function AdsPage() {
         ADS_GENRE_OPTIONS_STORAGE_KEY,
       );
       if (savedData) setRowData(JSON.parse(savedData));
+      const savedHiddenRows = window.localStorage.getItem(ADS_HIDDEN_ROWS_STORAGE_KEY);
+      if (savedHiddenRows) setHiddenRows(JSON.parse(savedHiddenRows));
       setCategoryOptions(
         mergeDropdownOptions(
           defaultCategoryOptions,
@@ -1290,10 +1364,32 @@ export default function AdsPage() {
     saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
   };
 
-  const masterOptions = useMemo(
-    () => uniqueValues(playlists.map((playlist) => playlist.name)),
-    [playlists],
-  );
+  const masterOptions = useMemo(() => {
+    const state = playlistManagerStateQuery.data as
+      | { savedPlaylists?: Array<Record<string, unknown>>; syncedPlaylists?: Array<Record<string, unknown>>; playlists?: Array<Record<string, unknown>> }
+      | null
+      | undefined;
+
+    const savedItems =
+      state?.savedPlaylists ??
+      state?.syncedPlaylists ??
+      state?.playlists ??
+      [];
+
+    const names = savedItems
+      .map((item) =>
+        String(
+          item.name ??
+            item.playlist_name ??
+            item.playlistName ??
+            item.title ??
+            "",
+        ).trim(),
+      )
+      .filter(Boolean);
+
+    return uniqueValues(names.length > 0 ? names : playlists.map((playlist) => playlist.name));
+  }, [playlistManagerStateQuery.data, playlists]);
   const listedCountries = useMemo(
     () =>
       uniqueValues(playlists.map((playlist) => getRowData(playlist).country)),
@@ -1302,10 +1398,29 @@ export default function AdsPage() {
 
   const filtered = useMemo(() => {
     let data = playlists;
-    if (search)
+
+    if (hiddenMode === "visible") {
+      data = data.filter((p) => !hiddenRows[playlistKey(p)]);
+    } else if (hiddenMode === "hidden") {
+      data = data.filter((p) => !!hiddenRows[playlistKey(p)]);
+    }
+
+    if (search) {
+      const query = search.toLowerCase();
       data = data.filter((p) =>
-        p.name.toLowerCase().includes(search.toLowerCase()),
+        [
+          p.name,
+          getAccountName(p.account_id),
+          getRowData(p).category,
+          getRowData(p).genre,
+          getRowData(p).country,
+          getRowData(p).master,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
       );
+    }
     if (filters.category)
       data = data.filter((p) => getRowData(p).category === filters.category);
     if (filters.color)
@@ -1346,10 +1461,9 @@ export default function AdsPage() {
         return (getTrackCount(a) - getTrackCount(b)) * dir;
       if (sortField === "lastUpdate")
         return (
-          formatDate(getLastSyncedAt(a)).localeCompare(
-            formatDate(getLastSyncedAt(b)),
-          ) * dir
-        );
+          parseTimestamp(getLastSyncedAt(a)) -
+          parseTimestamp(getLastSyncedAt(b))
+        ) * dir;
       if (sortField === "today")
         return (getTodayValue(a, 0) - getTodayValue(b, 0)) * dir;
       if (sortField === "today1")
@@ -1366,18 +1480,40 @@ export default function AdsPage() {
         return (getFollowerGainSum(a, 30) - getFollowerGainSum(b, 30)) * dir;
       if (sortField === "country")
         return rowA.country.localeCompare(rowB.country) * dir;
+      if (sortField === "adDate")
+        return (getLatestAdTimestamp(rowA.ads) - getLatestAdTimestamp(rowB.ads)) * dir;
       return 0;
     });
-  }, [playlists, search, filters, sortField, sortOrder, rowData, accounts]);
+  }, [
+    playlists,
+    search,
+    filters,
+    sortField,
+    sortOrder,
+    rowData,
+    accounts,
+    hiddenRows,
+    hiddenMode,
+  ]);
+
+  const rowsPerPage = 120;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
 
   useEffect(() => {
-    setVisibleRowLimit(120);
-  }, [search, filters, sortField, sortOrder, activeAccountId]);
+    setVisibleRowLimit(rowsPerPage);
+    setRowPage(1);
+    setShowAllRows(false);
+  }, [search, filters, sortField, sortOrder, activeAccountId, hiddenMode]);
 
-  const visibleRows = useMemo(
-    () => filtered.slice(0, visibleRowLimit),
-    [filtered, visibleRowLimit],
-  );
+  useEffect(() => {
+    setRowPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const visibleRows = useMemo(() => {
+    if (showAllRows) return filtered;
+    const start = (rowPage - 1) * rowsPerPage;
+    return filtered.slice(start, start + rowsPerPage);
+  }, [filtered, rowPage, showAllRows]);
 
   const selectedRowKeys = useMemo(
     () => filtered.map(playlistKey).filter((key) => selectedRows[key]),
@@ -1411,7 +1547,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 42px 42px 230px 124px 124px 92px 84px 142px 54px 46px 64px 88px 48px 44px 44px 44px 44px 48px 48px 68px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 48px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -1443,7 +1579,7 @@ export default function AdsPage() {
   const handleRowCheckboxClick = (
     playlist: PlaylistRow,
     index: number,
-    event: React.MouseEvent<HTMLInputElement>,
+    event: MouseEvent<HTMLInputElement>,
   ) => {
     const key = playlistKey(playlist);
     if (event.shiftKey && lastSelectedRowIndex !== null) {
@@ -1460,6 +1596,36 @@ export default function AdsPage() {
 
     setSelectedRows((prev) => ({ ...prev, [key]: !prev[key] }));
     setLastSelectedRowIndex(index);
+  };
+
+  const persistHiddenRows = (nextHiddenRows: Record<string, boolean>) => {
+    setHiddenRows(nextHiddenRows);
+    window.localStorage.setItem(
+      ADS_HIDDEN_ROWS_STORAGE_KEY,
+      JSON.stringify(nextHiddenRows),
+    );
+  };
+
+  const hideSelectedRows = () => {
+    if (!hasSelectedRows) return;
+    const next = { ...hiddenRows };
+    selectedRowKeys.forEach((key) => {
+      next[key] = true;
+    });
+    persistHiddenRows(next);
+    setSelectedRows({});
+    setLastSelectedRowIndex(null);
+  };
+
+  const unhideSelectedRows = () => {
+    if (!hasSelectedRows) return;
+    const next = { ...hiddenRows };
+    selectedRowKeys.forEach((key) => {
+      delete next[key];
+    });
+    persistHiddenRows(next);
+    setSelectedRows({});
+    setLastSelectedRowIndex(null);
   };
 
   const applyTitleColorToSelected = (color: CodeColor) => {
@@ -1569,7 +1735,7 @@ export default function AdsPage() {
   const toggleAdSelection = (
     playlist: PlaylistRow,
     adIndex: number,
-    event: React.MouseEvent<HTMLButtonElement>,
+    event: MouseEvent<HTMLButtonElement>,
   ) => {
     const key = `${playlistKey(playlist)}::${adIndex}`;
     if (event.shiftKey && lastSelectedAdKey) {
@@ -1714,7 +1880,7 @@ export default function AdsPage() {
     void deleteAdsFilterOptionFromDatabase(optionModalType, option);
   };
 
-  const clearFilters = () =>
+  const clearFilters = () => {
     setFilters({
       category: "",
       color: "",
@@ -1723,18 +1889,23 @@ export default function AdsPage() {
       lastUpdate: "all",
       master: "",
     });
+    setHiddenMode("visible");
+    setRowPage(1);
+    setShowAllRows(false);
+  };
 
   const downloadCSV = () => {
     const headers = [
       "URL",
       "ID",
       "Title",
+      "Account",
+      "Saves",
+      "7D",
       "Category",
       "Genre",
       "Country",
-      "Account",
       "Master",
-      "Followers",
       "Ads",
       "Tracks",
       "Last Synced",
@@ -1743,7 +1914,6 @@ export default function AdsPage() {
       formatDayMonth(2),
       formatDayMonth(3),
       formatDayMonth(4),
-      "7D",
       "30D",
       "Ad Dates",
     ];
@@ -1753,12 +1923,13 @@ export default function AdsPage() {
         getPlaylistUrl(playlist),
         getPlaylistId(playlist),
         playlist.name,
+        getAccountName(playlist.account_id),
+        playlist.followers ?? 0,
+        getFollowerGainSum(playlist, 7),
         data.category,
         data.genre,
         data.country,
-        getAccountName(playlist.account_id),
         data.master,
-        playlist.followers ?? 0,
         data.ads.length,
         getTrackCount(playlist),
         formatDate(getPlaylistManagerLastSynced(playlist)),
@@ -1767,7 +1938,6 @@ export default function AdsPage() {
         getTodayValue(playlist, 2),
         getTodayValue(playlist, 3),
         getTodayValue(playlist, 4),
-        getFollowerGainSum(playlist, 7),
         getFollowerGainSum(playlist, 30),
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
@@ -1836,13 +2006,15 @@ export default function AdsPage() {
         setFilters((prev) => ({
           ...prev,
           lastUpdate:
-            value === "Today"
-              ? "today"
-              : value === "Last Week"
-                ? "week"
-                : value === "Last 15 Days"
-                  ? "15"
-                  : "30",
+            value === "" || value === "All"
+              ? "all"
+              : value === "Today"
+                ? "today"
+                : value === "Last Week"
+                  ? "week"
+                  : value === "Last 15 Days"
+                    ? "15"
+                    : "30",
         })),
     },
     {
@@ -1864,7 +2036,7 @@ export default function AdsPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 xl:justify-end">
+        <div className="flex flex-wrap items-start gap-3 xl:justify-end">
           {hasSelectedRows ? (
             <>
               <select
@@ -1891,6 +2063,24 @@ export default function AdsPage() {
                 className="h-10 rounded-xl bg-green-500 px-4 text-sm font-semibold text-black hover:bg-green-400"
               >
                 + Ad Dates
+              </button>
+              <button
+                type="button"
+                onClick={hideSelectedRows}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 hover:border-red-500 hover:text-red-400"
+                title="Hide selected playlists"
+                aria-label="Hide selected playlists"
+              >
+                <EyeOffIcon />
+              </button>
+              <button
+                type="button"
+                onClick={unhideSelectedRows}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 hover:border-green-500 hover:text-green-400"
+                title="Unhide selected playlists"
+                aria-label="Unhide selected playlists"
+              >
+                <EyeIcon />
               </button>
             </>
           ) : null}
@@ -1961,19 +2151,37 @@ export default function AdsPage() {
             className="h-11 w-[260px] rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-green-500"
           />
 
+
           <div className="group relative">
             <button
               type="button"
-              className="h-9 rounded-lg border border-zinc-800 bg-black px-4 text-xs font-semibold text-white"
+              className="h-11 rounded-xl border border-zinc-800 bg-black px-4 text-xs font-semibold text-white hover:border-green-500"
             >
               Filter
             </button>
             <div className="invisible absolute right-0 top-full z-[9999] w-56 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
               <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                <div className="mb-2 border-b border-zinc-800 pb-2">
+                  <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Rows</p>
+                  {[
+                    { label: "Visible Rows", value: "visible" as const },
+                    { label: `Hidden Rows (${Object.keys(hiddenRows).length})`, value: "hidden" as const },
+                    { label: "All Rows", value: "all" as const },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setHiddenMode(option.value)}
+                      className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${hiddenMode === option.value ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-300"} hover:bg-zinc-900 hover:text-white`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
                 {filterGroups.map((group) => (
                   <div
                     key={group.label}
-                    className="group/item relative rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                    className={`group/item relative rounded-lg px-3 py-2 text-sm ${group.value && group.value !== "all" ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-300"} hover:bg-zinc-900 hover:text-white`}
                   >
                     <div className="flex items-center justify-between">
                       <span>{group.label}</span>
@@ -1992,7 +2200,7 @@ export default function AdsPage() {
                           key={`${group.label}-${option}-${optionIndex}`}
                           type="button"
                           onClick={() => group.set(option)}
-                          className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900"
+                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${group.value === option ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-200"} hover:bg-zinc-900`}
                         >
                           {option}
                         </button>
@@ -2011,18 +2219,61 @@ export default function AdsPage() {
             </div>
           </div>
 
-          <select
-            value={activeAccountId ?? ALL_ACCOUNTS_ID}
-            onChange={(e) => setActiveAccountId(Number(e.target.value))}
-            className="h-10 w-[190px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
-          >
-            <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
-            {accounts.map((acc) => (
-              <option key={acc.id} value={acc.id}>
-                {acc.display_name || acc.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-col gap-1 self-start">
+            <select
+              value={activeAccountId ?? ALL_ACCOUNTS_ID}
+              onChange={(e) => setActiveAccountId(Number(e.target.value))}
+              className="h-11 w-[190px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
+            >
+              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.display_name || acc.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center justify-end gap-1 text-[11px] text-zinc-500">
+              <button
+                type="button"
+                onClick={() => { setShowAllRows(false); setRowPage((current) => Math.max(1, current - 1)); }}
+                disabled={showAllRows || rowPage <= 1}
+                className="rounded-md border border-zinc-800 px-2 py-1 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                ←
+              </button>
+              {Array.from({ length: Math.min(totalPages, 5) }).map((_, index) => {
+                const page = index + 1;
+                return (
+                  <button
+                    key={`ads-page-${page}`}
+                    type="button"
+                    onClick={() => { setShowAllRows(false); setRowPage(page); }}
+                    className={`rounded-md border px-2 py-1 ${!showAllRows && rowPage === page ? "border-green-500 bg-green-500/10 font-bold text-green-400" : "border-zinc-800 text-zinc-500 hover:border-green-500 hover:text-green-400"}`}
+                  >
+                    {page}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => { setShowAllRows(false); setRowPage((current) => Math.min(totalPages, current + 1)); }}
+                disabled={showAllRows || rowPage >= totalPages}
+                className="rounded-md border border-zinc-800 px-2 py-1 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                →
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAllRows(true)}
+                className={`rounded-md border px-2 py-1 ${showAllRows ? "border-green-500 bg-green-500/10 font-bold text-green-400" : "border-zinc-800 text-zinc-500 hover:border-green-500 hover:text-green-400"}`}
+              >
+                All
+              </button>
+              <span className="ml-1 whitespace-nowrap">
+                {showAllRows ? filtered.length : `${Math.min(filtered.length, (rowPage - 1) * rowsPerPage + 1)}-${Math.min(filtered.length, rowPage * rowsPerPage)}`} / {filtered.length}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2052,6 +2303,24 @@ export default function AdsPage() {
               >
                 Title {arrowFor("title")}
               </div>
+              <div
+                className={headerClass("account")}
+                onClick={() => toggleSort("account")}
+              >
+                Account {arrowFor("account")}
+              </div>
+              <div
+                className={headerClass("followers")}
+                onClick={() => toggleSort("followers")}
+              >
+                Saves {arrowFor("followers")}
+              </div>
+              <div
+                className={headerClass("growth7d")}
+                onClick={() => toggleSort("growth7d")}
+              >
+                7D {arrowFor("growth7d")}
+              </div>
               <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
                 Category{" "}
                 <button
@@ -2078,20 +2347,8 @@ export default function AdsPage() {
               >
                 Country {arrowFor("country")}
               </div>
-              <div
-                className={headerClass("account")}
-                onClick={() => toggleSort("account")}
-              >
-                Account {arrowFor("account")}
-              </div>
               <div className="px-1 py-3 text-[10px] font-semibold uppercase text-zinc-400">
                 Master
-              </div>
-              <div
-                className={headerClass("followers")}
-                onClick={() => toggleSort("followers")}
-              >
-                SAVES {arrowFor("followers")}
               </div>
               <div
                 className={headerClass("ads")}
@@ -2142,19 +2399,16 @@ export default function AdsPage() {
                 {formatDayMonth(4)} {arrowFor("today4")}
               </div>
               <div
-                className={headerClass("growth7d")}
-                onClick={() => toggleSort("growth7d")}
-              >
-                7D {arrowFor("growth7d")}
-              </div>
-              <div
                 className={headerClass("growth30d")}
                 onClick={() => toggleSort("growth30d")}
               >
                 30D {arrowFor("growth30d")}
               </div>
-              <div className="px-2 py-3 text-center text-[10px] font-semibold uppercase text-zinc-400">
-                Ad Date
+              <div
+                className={`${headerClass("adDate")} text-center`}
+                onClick={() => toggleSort("adDate")}
+              >
+                Ad Date {arrowFor("adDate")}
               </div>
               {Array.from({ length: adColumnCount }).map((_, index) => (
                 <div
@@ -2252,6 +2506,13 @@ export default function AdsPage() {
                           <CopyIcon />
                         </button>
                       </div>
+                      <div className="truncate px-2 text-zinc-400">
+                        {getAccountName(playlist.account_id)}
+                      </div>
+                      <div className="px-2">{playlist.followers ?? 0}</div>
+                      <div className="px-1">
+                        <GrowthCell value={getFollowerGainSum(playlist, 7)} />
+                      </div>
                       <div className="px-2">
                         <select
                           value={data.category}
@@ -2310,16 +2571,13 @@ export default function AdsPage() {
                           ))}
                         </select>
                       </div>
-                      <div className="truncate px-2 text-zinc-400">
-                        {getAccountName(playlist.account_id)}
-                      </div>
                       <div className="px-2">
                         <select
                           value={data.master}
                           onChange={(e) =>
                             updateRowData(playlist, { master: e.target.value })
                           }
-                          className="h-8 w-[126px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
+                          className="h-8 w-[120px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
                         >
                           <option value="">Master</option>
                           {masterOptions.map((name, index) => (
@@ -2332,7 +2590,6 @@ export default function AdsPage() {
                           ))}
                         </select>
                       </div>
-                      <div className="px-2">{playlist.followers ?? 0}</div>
                       <div className="px-2">{data.ads.length}</div>
                       <div className="px-2">{getTrackCount(playlist)}</div>
                       <div className="px-2 text-[11px]">
@@ -2352,9 +2609,6 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 4)} />
-                      </div>
-                      <div className="px-1">
-                        <GrowthCell value={getFollowerGainSum(playlist, 7)} />
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getFollowerGainSum(playlist, 30)} />
@@ -2403,19 +2657,6 @@ export default function AdsPage() {
                     </div>
                   );
                 })}
-                {visibleRows.length < filtered.length ? (
-                  <div className="flex items-center justify-center border-b border-zinc-900 px-5 py-4">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setVisibleRowLimit((current) => current + 120)
-                      }
-                      className="rounded-xl border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400"
-                    >
-                      Show more rows ({visibleRows.length} of {filtered.length})
-                    </button>
-                  </div>
-                ) : null}
               </div>
             )}
           </div>
