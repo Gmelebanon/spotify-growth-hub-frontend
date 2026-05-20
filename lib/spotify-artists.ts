@@ -1,3 +1,8 @@
+export type SpotifyArtistStats = {
+  streams: number;
+  growthPercent: number;
+};
+
 export const spotifyArtistIds = [
   "060FDwjb9cOepAZbtEBs94",
   "0qufKoRNYHeD4kUblPnMho",
@@ -14,9 +19,9 @@ export const spotifyArtistIds = [
   "5MrgbTcDBWQ3i6oWgMUe7k",
   "5w3XLb0Zwob3zcPsMy6L9L",
   "67KzkqGwCMmFTb9OVsxg0P",
-];
+] as const;
 
-export const spotifyArtistStats = {
+export const spotifyArtistStats: Record<string, SpotifyArtistStats> = {
   "060FDwjb9cOepAZbtEBs94": {
     streams: 0,
     growthPercent: 0,
@@ -79,9 +84,16 @@ export const spotifyArtistStats = {
   },
 };
 
-export const spotifyArtists = spotifyArtistIds.map((id) => ({
-  id,
-  spotifyUrl: `https://open.spotify.com/artist/${id}`,
-  streams: spotifyArtistStats[id]?.streams || 0,
-  growthPercent: spotifyArtistStats[id]?.growthPercent || 0,
-}));
+export const spotifyArtists = spotifyArtistIds.map((id) => {
+  const stats = spotifyArtistStats[id] || {
+    streams: 0,
+    growthPercent: 0,
+  };
+
+  return {
+    id,
+    spotifyUrl: `https://open.spotify.com/artist/${id}`,
+    streams: stats.streams,
+    growthPercent: stats.growthPercent,
+  };
+});
