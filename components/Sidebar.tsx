@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 
 const primaryNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: "▦" },
+  { label: "My Artists", href: "/my-artists", icon: "♪" },
   { label: "Daily Growth", href: "/playlists", icon: "≡" },
   { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
   { label: "Curation", href: "/curation", icon: "◇" },
@@ -13,7 +14,7 @@ const primaryNavItems = [
 
 const middleNavItems = [
   { label: "Playlists", href: "/ads", icon: "◉" },
-  { label: "Production", href: "/production", icon: "▶" },
+  { label: "Production", href: "/production", icon: "▷" },
 ];
 
 const secondaryNavItems = [
@@ -65,7 +66,7 @@ function Divider() {
 }
 
 export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <aside
@@ -124,7 +125,7 @@ export default function Sidebar() {
         <Divider />
 
         <div className="flex flex-col gap-2">
-          {secondaryNavItems.map((item, index) => (
+          {secondaryNavItems.map((item) => (
             <div key={item.href}>
               {item.label === "Settings" && <Divider />}
               <NavLink
