@@ -129,7 +129,7 @@ function getBackendBaseUrl() {
   return (
     process.env.NEXT_PUBLIC_API_URL ||
     process.env.NEXT_PUBLIC_API_BASE_URL ||
-    ""
+    "https://spotify-growth-hub-backend.onrender.com"
   );
 }
 
@@ -563,83 +563,17 @@ function ArtistsTable({
       <table className="min-w-[1320px] w-full border-collapse text-left text-sm">
         <thead className="border-b border-zinc-900 bg-zinc-950 text-[11px]">
           <tr>
-            <SortableHeader
-              label="URL"
-              sortKey="url"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Artist"
-              sortKey="name"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Streams"
-              sortKey="streams"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Growth"
-              sortKey="growth"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Followers"
-              sortKey="followers"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="7 Days"
-              sortKey="followers7Days"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Popularity"
-              sortKey="popularity"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Genre"
-              sortKey="genre"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Releases"
-              sortKey="releases"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Tracks"
-              sortKey="tracks"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-            <SortableHeader
-              label="Latest"
-              sortKey="latest"
-              activeSortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
+            <SortableHeader label="URL" sortKey="url" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Artist" sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Streams" sortKey="streams" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Growth" sortKey="growth" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Followers" sortKey="followers" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="7 Days" sortKey="followers7Days" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Popularity" sortKey="popularity" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Genre" sortKey="genre" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Releases" sortKey="releases" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Tracks" sortKey="tracks" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Latest" sortKey="latest" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <th className="px-4 py-4 font-semibold uppercase tracking-[0.16em] text-zinc-500">
               Actions
             </th>
@@ -807,8 +741,6 @@ export default function MyArtistsPage() {
   async function loadDatabaseArtists() {
     const backendBaseUrl = getBackendBaseUrl();
 
-    if (!backendBaseUrl) return [];
-
     const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
       cache: "no-store",
     });
@@ -827,7 +759,7 @@ export default function MyArtistsPage() {
   async function syncFollowerSnapshots(artistsToSync) {
     const backendBaseUrl = getBackendBaseUrl();
 
-    if (!backendBaseUrl || artistsToSync.length === 0) return [];
+    if (artistsToSync.length === 0) return [];
 
     const response = await fetch(
       `${backendBaseUrl}/api/artist-library/sync-followers`,
@@ -893,13 +825,8 @@ export default function MyArtistsPage() {
         setBaseArtists(nextBaseArtists);
         setNewReleases(spotifyData.newReleases || []);
 
-        try {
-          const nextDatabaseArtists = await loadDatabaseArtists();
-          setDatabaseArtists(nextDatabaseArtists);
-        } catch (databaseError) {
-          setDatabaseArtists([]);
-          console.warn(databaseError);
-        }
+        const nextDatabaseArtists = await loadDatabaseArtists();
+        setDatabaseArtists(nextDatabaseArtists);
 
         try {
           const syncedFollowers = await syncFollowerSnapshots(nextBaseArtists);
@@ -1056,130 +983,99 @@ export default function MyArtistsPage() {
   async function handleAddArtist(artist) {
     const backendBaseUrl = getBackendBaseUrl();
 
-    if (backendBaseUrl) {
-      try {
-        const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            artistId: artist.id,
-            name: artist.name,
-            spotifyUrl: artist.spotifyUrl,
-            image: artist.image,
-            genres: artist.genres || [],
-            streams: artist.streams || 0,
-            growthPercent: artist.growthPercent || 0,
-          }),
-        });
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          artistId: artist.id,
+          name: artist.name,
+          spotifyUrl: artist.spotifyUrl,
+          image: artist.image,
+          genres: artist.genres || [],
+          streams: artist.streams || 0,
+          growthPercent: artist.growthPercent || 0,
+        }),
+      });
 
-        const data = await response.json();
+      const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.detail || data.message || "Could not add artist.");
-        }
-
-        setDatabaseArtists((currentArtists) => {
-          return [
-            ...currentArtists.filter(
-              (currentArtist) => currentArtist.id !== artist.id
-            ),
-            artist,
-          ];
-        });
-
-        setToastMessage(`${artist.name} added to database.`);
-        return;
-      } catch (error) {
-        setToastMessage(error.message);
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "Could not add artist.");
       }
+
+      setDatabaseArtists((currentArtists) => {
+        return [
+          ...currentArtists.filter(
+            (currentArtist) => currentArtist.id !== artist.id
+          ),
+          artist,
+        ];
+      });
+
+      setRemovedArtistIds((currentIds) => {
+        const nextIds = currentIds.filter((id) => id !== artist.id);
+
+        localStorage.setItem(
+          REMOVED_ARTISTS_STORAGE_KEY,
+          JSON.stringify(nextIds)
+        );
+
+        return nextIds;
+      });
+
+      setToastMessage(`${artist.name} added to database.`);
+    } catch (error) {
+      setToastMessage(`Database save failed: ${error.message}`);
     }
-
-    setAddedArtists((currentArtists) => {
-      const nextArtists = [
-        ...currentArtists.filter(
-          (currentArtist) => currentArtist.id !== artist.id
-        ),
-        artist,
-      ];
-
-      localStorage.setItem(
-        ADDED_ARTISTS_STORAGE_KEY,
-        JSON.stringify(nextArtists)
-      );
-
-      return nextArtists;
-    });
-
-    setRemovedArtistIds((currentIds) => {
-      const nextIds = currentIds.filter((id) => id !== artist.id);
-
-      localStorage.setItem(REMOVED_ARTISTS_STORAGE_KEY, JSON.stringify(nextIds));
-
-      return nextIds;
-    });
-
-    setToastMessage(`${artist.name} added locally.`);
   }
 
   async function handleRemoveArtist(artistId) {
     const backendBaseUrl = getBackendBaseUrl();
 
-    if (backendBaseUrl) {
-      try {
-        const response = await fetch(
-          `${backendBaseUrl}/api/artist-library/${artistId}`,
-          {
-            method: "DELETE",
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.detail || data.message || "Could not remove artist."
-          );
+    try {
+      const response = await fetch(
+        `${backendBaseUrl}/api/artist-library/${artistId}`,
+        {
+          method: "DELETE",
         }
+      );
 
-        setDatabaseArtists((currentArtists) =>
-          currentArtists.filter((artist) => artist.id !== artistId)
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || data.message || "Could not remove artist."
         );
-
-        setBaseArtists((currentArtists) =>
-          currentArtists.filter((artist) => artist.id !== artistId)
-        );
-
-        setToastMessage("Artist removed from database.");
-        return;
-      } catch (error) {
-        setToastMessage(error.message);
       }
+
+      setDatabaseArtists((currentArtists) =>
+        currentArtists.filter((artist) => artist.id !== artistId)
+      );
+
+      setBaseArtists((currentArtists) =>
+        currentArtists.filter((artist) => artist.id !== artistId)
+      );
+
+      setAddedArtists((currentArtists) => {
+        const nextArtists = currentArtists.filter(
+          (artist) => artist.id !== artistId
+        );
+
+        localStorage.setItem(
+          ADDED_ARTISTS_STORAGE_KEY,
+          JSON.stringify(nextArtists)
+        );
+
+        return nextArtists;
+      });
+
+      setToastMessage("Artist removed from database.");
+    } catch (error) {
+      setToastMessage(`Database remove failed: ${error.message}`);
     }
-
-    setAddedArtists((currentArtists) => {
-      const nextArtists = currentArtists.filter(
-        (artist) => artist.id !== artistId
-      );
-
-      localStorage.setItem(
-        ADDED_ARTISTS_STORAGE_KEY,
-        JSON.stringify(nextArtists)
-      );
-
-      return nextArtists;
-    });
-
-    setRemovedArtistIds((currentIds) => {
-      const nextIds = Array.from(new Set([...currentIds, artistId]));
-
-      localStorage.setItem(REMOVED_ARTISTS_STORAGE_KEY, JSON.stringify(nextIds));
-
-      return nextIds;
-    });
-
-    setToastMessage("Artist removed locally.");
   }
 
   return (
@@ -1268,17 +1164,15 @@ export default function MyArtistsPage() {
             )}
           </section>
 
-          <section className="rounded-3xl border border-zinc-900 bg-zinc-950/60 p-7">
-            <ArtistsTable
-              artists={sortedArtists}
-              isLoading={isLoading}
-              onRemoveArtist={handleRemoveArtist}
-              onCopied={setToastMessage}
-              sortKey={sortKey}
-              sortDirection={sortDirection}
-              onSort={handleSort}
-            />
-          </section>
+          <ArtistsTable
+            artists={sortedArtists}
+            isLoading={isLoading}
+            onRemoveArtist={handleRemoveArtist}
+            onCopied={setToastMessage}
+            sortKey={sortKey}
+            sortDirection={sortDirection}
+            onSort={handleSort}
+          />
         </>
       )}
 
