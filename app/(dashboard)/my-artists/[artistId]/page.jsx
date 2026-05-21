@@ -17,7 +17,7 @@ function SpotifyIcon() {
   );
 }
 
-function ExternalLinkIcon() {
+function CopyIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -27,8 +27,8 @@ function ExternalLinkIcon() {
       stroke="currentColor"
       strokeWidth="2"
     >
-      <path d="M7 17L17 7" />
-      <path d="M9 7h8v8" />
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
 }
@@ -77,6 +77,15 @@ function isValidSpotifyArtistId(artistId) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+async function copyToClipboard(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function StatCard({ label, value, subLabel }) {
@@ -207,6 +216,7 @@ export default function ArtistDetailsPage() {
   const [openReleaseId, setOpenReleaseId] = useState(null);
   const [releaseSearch, setReleaseSearch] = useState("");
   const [releaseType, setReleaseType] = useState("all");
+  const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -249,6 +259,16 @@ export default function ArtistDetailsPage() {
     loadArtistDetails();
   }, [artistId]);
 
+  useEffect(() => {
+    if (!toastMessage) return;
+
+    const timeoutId = setTimeout(() => {
+      setToastMessage("");
+    }, 2200);
+
+    return () => clearTimeout(timeoutId);
+  }, [toastMessage]);
+
   const releaseTypes = useMemo(() => {
     const types = new Set();
 
@@ -273,6 +293,18 @@ export default function ArtistDetailsPage() {
   }, [releases, releaseSearch, releaseType]);
 
   const latestRelease = releases[0] || null;
+
+  async function handleCopyArtistLink() {
+    if (!artist?.spotifyUrl) return;
+
+    const didCopy = await copyToClipboard(artist.spotifyUrl);
+
+    setToastMessage(
+      didCopy
+        ? `${artist.name} Spotify link copied.`
+        : "Could not copy Spotify link."
+    );
+  }
 
   if (isLoading) {
     return (
@@ -321,6 +353,12 @@ export default function ArtistDetailsPage() {
 
   return (
     <main className="min-h-screen bg-black px-6 py-8 text-white">
+      {toastMessage ? (
+        <div className="fixed bottom-6 right-6 z-50 rounded-2xl border border-green-400/30 bg-green-400 px-4 py-3 text-sm font-semibold text-black shadow-2xl">
+          {toastMessage}
+        </div>
+      ) : null}
+
       <Link
         href="/my-artists"
         className="inline-flex items-center text-sm font-medium text-green-400 transition hover:text-green-300"
@@ -379,15 +417,14 @@ export default function ArtistDetailsPage() {
                   Spotify
                 </Link>
 
-                <Link
-                  href={artist.spotifyUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={handleCopyArtistLink}
                   className="flex h-11 w-11 items-center justify-center rounded-2xl border border-zinc-800 text-white transition hover:border-green-400/60 hover:text-green-400"
-                  title="Open external link"
+                  title="Copy Spotify artist link"
                 >
-                  <ExternalLinkIcon />
-                </Link>
+                  <CopyIcon />
+                </button>
               </div>
             </div>
 

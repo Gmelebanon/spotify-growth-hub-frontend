@@ -3,23 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-function ExternalLinkIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M7 17L17 7" />
-      <path d="M9 7h8v8" />
-    </svg>
-  );
-}
+const ADDED_ARTISTS_STORAGE_KEY = "spotify-growth-hub-added-artists";
+const REMOVED_ARTISTS_STORAGE_KEY = "spotify-growth-hub-removed-artists";
 
-function EyeIcon() {
+function CopyIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -29,8 +16,8 @@ function EyeIcon() {
       stroke="currentColor"
       strokeWidth="2"
     >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-      <circle cx="12" cy="12" r="3" />
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
 }
@@ -45,6 +32,37 @@ function SpotifyIcon() {
     >
       <path d="M12 1.8C6.37 1.8 1.8 6.37 1.8 12S6.37 22.2 12 22.2 22.2 17.63 22.2 12 17.63 1.8 12 1.8Zm4.68 14.7a.77.77 0 0 1-1.06.25c-2.9-1.78-6.56-2.18-10.86-1.19a.77.77 0 1 1-.34-1.5c4.71-1.08 8.75-.62 12.01 1.38.36.22.48.7.25 1.06Zm1.25-2.78a.96.96 0 0 1-1.32.32c-3.32-2.04-8.39-2.63-12.32-1.44a.96.96 0 1 1-.56-1.84c4.49-1.36 10.07-.7 13.88 1.64.45.28.59.87.32 1.32Zm.11-2.9C14.06 8.46 7.5 8.25 3.7 9.47a1.15 1.15 0 0 1-.7-2.2c4.36-1.4 11.61-1.15 16.21 1.58a1.15 1.15 0 1 1-1.17 1.97Z" />
     </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+function SortArrow({ active, direction }) {
+  if (!active) {
+    return <span className="ml-1 text-zinc-700">↕</span>;
+  }
+
+  return (
+    <span className="ml-1 text-green-400">
+      {direction === "asc" ? "↑" : "↓"}
+    </span>
   );
 }
 
@@ -66,6 +84,46 @@ function formatGrowth(value) {
   if (number < 0) return `▼ ${formatNumber(Math.abs(number))}%`;
 
   return "0%";
+}
+
+function formatDelta(value) {
+  const number = Number(value || 0);
+
+  if (number > 0) return `+${formatNumber(number)}`;
+  if (number < 0) return `-${formatNumber(Math.abs(number))}`;
+
+  return "0";
+}
+
+function normalizeArtist(artist) {
+  return {
+    id: artist.id,
+    name: artist.name,
+    image: artist.image || null,
+    followers: artist.followers || 0,
+    followers7Days: artist.followers7Days || 0,
+    popularity: artist.popularity || 0,
+    genres: artist.genres || [],
+    spotifyUrl:
+      artist.spotifyUrl ||
+      artist.external_urls?.spotify ||
+      `https://open.spotify.com/artist/${artist.id}`,
+    streams: artist.streams || 0,
+    growthPercent: artist.growthPercent || 0,
+    totalReleases: artist.totalReleases || artist.releases || 0,
+    totalTracks: artist.totalTracks || artist.tracks || 0,
+    latestRelease: artist.latestRelease || null,
+    isManuallyAdded: Boolean(artist.isManuallyAdded),
+  };
+}
+
+async function copyToClipboard(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ReleaseTracksModal({ release, onClose }) {
@@ -152,13 +210,7 @@ function ReleaseTracksModal({ release, onClose }) {
 
 function ReleaseCard({ release, onViewTracks }) {
   return (
-    <article
-      className={`group flex min-h-[150px] overflow-hidden rounded-3xl border bg-black transition duration-300 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)] ${
-        release.isNewRelease
-          ? "border-red-500/80 hover:border-red-400"
-          : "border-zinc-900 hover:border-green-400/60"
-      }`}
-    >
+    <article className="group flex min-h-[150px] overflow-hidden rounded-3xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)]">
       <div className="relative h-auto w-[140px] shrink-0 overflow-hidden bg-zinc-950">
         {release.image ? (
           <img
@@ -169,12 +221,6 @@ function ReleaseCard({ release, onViewTracks }) {
         ) : (
           <div className="flex h-full w-full items-center justify-center text-3xl font-black text-green-400">
             {release.name?.charAt(0) || "N"}
-          </div>
-        )}
-
-        {release.isNewRelease && (
-          <div className="absolute left-3 top-3 rounded-full bg-red-500 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white">
-            New
           </div>
         )}
       </div>
@@ -219,7 +265,7 @@ function ReleaseCard({ release, onViewTracks }) {
             title="View tracks"
             className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-black text-white transition hover:border-green-400/60 hover:text-green-400"
           >
-            <EyeIcon />
+            View
           </button>
         </div>
       </div>
@@ -227,139 +273,31 @@ function ReleaseCard({ release, onViewTracks }) {
   );
 }
 
-function ArtistCard({ artist }) {
-  const genres =
-    artist.genres && artist.genres.length > 0
-      ? artist.genres.slice(0, 2).join(" / ")
-      : "Spotify Artist";
-
-  const growthNumber = Number(artist.growthPercent || 0);
-
-  return (
-    <article className="group relative w-full overflow-hidden rounded-3xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)] sm:w-[280px]">
-      <Link
-        href={`/my-artists/${artist.id}`}
-        aria-label={`View details for ${artist.name}`}
-        className="absolute inset-0 z-10"
-      />
-
-      <div className="relative h-[400px]">
-        {artist.image ? (
-          <img
-            src={artist.image}
-            alt={artist.name}
-            className="absolute inset-0 h-full w-full object-cover object-center opacity-70 grayscale transition duration-300 group-hover:opacity-90 group-hover:grayscale-0"
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-zinc-950">
-            <span className="text-5xl font-semibold text-green-400">
-              {artist.name?.charAt(0) || "A"}
-            </span>
-          </div>
-        )}
-
-        <div className="absolute inset-0 bg-gradient-to-b from-green-500/20 via-black/35 to-black" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent" />
-
-        <div className="pointer-events-none relative z-20 flex h-full flex-col justify-end p-5">
-          <div>
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-green-400">
-              {genres}
-            </p>
-
-            <h2 className="text-3xl font-black uppercase leading-[0.95] tracking-tight text-white">
-              {artist.name}
-            </h2>
-
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <div className="rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  Streams
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {formatNumber(artist.streams)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  Growth
-                </p>
-                <p
-                  className={`mt-1 text-sm font-semibold ${
-                    growthNumber > 0
-                      ? "text-green-400"
-                      : growthNumber < 0
-                      ? "text-red-400"
-                      : "text-zinc-400"
-                  }`}
-                >
-                  {formatGrowth(artist.growthPercent)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  Followers
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {formatNumber(artist.followers)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                  Popularity
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {artist.popularity}/100
-                </p>
-              </div>
-            </div>
-
-            <div className="pointer-events-auto relative z-30 mt-4 flex items-center gap-2">
-              <Link
-                href={artist.spotifyUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="Open on Spotify"
-                className="flex h-11 w-11 items-center justify-center rounded-2xl bg-green-400 text-black transition hover:bg-green-300"
-              >
-                <SpotifyIcon />
-              </Link>
-
-              <Link
-                href={`/my-artists/${artist.id}`}
-                title="View artist details"
-                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-black/70 text-white backdrop-blur transition hover:border-green-400/60 hover:text-green-400"
-              >
-                <EyeIcon />
-              </Link>
-
-              <Link
-                href={artist.spotifyUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="Open external link"
-                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-black/70 text-white backdrop-blur transition hover:border-green-400/60 hover:text-green-400"
-              >
-                <ExternalLinkIcon />
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function SearchArtistsBox() {
+function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
+    if (!isOpen) return;
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
     const timeoutId = setTimeout(async () => {
       if (query.trim().length < 2) {
         setResults([]);
@@ -392,121 +330,468 @@ function SearchArtistsBox() {
     }, 350);
 
     return () => clearTimeout(timeoutId);
-  }, [query]);
+  }, [query, isOpen]);
 
-  async function copyArtistId(artistId) {
-    try {
-      await navigator.clipboard.writeText(artistId);
-      setMessage("Artist ID copied. Add it to lib/spotify-artists.js.");
-    } catch {
-      setMessage("Could not copy Artist ID.");
-    }
+  function handleAddArtist(artist) {
+    const addedArtist = normalizeArtist({
+      ...artist,
+      isManuallyAdded: true,
+      streams: 0,
+      growthPercent: 0,
+      followers7Days: 0,
+    });
+
+    onAddArtist(addedArtist);
+    setMessage(`${artist.name} added to Artist Library.`);
   }
 
+  if (!isOpen) return null;
+
   return (
-    <section className="mb-6 rounded-3xl border border-zinc-900 bg-zinc-950/60 p-6">
-      <div className="mb-5">
-        <h2 className="text-lg font-semibold text-white">Add Artist Search</h2>
-        <p className="mt-1 text-sm text-zinc-500">
-          Search Spotify by artist name, then copy the Artist ID into your
-          artist config file.
-        </p>
-      </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur"
+      onMouseDown={onClose}
+    >
+      <div
+        className="max-h-[86vh] w-full max-w-5xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-zinc-900 p-6">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Add Artist</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Search Spotify by artist name, then add the artist to your library.
+            </p>
+          </div>
 
-      <input
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search artist name..."
-        className="w-full rounded-2xl border border-zinc-800 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-green-400/60"
-      />
-
-      {message ? <p className="mt-3 text-sm text-green-400">{message}</p> : null}
-
-      {isSearching ? (
-        <p className="mt-4 text-sm text-zinc-500">Searching...</p>
-      ) : null}
-
-      {results.length > 0 ? (
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {results.map((artist) => (
-            <article
-              key={artist.id}
-              className="rounded-2xl border border-zinc-900 bg-black p-4"
-            >
-              <div className="flex items-center gap-3">
-                <div className="h-14 w-14 overflow-hidden rounded-2xl bg-zinc-900">
-                  {artist.image ? (
-                    <img
-                      src={artist.image}
-                      alt={artist.name}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : null}
-                </div>
-
-                <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold text-white">
-                    {artist.name}
-                  </h3>
-                  <p className="mt-1 truncate text-xs text-zinc-500">
-                    {artist.id}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => copyArtistId(artist.id)}
-                  className="flex-1 rounded-xl bg-green-400 px-3 py-2 text-xs font-semibold text-black hover:bg-green-300"
-                >
-                  Copy ID
-                </button>
-
-                <Link
-                  href={artist.spotifyUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-white hover:border-green-400/60 hover:text-green-400"
-                >
-                  <ExternalLinkIcon />
-                </Link>
-              </div>
-            </article>
-          ))}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
+            title="Close"
+          >
+            ×
+          </button>
         </div>
-      ) : null}
-    </section>
-  );
-}
 
-function LoadingCard() {
-  return (
-    <article className="w-full overflow-hidden rounded-3xl border border-zinc-900 bg-black sm:w-[280px]">
-      <div className="h-[400px] animate-pulse bg-zinc-950 p-5">
-        <div className="mt-48">
-          <div className="mb-3 h-3 w-32 rounded bg-zinc-900" />
-          <div className="mb-5 h-8 w-40 rounded bg-zinc-900" />
-          <div className="grid grid-cols-2 gap-3">
-            <div className="h-16 rounded-2xl bg-zinc-900" />
-            <div className="h-16 rounded-2xl bg-zinc-900" />
-            <div className="h-16 rounded-2xl bg-zinc-900" />
-            <div className="h-16 rounded-2xl bg-zinc-900" />
+        <div className="p-6">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            autoFocus
+            placeholder="Search artist name..."
+            className="w-full rounded-2xl border border-zinc-800 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-green-400/60"
+          />
+
+          {message ? (
+            <p className="mt-3 text-sm text-green-400">{message}</p>
+          ) : null}
+
+          {isSearching ? (
+            <p className="mt-4 text-sm text-zinc-500">Searching...</p>
+          ) : null}
+
+          <div className="mt-5 max-h-[52vh] overflow-y-auto pr-1">
+            {results.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {results.map((artist) => {
+                  const isAlreadyAdded = currentArtistIds.includes(artist.id);
+
+                  return (
+                    <article
+                      key={artist.id}
+                      className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-14 w-14 overflow-hidden rounded-2xl bg-zinc-900">
+                          {artist.image ? (
+                            <img
+                              src={artist.image}
+                              alt={artist.name}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : null}
+                        </div>
+
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-white">
+                            {artist.name}
+                          </h3>
+                          <p className="mt-1 truncate text-xs text-zinc-500">
+                            {artist.id}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleAddArtist(artist)}
+                          disabled={isAlreadyAdded}
+                          className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                            isAlreadyAdded
+                              ? "cursor-not-allowed bg-zinc-900 text-zinc-500"
+                              : "bg-green-400 text-black hover:bg-green-300"
+                          }`}
+                        >
+                          {isAlreadyAdded ? "Added" : "Add Artist"}
+                        </button>
+
+                        <Link
+                          href={artist.spotifyUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-white hover:border-green-400/60 hover:text-green-400"
+                        >
+                          <SpotifyIcon />
+                        </Link>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : query.trim().length >= 2 && !isSearching ? (
+              <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
+                <p className="text-sm font-semibold text-white">
+                  No artists found.
+                </p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Try searching with a different artist name.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
+                <p className="text-sm font-semibold text-white">
+                  Start searching.
+                </p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Type at least 2 characters to search Spotify.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </article>
+    </div>
+  );
+}
+
+function SortableHeader({ label, sortKey, activeSortKey, sortDirection, onSort }) {
+  return (
+    <th className="px-4 py-4 font-semibold">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="flex items-center gap-1 uppercase tracking-[0.16em] text-zinc-500 transition hover:text-green-400"
+      >
+        {label}
+        <SortArrow active={activeSortKey === sortKey} direction={sortDirection} />
+      </button>
+    </th>
+  );
+}
+
+function ArtistsTable({
+  artists,
+  isLoading,
+  onRemoveArtist,
+  onCopied,
+  sortKey,
+  sortDirection,
+  onSort,
+}) {
+  if (isLoading) {
+    return (
+      <div className="overflow-hidden rounded-2xl border border-zinc-900 bg-black">
+        {Array.from({ length: 8 }).map((_, index) => (
+          <div
+            key={index}
+            className="grid grid-cols-[70px_1.4fr_110px_100px_120px_100px_110px_120px_90px_90px_130px_80px] gap-4 border-b border-zinc-900 px-4 py-4 last:border-b-0"
+          >
+            {Array.from({ length: 12 }).map((__, cellIndex) => (
+              <div
+                key={cellIndex}
+                className="h-5 animate-pulse rounded bg-zinc-900"
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (artists.length === 0) {
+    return (
+      <div className="rounded-2xl border border-zinc-900 bg-black p-5">
+        <p className="text-sm font-semibold text-white">No artists found.</p>
+        <p className="mt-1 text-sm text-zinc-500">
+          Try changing the filters or add a new artist.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-zinc-900 bg-black">
+      <table className="min-w-[1320px] w-full border-collapse text-left text-sm">
+        <thead className="border-b border-zinc-900 bg-zinc-950 text-[11px]">
+          <tr>
+            <SortableHeader
+              label="URL"
+              sortKey="url"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Artist"
+              sortKey="name"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Streams"
+              sortKey="streams"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Growth"
+              sortKey="growth"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Followers"
+              sortKey="followers"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="7 Days"
+              sortKey="followers7Days"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Popularity"
+              sortKey="popularity"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Genre"
+              sortKey="genre"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Releases"
+              sortKey="releases"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Tracks"
+              sortKey="tracks"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Latest"
+              sortKey="latest"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <th className="px-4 py-4 font-semibold uppercase tracking-[0.16em] text-zinc-500">
+              Actions
+            </th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {artists.map((artist) => {
+            const growthNumber = Number(artist.growthPercent || 0);
+            const followers7DaysNumber = Number(artist.followers7Days || 0);
+            const genre =
+              artist.genres && artist.genres.length > 0
+                ? artist.genres[0]
+                : "Spotify Artist";
+
+            return (
+              <tr
+                key={artist.id}
+                className="border-b border-zinc-900 transition hover:bg-zinc-950/70 last:border-b-0"
+              >
+                <td className="px-4 py-4">
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={artist.spotifyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-400 text-black transition hover:bg-green-300"
+                      title="Open on Spotify"
+                    >
+                      <SpotifyIcon />
+                    </Link>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const didCopy = await copyToClipboard(artist.spotifyUrl);
+                        onCopied(
+                          didCopy
+                            ? `${artist.name} Spotify link copied.`
+                            : "Could not copy Spotify link."
+                        );
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300 transition hover:border-green-400/60 hover:text-green-400"
+                      title="Copy Spotify link"
+                    >
+                      <CopyIcon />
+                    </button>
+                  </div>
+                </td>
+
+                <td className="px-4 py-4">
+                  <Link
+                    href={`/my-artists/${artist.id}`}
+                    className="flex items-center gap-3"
+                  >
+                    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-zinc-900">
+                      {artist.image ? (
+                        <img
+                          src={artist.image}
+                          alt={artist.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-sm font-black text-green-400">
+                          {artist.name?.charAt(0) || "A"}
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="truncate font-semibold text-white">
+                      {artist.name}
+                    </p>
+                  </Link>
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {formatNumber(artist.streams)}
+                </td>
+
+                <td
+                  className={`px-4 py-4 font-semibold ${
+                    growthNumber > 0
+                      ? "text-green-400"
+                      : growthNumber < 0
+                      ? "text-red-400"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {formatGrowth(artist.growthPercent)}
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {formatNumber(artist.followers)}
+                </td>
+
+                <td
+                  className={`px-4 py-4 font-semibold ${
+                    followers7DaysNumber > 0
+                      ? "text-green-400"
+                      : followers7DaysNumber < 0
+                      ? "text-red-400"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {formatDelta(artist.followers7Days)}
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {artist.popularity}/100
+                </td>
+
+                <td className="px-4 py-4">
+                  <span className="rounded-lg border border-zinc-800 bg-black px-2 py-1 text-xs font-semibold text-zinc-300">
+                    {genre}
+                  </span>
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {formatNumber(artist.totalReleases)}
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {formatNumber(artist.totalTracks)}
+                </td>
+
+                <td className="px-4 py-4">
+                  <span className="block max-w-[130px] truncate text-xs text-zinc-400">
+                    {artist.latestRelease?.name || "—"}
+                  </span>
+                </td>
+
+                <td className="px-4 py-4">
+                  <button
+                    type="button"
+                    onClick={() => onRemoveArtist(artist.id)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300 transition hover:border-red-400/60 hover:text-red-300"
+                    title="Remove artist"
+                  >
+                    <TrashIcon />
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
 export default function MyArtistsPage() {
-  const [artists, setArtists] = useState([]);
+  const [baseArtists, setBaseArtists] = useState([]);
+  const [addedArtists, setAddedArtists] = useState([]);
+  const [removedArtistIds, setRemovedArtistIds] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
   const [selectedRelease, setSelectedRelease] = useState(null);
-  const [selectedGenre, setSelectedGenre] = useState("all");
-  const [sortBy, setSortBy] = useState("popularity");
+  const [sortKey, setSortKey] = useState("popularity");
+  const [sortDirection, setSortDirection] = useState("desc");
+  const [isAddArtistOpen, setIsAddArtistOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    try {
+      const savedAddedArtists = JSON.parse(
+        localStorage.getItem(ADDED_ARTISTS_STORAGE_KEY) || "[]"
+      );
+      const savedRemovedArtistIds = JSON.parse(
+        localStorage.getItem(REMOVED_ARTISTS_STORAGE_KEY) || "[]"
+      );
+
+      setAddedArtists(savedAddedArtists.map(normalizeArtist));
+      setRemovedArtistIds(savedRemovedArtistIds);
+    } catch {
+      setAddedArtists([]);
+      setRemovedArtistIds([]);
+    }
+  }, []);
 
   useEffect(() => {
     async function loadArtists() {
@@ -523,7 +808,7 @@ export default function MyArtistsPage() {
           );
         }
 
-        setArtists(data.artists || []);
+        setBaseArtists((data.artists || []).map(normalizeArtist));
         setNewReleases(data.newReleases || []);
       } catch (error) {
         setErrorMessage(error.message);
@@ -535,97 +820,237 @@ export default function MyArtistsPage() {
     loadArtists();
   }, []);
 
+  useEffect(() => {
+    if (!toastMessage) return;
+
+    const timeoutId = setTimeout(() => {
+      setToastMessage("");
+    }, 2200);
+
+    return () => clearTimeout(timeoutId);
+  }, [toastMessage]);
+
+  const artists = useMemo(() => {
+    const visibleBaseArtists = baseArtists.filter(
+      (artist) => !removedArtistIds.includes(artist.id)
+    );
+
+    const baseArtistIds = visibleBaseArtists.map((artist) => artist.id);
+
+    const visibleAddedArtists = addedArtists.filter(
+      (artist) =>
+        !removedArtistIds.includes(artist.id) &&
+        !baseArtistIds.includes(artist.id)
+    );
+
+    return [...visibleBaseArtists, ...visibleAddedArtists];
+  }, [baseArtists, addedArtists, removedArtistIds]);
+
+  const totalFollowers = useMemo(() => {
+    return artists.reduce(
+      (total, artist) => total + Number(artist.followers || 0),
+      0
+    );
+  }, [artists]);
+
+  const totalFollowers7Days = useMemo(() => {
+    return artists.reduce(
+      (total, artist) => total + Number(artist.followers7Days || 0),
+      0
+    );
+  }, [artists]);
+
   const totalStreams = useMemo(() => {
-    return artists.reduce((total, artist) => total + Number(artist.streams || 0), 0);
+    return artists.reduce(
+      (total, artist) => total + Number(artist.streams || 0),
+      0
+    );
   }, [artists]);
 
-  const genres = useMemo(() => {
-    const genreSet = new Set();
-
-    artists.forEach((artist) => {
-      artist.genres?.forEach((genre) => genreSet.add(genre));
-    });
-
-    return Array.from(genreSet).sort();
-  }, [artists]);
-
-  const filteredAndSortedArtists = useMemo(() => {
-    let nextArtists = [...artists];
-
-    if (selectedGenre !== "all") {
-      nextArtists = nextArtists.filter((artist) =>
-        artist.genres?.includes(selectedGenre)
-      );
-    }
+  const sortedArtists = useMemo(() => {
+    const nextArtists = [...artists];
 
     nextArtists.sort((a, b) => {
-      if (sortBy === "followers") {
-        return b.followers - a.followers;
+      let aValue;
+      let bValue;
+
+      if (sortKey === "url") {
+        aValue = a.spotifyUrl || "";
+        bValue = b.spotifyUrl || "";
+      } else if (sortKey === "name") {
+        aValue = a.name || "";
+        bValue = b.name || "";
+      } else if (sortKey === "streams") {
+        aValue = Number(a.streams || 0);
+        bValue = Number(b.streams || 0);
+      } else if (sortKey === "growth") {
+        aValue = Number(a.growthPercent || 0);
+        bValue = Number(b.growthPercent || 0);
+      } else if (sortKey === "followers") {
+        aValue = Number(a.followers || 0);
+        bValue = Number(b.followers || 0);
+      } else if (sortKey === "followers7Days") {
+        aValue = Number(a.followers7Days || 0);
+        bValue = Number(b.followers7Days || 0);
+      } else if (sortKey === "genre") {
+        aValue = a.genres?.[0] || "Spotify Artist";
+        bValue = b.genres?.[0] || "Spotify Artist";
+      } else if (sortKey === "releases") {
+        aValue = Number(a.totalReleases || 0);
+        bValue = Number(b.totalReleases || 0);
+      } else if (sortKey === "tracks") {
+        aValue = Number(a.totalTracks || 0);
+        bValue = Number(b.totalTracks || 0);
+      } else if (sortKey === "latest") {
+        aValue = a.latestRelease?.name || "";
+        bValue = b.latestRelease?.name || "";
+      } else {
+        aValue = Number(a.popularity || 0);
+        bValue = Number(b.popularity || 0);
       }
 
-      if (sortBy === "streams") {
-        return Number(b.streams || 0) - Number(a.streams || 0);
+      if (typeof aValue === "string" || typeof bValue === "string") {
+        const result = String(aValue).localeCompare(String(bValue));
+        return sortDirection === "asc" ? result : -result;
       }
 
-      if (sortBy === "growth") {
-        return Number(b.growthPercent || 0) - Number(a.growthPercent || 0);
-      }
-
-      if (sortBy === "name") {
-        return a.name.localeCompare(b.name);
-      }
-
-      return b.popularity - a.popularity;
+      return sortDirection === "asc" ? aValue - bValue : bValue - aValue;
     });
 
     return nextArtists;
-  }, [artists, selectedGenre, sortBy]);
+  }, [artists, sortKey, sortDirection]);
+
+  const currentArtistIds = useMemo(() => {
+    return artists.map((artist) => artist.id);
+  }, [artists]);
+
+  function handleSort(nextSortKey) {
+    if (sortKey === nextSortKey) {
+      setSortDirection((currentDirection) =>
+        currentDirection === "asc" ? "desc" : "asc"
+      );
+      return;
+    }
+
+    setSortKey(nextSortKey);
+
+    if (["name", "genre", "latest", "url"].includes(nextSortKey)) {
+      setSortDirection("asc");
+    } else {
+      setSortDirection("desc");
+    }
+  }
+
+  function handleAddArtist(artist) {
+    setAddedArtists((currentArtists) => {
+      const nextArtists = [
+        ...currentArtists.filter(
+          (currentArtist) => currentArtist.id !== artist.id
+        ),
+        artist,
+      ];
+
+      localStorage.setItem(
+        ADDED_ARTISTS_STORAGE_KEY,
+        JSON.stringify(nextArtists)
+      );
+
+      return nextArtists;
+    });
+
+    setRemovedArtistIds((currentIds) => {
+      const nextIds = currentIds.filter((id) => id !== artist.id);
+
+      localStorage.setItem(REMOVED_ARTISTS_STORAGE_KEY, JSON.stringify(nextIds));
+
+      return nextIds;
+    });
+  }
+
+  function handleRemoveArtist(artistId) {
+    setAddedArtists((currentArtists) => {
+      const nextArtists = currentArtists.filter(
+        (artist) => artist.id !== artistId
+      );
+
+      localStorage.setItem(
+        ADDED_ARTISTS_STORAGE_KEY,
+        JSON.stringify(nextArtists)
+      );
+
+      return nextArtists;
+    });
+
+    setRemovedArtistIds((currentIds) => {
+      const nextIds = Array.from(new Set([...currentIds, artistId]));
+
+      localStorage.setItem(REMOVED_ARTISTS_STORAGE_KEY, JSON.stringify(nextIds));
+
+      return nextIds;
+    });
+  }
 
   return (
     <main className="min-h-screen bg-black px-6 py-8 text-white">
-      <div className="mb-8 flex flex-col gap-3">
-        <p className="text-sm font-medium uppercase tracking-[0.2em] text-green-400">
-          Spotify Growth Hub
-        </p>
+      {toastMessage ? (
+        <div className="fixed bottom-6 right-6 z-50 rounded-2xl border border-green-400/30 bg-green-400 px-4 py-3 text-sm font-semibold text-black shadow-2xl">
+          {toastMessage}
+        </div>
+      ) : null}
 
+      <div className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">My Artists</h1>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsAddArtistOpen(true)}
+              className="rounded-xl bg-green-400 px-4 py-2 text-sm font-semibold text-black transition hover:bg-green-300"
+            >
+              Add Artist
+            </button>
+
+            <h1 className="text-3xl font-semibold tracking-tight">
+              My Artists
+            </h1>
+          </div>
+
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
             Manage artists, track new releases, view release tracks, search
-            Spotify, filter by genre, and add manual streams/growth stats.
+            Spotify, and build a follower database.
           </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
+            <p className="text-xs text-zinc-500">Artists</p>
+            <p className="mt-1 text-xl font-semibold text-white">
+              {isLoading ? "..." : artists.length}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
+            <p className="text-xs text-zinc-500">Followers Database</p>
+            <p className="mt-1 text-xl font-semibold text-white">
+              {isLoading ? "..." : formatNumber(totalFollowers)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
+            <p className="text-xs text-zinc-500">7 Days</p>
+            <p
+              className={`mt-1 text-xl font-semibold ${
+                totalFollowers7Days > 0
+                  ? "text-green-400"
+                  : totalFollowers7Days < 0
+                  ? "text-red-400"
+                  : "text-zinc-400"
+              }`}
+            >
+              {isLoading ? "..." : formatDelta(totalFollowers7Days)}
+            </p>
+          </div>
         </div>
       </div>
-
-      <section className="mb-6 grid gap-4 md:grid-cols-4">
-        <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
-          <p className="text-sm text-zinc-500">Total Artists</p>
-          <p className="mt-2 text-3xl font-semibold text-white">
-            {isLoading ? "..." : artists.length}
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
-          <p className="text-sm text-zinc-500">Total Streams</p>
-          <p className="mt-2 text-3xl font-semibold text-white">
-            {isLoading ? "..." : formatNumber(totalStreams)}
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
-          <p className="text-sm text-zinc-500">New Releases</p>
-          <p className="mt-2 text-3xl font-semibold text-white">
-            {isLoading ? "..." : newReleases.length}
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
-          <p className="text-sm text-zinc-500">Default Sort</p>
-          <p className="mt-2 text-lg font-semibold text-white">
-            Highest Popularity
-          </p>
-        </div>
-      </section>
 
       {errorMessage ? (
         <section className="rounded-2xl border border-red-500/30 bg-red-500/10 p-5">
@@ -637,20 +1062,16 @@ export default function MyArtistsPage() {
       ) : (
         <>
           <section className="mb-6 rounded-3xl border border-zinc-900 bg-zinc-950/60 p-6">
-            <div className="mb-5 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold text-white">
-                  New Releases
-                </h2>
-                <p className="mt-1 text-sm text-zinc-500">
-                  Releases from the last 7 days. Releases from the last 2 days
-                  are highlighted with a red border.
-                </p>
-              </div>
-
-              <div className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-300">
-                Red = New
-              </div>
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold text-white">
+                New Releases{" "}
+                <span className="text-zinc-500">
+                  ({isLoading ? "..." : newReleases.length})
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Releases from the last 7 days.
+              </p>
             </div>
 
             {isLoading ? (
@@ -685,59 +1106,38 @@ export default function MyArtistsPage() {
             )}
           </section>
 
-          <SearchArtistsBox />
-
           <section className="rounded-3xl border border-zinc-900 bg-zinc-950/60 p-7">
-            <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-white">
-                  Artist Library
-                </h2>
-                <p className="mt-1 text-sm text-zinc-500">
-                  Click any artist card to open the artist details page.
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <select
-                  value={selectedGenre}
-                  onChange={(event) => setSelectedGenre(event.target.value)}
-                  className="rounded-xl border border-zinc-800 bg-black px-4 py-2 text-sm text-white outline-none focus:border-green-400/60"
-                >
-                  <option value="all">All genres</option>
-                  {genres.map((genre) => (
-                    <option key={genre} value={genre}>
-                      {genre}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={sortBy}
-                  onChange={(event) => setSortBy(event.target.value)}
-                  className="rounded-xl border border-zinc-800 bg-black px-4 py-2 text-sm text-white outline-none focus:border-green-400/60"
-                >
-                  <option value="popularity">Sort by highest popularity</option>
-                  <option value="streams">Sort by streams</option>
-                  <option value="growth">Sort by growth</option>
-                  <option value="followers">Sort by followers</option>
-                  <option value="name">Sort by name</option>
-                </select>
-              </div>
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-white">
+                Artist Library{" "}
+                <span className="text-zinc-500">
+                  ({isLoading ? "..." : artists.length})
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Click any table title to sort the artist database.
+              </p>
             </div>
 
-            <div className="flex flex-wrap gap-6">
-              {isLoading
-                ? Array.from({ length: 6 }).map((_, index) => (
-                    <LoadingCard key={index} />
-                  ))
-                : filteredAndSortedArtists.map((artist) => (
-                    <ArtistCard key={artist.id} artist={artist} />
-                  ))}
-            </div>
+            <ArtistsTable
+              artists={sortedArtists}
+              isLoading={isLoading}
+              onRemoveArtist={handleRemoveArtist}
+              onCopied={setToastMessage}
+              sortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+            />
           </section>
         </>
       )}
+
+      <AddArtistModal
+        isOpen={isAddArtistOpen}
+        currentArtistIds={currentArtistIds}
+        onAddArtist={handleAddArtist}
+        onClose={() => setIsAddArtistOpen(false)}
+      />
 
       <ReleaseTracksModal
         release={selectedRelease}
