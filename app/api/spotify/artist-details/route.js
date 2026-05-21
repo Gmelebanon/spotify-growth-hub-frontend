@@ -1,30 +1,6 @@
+import { NextResponse } from "next/server";
+
 export const dynamic = "force-dynamic";
-
-function cleanSpotifyArtistId(value) {
-  if (!value) return "";
-
-  const decodedValue = decodeURIComponent(String(value)).trim();
-
-  if (decodedValue.includes("open.spotify.com/artist/")) {
-    return decodedValue
-      .split("open.spotify.com/artist/")[1]
-      .split("?")[0]
-      .split("/")[0];
-  }
-
-  if (decodedValue.includes("spotify:artist:")) {
-    return decodedValue
-      .split("spotify:artist:")[1]
-      .split("?")[0]
-      .split("/")[0];
-  }
-
-  return decodedValue.split("?")[0].split("/")[0];
-}
-
-function isValidSpotifyArtistId(artistId) {
-  return /^[A-Za-z0-9]{22}$/.test(artistId);
-}
 
 async function getSpotifyAccessToken() {
   const clientId = process.env.SPOTIFY_CLIENT_ID;
@@ -32,87 +8,75 @@ async function getSpotifyAccessToken() {
 
   if (!clientId || !clientSecret) {
     throw new Error(
-      "Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET in .env.local"
+      "Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET in .env.local / Vercel."
     );
   }
 
-  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+  const basicToken = Buffer.from(`${clientId}:${clientSecret}`).toString(
     "base64"
   );
 
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
-      Authorization: `Basic ${basicAuth}`,
+      Authorization: `Basic ${basicToken}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: "grant_type=client_credentials",
     cache: "no-store",
   });
 
-  const text = await response.text();
+  const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(`Spotify token request failed: ${text}`);
+    throw new Error(
+      `Spotify token request failed: ${JSON.stringify(data)}`
+    );
   }
 
-  const data = JSON.parse(text);
   return data.access_token;
 }
 
-function formatDuration(milliseconds) {
-  if (!milliseconds) return "0:00";
+function getBestImage(images = []) {
+  if (!Array.isArray(images) || images.length === 0) return null;
 
-  const totalSeconds = Math.floor(milliseconds / 1000);
+  return images[0]?.url || null;
+}
+
+function formatDuration(ms = 0) {
+  const totalSeconds = Math.floor(Number(ms || 0) / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
 
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-async function fetchAlbumTracks(albumId, accessToken) {
-  const response = await fetch(
-    `https://api.spotify.com/v1/albums/${albumId}/tracks?market=US&limit=50`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      cache: "no-store",
-    }
-  );
+async function spotifyFetch(url, accessToken) {
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
 
-  const text = await response.text();
+  const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(`Spotify album tracks request failed: ${text}`);
+    throw new Error(`Spotify request failed: ${JSON.stringify(data)}`);
   }
 
-  const data = JSON.parse(text);
-
-  return (data.items || []).map((track) => ({
-    id: track.id,
-    name: track.name,
-    trackNumber: track.track_number,
-    durationMs: track.duration_ms,
-    duration: formatDuration(track.duration_ms),
-    explicit: track.explicit,
-    previewUrl: track.preview_url,
-    spotifyUrl: track.external_urls?.spotify,
-    artists: track.artists?.map((artist) => artist.name) || [],
-  }));
+  return data;
 }
 
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const artistId = cleanSpotifyArtistId(searchParams.get("artistId"));
+    const artistId = searchParams.get("artistId");
 
-    if (!isValidSpotifyArtistId(artistId)) {
-      return Response.json(
+    if (!artistId) {
+      return NextResponse.json(
         {
-          success: false,
-          error: "Invalid Spotify artist ID.",
-          message: `Received invalid artist ID: "${artistId}". The ID must be 22 letters/numbers.`,
+          message: "Missing artistId.",
         },
         { status: 400 }
       );
@@ -120,104 +84,97 @@ export async function GET(request) {
 
     const accessToken = await getSpotifyAccessToken();
 
-    const artistResponse = await fetch(
-      `https://api.spotify.com/v1/artists/${artistId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      }
+    const artistData = await spotifyFetch(
+      `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}`,
+      accessToken
     );
 
-    const artistText = await artistResponse.text();
-
-    if (!artistResponse.ok) {
-      throw new Error(`Spotify artist request failed: ${artistText}`);
-    }
-
-    const artistData = JSON.parse(artistText);
-
-    const albumsResponse = await fetch(
-      `https://api.spotify.com/v1/artists/${artistId}/albums?include_groups=album,single&market=US&limit=20`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      }
+    const albumsData = await spotifyFetch(
+      `https://api.spotify.com/v1/artists/${encodeURIComponent(
+        artistId
+      )}/albums?include_groups=album,single,appears_on,compilation&market=US&limit=50`,
+      accessToken
     );
 
-    const albumsText = await albumsResponse.text();
-
-    if (!albumsResponse.ok) {
-      throw new Error(`Spotify albums request failed: ${albumsText}`);
-    }
-
-    const albumsData = JSON.parse(albumsText);
-
-    const uniqueAlbums = [];
-    const albumKeys = new Set();
+    const uniqueAlbumsMap = new Map();
 
     for (const album of albumsData.items || []) {
-      const key = `${album.name}-${album.release_date}`;
-
-      if (!albumKeys.has(key)) {
-        albumKeys.add(key);
-        uniqueAlbums.push(album);
+      if (!uniqueAlbumsMap.has(album.id)) {
+        uniqueAlbumsMap.set(album.id, album);
       }
     }
 
-    const releases = await Promise.all(
-      uniqueAlbums.map(async (album) => ({
-        id: album.id,
-        name: album.name,
-        type: album.album_type,
-        totalTracks: album.total_tracks,
-        image:
-          album.images?.[0]?.url ||
-          album.images?.[1]?.url ||
-          album.images?.[2]?.url ||
-          null,
-        releaseDate: album.release_date,
-        spotifyUrl: album.external_urls?.spotify,
-        tracks: await fetchAlbumTracks(album.id, accessToken),
-      }))
+    const releases = Array.from(uniqueAlbumsMap.values()).sort((a, b) => {
+      const aDate = new Date(a.release_date || "1900-01-01").getTime();
+      const bDate = new Date(b.release_date || "1900-01-01").getTime();
+
+      return bDate - aDate;
+    });
+
+    const releasesWithTracks = await Promise.all(
+      releases.slice(0, 10).map(async (release) => {
+        const tracksData = await spotifyFetch(
+          `https://api.spotify.com/v1/albums/${encodeURIComponent(
+            release.id
+          )}/tracks?market=US&limit=50`,
+          accessToken
+        );
+
+        const tracks = (tracksData.items || []).map((track) => ({
+          id: track.id,
+          name: track.name,
+          trackNumber: track.track_number,
+          duration: formatDuration(track.duration_ms),
+          explicit: Boolean(track.explicit),
+          artists: (track.artists || []).map((artist) => artist.name),
+          spotifyUrl:
+            track.external_urls?.spotify ||
+            `https://open.spotify.com/track/${track.id}`,
+        }));
+
+        return {
+          id: release.id,
+          name: release.name,
+          type: release.album_type,
+          releaseDate: release.release_date,
+          totalTracks: release.total_tracks || tracks.length,
+          image: getBestImage(release.images),
+          spotifyUrl:
+            release.external_urls?.spotify ||
+            `https://open.spotify.com/album/${release.id}`,
+          tracks,
+        };
+      })
     );
 
-    const totalTracks = releases.reduce(
-      (total, release) => total + (release.totalTracks || 0),
-      0
-    );
+    const totalTracks = releases.reduce((total, release) => {
+      return total + Number(release.total_tracks || 0);
+    }, 0);
 
-    const artist = {
-      id: artistData.id,
-      name: artistData.name,
-      image:
-        artistData.images?.[0]?.url ||
-        artistData.images?.[1]?.url ||
-        artistData.images?.[2]?.url ||
-        null,
-      followers: artistData.followers?.total || 0,
-      popularity: artistData.popularity || 0,
-      genres: artistData.genres || [],
-      spotifyUrl: artistData.external_urls?.spotify,
-      totalReleases: releases.length,
-      totalTracks,
-      latestRelease: releases[0] || null,
-    };
+    const latestRelease = releasesWithTracks[0] || null;
 
-    return Response.json({
+    return NextResponse.json({
       success: true,
-      artist,
-      releases,
+      artist: {
+        id: artistData.id,
+        name: artistData.name,
+        image: getBestImage(artistData.images),
+        followers: artistData.followers?.total || 0,
+        popularity: artistData.popularity || 0,
+        genres: artistData.genres || [],
+        spotifyUrl:
+          artistData.external_urls?.spotify ||
+          `https://open.spotify.com/artist/${artistData.id}`,
+        totalReleases: releases.length,
+        totalTracks,
+      },
+      releases: releasesWithTracks,
+      latestRelease,
     });
   } catch (error) {
-    return Response.json(
+    return NextResponse.json(
       {
-        success: false,
-        error: "Could not load Spotify artist details.",
-        message: error.message,
+        message: error.message || "Could not load artist details.",
       },
       { status: 500 }
     );

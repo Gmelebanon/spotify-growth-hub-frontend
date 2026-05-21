@@ -982,45 +982,69 @@ export default function MyArtistsPage() {
     return () => clearTimeout(timeoutId);
   }, [toastMessage]);
 
-  const artists = useMemo(() => {
-    const activeBaseArtists = baseArtists.filter(
-      (artist) => !removedArtistIds.includes(artist.id)
+    const activeBaseArtists = baseArtists.filter((artist) => {
+    return !removedArtistIds.includes(artist.id);
+  });
+
+  const databaseArtistIds = databaseArtists.map((artist) => artist.id);
+
+  const activeAddedArtists = addedArtists.filter((artist) => {
+    const isRemoved = removedArtistIds.includes(artist.id);
+    const existsInBase = activeBaseArtists.some(
+      (baseArtist) => baseArtist.id === artist.id
+    );
+    const existsInDatabase = databaseArtistIds.includes(artist.id);
+
+    return !isRemoved && !existsInBase && !existsInDatabase;
+  });
+
+  const databaseArtistMap = new Map(
+    databaseArtists.map((artist) => [artist.id, artist])
+  );
+
+  const mergedBaseArtists = activeBaseArtists.map((artist) => {
+    const databaseArtist = databaseArtistMap.get(artist.id);
+
+    if (!databaseArtist) {
+      return artist;
+    }
+
+    return {
+      ...artist,
+      streams: databaseArtist.streams || artist.streams || 0,
+      growthPercent:
+        databaseArtist.growthPercent || artist.growthPercent || 0,
+      followers: databaseArtist.followers || artist.followers || 0,
+      followers7Days:
+        databaseArtist.followers7Days || artist.followers7Days || 0,
+      popularity: databaseArtist.popularity || artist.popularity || 0,
+      genres:
+        databaseArtist.genres && databaseArtist.genres.length > 0
+          ? databaseArtist.genres
+          : artist.genres || [],
+      totalReleases:
+        databaseArtist.totalReleases || artist.totalReleases || 0,
+      totalTracks:
+        databaseArtist.totalTracks || artist.totalTracks || 0,
+      latestRelease:
+        databaseArtist.latestRelease || artist.latestRelease || null,
+    };
+  });
+
+  const databaseOnlyArtists = databaseArtists.filter((artist) => {
+    const isRemoved = removedArtistIds.includes(artist.id);
+    const existsInBase = activeBaseArtists.some(
+      (baseArtist) => baseArtist.id === artist.id
     );
 
-    const databaseArtistIds = databaseArtists.map((artist) => artist.id);
+    return !isRemoved && !existsInBase;
+  });
 
-    const activeAddedArtists = addedArtists.filter(
-      (artist) =>
-        !removedArtistIds.includes(artist.id) &&
-        !activeBaseArtists.some((baseArtist) => baseArtist.id === artist.id) &&
-        !databaseArtistIds.includes(artist.id)
-    );
-
-    const databaseArtistMap = new Map(
-      databaseArtists.map((artist) => [artist.id, artist])
-    );
-
-    const mergedBaseArtists = activeBaseArtists.map((artist) => {
-      const databaseArtist = databaseArtistMap.get(artist.id);
-
-      if (!databaseArtist) return artist;
-
-      return {
-        ...artist,
-        streams: databaseArtist.streams || artist.streams,
-        growthPercent: databaseArtist.growthPercent || artist.growthPercent,
-        followers7Days: databaseArtist.followers7Days || artist.followers7Days,
-      };
-    });
-
-    const databaseOnlyArtists = databaseArtists.filter(
-      (artist) =>
-        !removedArtistIds.includes(artist.id) &&
-        !activeBaseArtists.some((baseArtist) => baseArtist.id === artist.id)
-    );
-
-    return [...mergedBaseArtists, ...databaseOnlyArtists, ...activeAddedArtists];
-  }, [baseArtists, databaseArtists, addedArtists, removedArtistIds]);
+  const artists = [
+    ...mergedBaseArtists,
+    ...databaseOnlyArtists,
+    ...activeAddedArtists,
+  ];
 
   const sortedArtists = useMemo(() => {
     const nextArtists = [...artists];
