@@ -94,9 +94,11 @@ function formatDelta(value) {
 }
 
 function normalizeArtist(artist) {
+  const artistId = artist.id || artist.artistId;
+
   return {
-    id: artist.id || artist.artistId,
-    name: artist.name,
+    id: artistId,
+    name: artist.name || "Spotify Artist",
     image: artist.image || artist.imageUrl || null,
     followers: artist.followers || 0,
     followers7Days: artist.followers7Days || 0,
@@ -106,7 +108,7 @@ function normalizeArtist(artist) {
       artist.spotifyUrl ||
       artist.spotify_url ||
       artist.external_urls?.spotify ||
-      `https://open.spotify.com/artist/${artist.id || artist.artistId}`,
+      `https://open.spotify.com/artist/${artistId}`,
     streams: artist.streams || 0,
     growthPercent: artist.growthPercent || artist.growth_percent || 0,
     totalReleases: artist.totalReleases || artist.releases || 0,
@@ -337,9 +339,9 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
     return /^[A-Za-z0-9]{22}$/.test(value);
   }
 
-  function normalizeDirectArtist(artistDetailsData, originalArtistId) {
-    const artist = artistDetailsData.artist || {};
-    const releases = artistDetailsData.releases || [];
+  function normalizeDirectArtist(data, originalArtistId) {
+    const artist = data.artist || {};
+    const releases = data.releases || [];
     const latestRelease = releases[0] || null;
 
     return normalizeArtist({
@@ -355,6 +357,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
         `https://open.spotify.com/artist/${artist.id || originalArtistId}`,
       streams: 0,
       growthPercent: 0,
+      followers7Days: 0,
       totalReleases: artist.totalReleases || releases.length || 0,
       totalTracks:
         artist.totalTracks ||
@@ -416,29 +419,25 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             `/api/spotify/artist-details?artistId=${encodeURIComponent(
               possibleArtistId
             )}`,
-            {
-              cache: "no-store",
-            }
+            { cache: "no-store" }
           );
 
           const data = await response.json();
 
           if (!response.ok) {
-            throw new Error(data.message || data.error || "Artist ID lookup failed.");
+            throw new Error(
+              data.message || data.error || "Artist ID lookup failed."
+            );
           }
 
-          const nextArtist = normalizeDirectArtist(data, possibleArtistId);
-
-          setDirectArtist(nextArtist);
+          setDirectArtist(normalizeDirectArtist(data, possibleArtistId));
           setResults([]);
           return;
         }
 
         const response = await fetch(
           `/api/spotify/search-artists?q=${encodeURIComponent(trimmedQuery)}`,
-          {
-            cache: "no-store",
-          }
+          { cache: "no-store" }
         );
 
         const data = await response.json();
@@ -473,11 +472,14 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
     setMessage(`${artist.name} added to Artist Library.`);
   }
 
-  function ArtistSearchResultCard({ artist }) {
+  function renderArtistCard(artist) {
     const isAlreadyAdded = currentArtistIds.includes(artist.id);
 
     return (
-      <article className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4">
+      <article
+        key={artist.id}
+        className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
+      >
         <div className="flex items-center gap-3">
           <div className="h-14 w-14 overflow-hidden rounded-2xl bg-zinc-900">
             {artist.image ? (
@@ -493,9 +495,8 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             <h3 className="truncate text-sm font-semibold text-white">
               {artist.name}
             </h3>
-            <p className="mt-1 truncate text-xs text-zinc-500">
-              {artist.id}
-            </p>
+
+            <p className="mt-1 truncate text-xs text-zinc-500">{artist.id}</p>
 
             <div className="mt-2 flex flex-wrap gap-2">
               <span className="rounded-full bg-black px-2 py-1 text-[10px] font-semibold text-zinc-400">
@@ -587,13 +588,11 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
                 <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
                   Artist ID Match
                 </p>
-                <ArtistSearchResultCard artist={directArtist} />
+                {renderArtistCard(directArtist)}
               </div>
             ) : results.length > 0 ? (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {results.map((artist) => (
-                  <ArtistSearchResultCard key={artist.id} artist={artist} />
-                ))}
+                {results.map((artist) => renderArtistCard(artist))}
               </div>
             ) : query.trim().length >= 2 && !isSearching ? (
               <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
@@ -601,7 +600,8 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
                   No artists found.
                 </p>
                 <p className="mt-1 text-sm text-zinc-500">
-                  Try searching with a different artist name or paste the Spotify Artist ID.
+                  Try searching with a different artist name or paste the Spotify
+                  Artist ID.
                 </p>
               </div>
             ) : (
@@ -1106,19 +1106,20 @@ export default function MyArtistsPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-  artistId: artist.id,
-  name: artist.name,
-  spotifyUrl: artist.spotifyUrl,
-  image: artist.image,
-  genres: artist.genres || [],
-  streams: artist.streams || 0,
-  growthPercent: artist.growthPercent || 0,
-  followers: artist.followers || 0,
-  popularity: artist.popularity || 0,
-  totalReleases: artist.totalReleases || 0,
-  totalTracks: artist.totalTracks || 0,
-  latestRelease: artist.latestRelease || null,
-}),
+          artistId: artist.id,
+          name: artist.name,
+          spotifyUrl: artist.spotifyUrl,
+          image: artist.image,
+          genres: artist.genres || [],
+          streams: artist.streams || 0,
+          growthPercent: artist.growthPercent || 0,
+          followers: artist.followers || 0,
+          popularity: artist.popularity || 0,
+          totalReleases: artist.totalReleases || 0,
+          totalTracks: artist.totalTracks || 0,
+          latestRelease: artist.latestRelease || null,
+        }),
+      });
 
       const data = await response.json();
 
