@@ -22,12 +22,12 @@ function CopyIcon() {
   );
 }
 
-function SpotifyIcon() {
+function SpotifyIcon({ className = "h-4 w-4" }) {
   return (
     <svg
       viewBox="0 0 24 24"
       aria-hidden="true"
-      className="h-4 w-4"
+      className={className}
       fill="currentColor"
     >
       <path d="M12 1.8C6.37 1.8 1.8 6.37 1.8 12S6.37 22.2 12 22.2 22.2 17.63 22.2 12 17.63 1.8 12 1.8Zm4.68 14.7a.77.77 0 0 1-1.06.25c-2.9-1.78-6.56-2.18-10.86-1.19a.77.77 0 1 1-.34-1.5c4.71-1.08 8.75-.62 12.01 1.38.36.22.48.7.25 1.06Zm1.25-2.78a.96.96 0 0 1-1.32.32c-3.32-2.04-8.39-2.63-12.32-1.44a.96.96 0 1 1-.56-1.84c4.49-1.36 10.07-.7 13.88 1.64.45.28.59.87.32 1.32Zm.11-2.9C14.06 8.46 7.5 8.25 3.7 9.47a1.15 1.15 0 0 1-.7-2.2c4.36-1.4 11.61-1.15 16.21 1.58a1.15 1.15 0 1 1-1.17 1.97Z" />
@@ -55,9 +55,7 @@ function TrashIcon() {
 }
 
 function SortArrow({ active, direction }) {
-  if (!active) {
-    return <span className="ml-1 text-zinc-700">↕</span>;
-  }
+  if (!active) return <span className="ml-1 text-zinc-700">↕</span>;
 
   return (
     <span className="ml-1 text-green-400">
@@ -97,19 +95,20 @@ function formatDelta(value) {
 
 function normalizeArtist(artist) {
   return {
-    id: artist.id,
+    id: artist.id || artist.artistId,
     name: artist.name,
-    image: artist.image || null,
+    image: artist.image || artist.imageUrl || null,
     followers: artist.followers || 0,
     followers7Days: artist.followers7Days || 0,
     popularity: artist.popularity || 0,
     genres: artist.genres || [],
     spotifyUrl:
       artist.spotifyUrl ||
+      artist.spotify_url ||
       artist.external_urls?.spotify ||
-      `https://open.spotify.com/artist/${artist.id}`,
+      `https://open.spotify.com/artist/${artist.id || artist.artistId}`,
     streams: artist.streams || 0,
-    growthPercent: artist.growthPercent || 0,
+    growthPercent: artist.growthPercent || artist.growth_percent || 0,
     totalReleases: artist.totalReleases || artist.releases || 0,
     totalTracks: artist.totalTracks || artist.tracks || 0,
     latestRelease: artist.latestRelease || null,
@@ -126,12 +125,42 @@ async function copyToClipboard(value) {
   }
 }
 
+function getBackendBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    ""
+  );
+}
+
 function ReleaseTracksModal({ release, onClose }) {
+  useEffect(() => {
+    if (!release) return;
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [release, onClose]);
+
   if (!release) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur">
-      <div className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur"
+      onMouseDown={onClose}
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-zinc-900 p-5">
           <div className="flex gap-4">
             <div className="h-20 w-20 overflow-hidden rounded-2xl bg-zinc-900">
@@ -160,18 +189,19 @@ function ReleaseTracksModal({ release, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-300 hover:border-green-400/60 hover:text-green-400"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
+            title="Close"
           >
-            Close
+            ×
           </button>
         </div>
 
-        <div className="max-h-[55vh] overflow-y-auto p-5">
+        <div className="max-h-[55vh] overflow-y-auto p-5 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
           {release.tracks && release.tracks.length > 0 ? (
             <div className="space-y-2">
               {release.tracks.map((track) => (
                 <div
-                  key={track.id}
+                  key={track.id || `${release.id}-${track.trackNumber}`}
                   className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
                 >
                   <div className="min-w-0">
@@ -210,8 +240,11 @@ function ReleaseTracksModal({ release, onClose }) {
 
 function ReleaseCard({ release, onViewTracks }) {
   return (
-    <article className="group flex min-h-[150px] overflow-hidden rounded-3xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)]">
-      <div className="relative h-auto w-[140px] shrink-0 overflow-hidden bg-zinc-950">
+    <article
+      onClick={() => onViewTracks(release)}
+      className="group flex h-[150px] w-[360px] shrink-0 cursor-pointer overflow-hidden rounded-3xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)]"
+    >
+      <div className="relative h-full w-[120px] shrink-0 overflow-hidden bg-zinc-950">
         {release.image ? (
           <img
             src={release.image}
@@ -225,48 +258,44 @@ function ReleaseCard({ release, onViewTracks }) {
         )}
       </div>
 
-      <div className="flex flex-1 flex-col justify-between p-4">
-        <div>
+      <div className="flex min-w-0 flex-1 flex-col justify-between p-4">
+        <div className="min-w-0">
           <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-green-400">
               {formatDaysAgo(release.daysAgo)}
             </p>
 
-            <p className="rounded-full bg-zinc-900 px-2 py-1 text-[10px] font-semibold uppercase text-zinc-400">
+            <p className="rounded-full bg-zinc-900 px-2 py-1 text-[9px] font-semibold uppercase text-zinc-400">
               {release.totalTracks} tracks
             </p>
           </div>
 
-          <h3 className="text-lg font-black uppercase leading-tight text-white">
+          <h3 className="truncate text-base font-black uppercase leading-tight text-white">
             {release.name}
           </h3>
-
-          <p className="mt-2 text-sm font-medium text-zinc-400">
-            {release.artistName}
-          </p>
-
-          <p className="mt-1 text-xs text-zinc-600">{release.releaseDate}</p>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-zinc-400">
+              {release.artistName}
+            </p>
+
+            <p className="mt-1 text-xs text-zinc-600">
+              {release.releaseDate}
+            </p>
+          </div>
+
           <Link
             href={release.spotifyUrl}
             target="_blank"
             rel="noreferrer"
             title="Open release on Spotify"
-            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-green-400 text-black transition hover:bg-green-300"
+            onClick={(event) => event.stopPropagation()}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-green-400 text-black transition hover:bg-green-300"
           >
-            <SpotifyIcon />
+            <SpotifyIcon className="h-4 w-4" />
           </Link>
-
-          <button
-            type="button"
-            onClick={() => onViewTracks(release)}
-            title="View tracks"
-            className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-black text-white transition hover:border-green-400/60 hover:text-green-400"
-          >
-            View
-          </button>
         </div>
       </div>
     </article>
@@ -332,7 +361,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
     return () => clearTimeout(timeoutId);
   }, [query, isOpen]);
 
-  function handleAddArtist(artist) {
+  async function handleAddArtist(artist) {
     const addedArtist = normalizeArtist({
       ...artist,
       isManuallyAdded: true,
@@ -341,7 +370,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
       followers7Days: 0,
     });
 
-    onAddArtist(addedArtist);
+    await onAddArtist(addedArtist);
     setMessage(`${artist.name} added to Artist Library.`);
   }
 
@@ -360,7 +389,8 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
           <div>
             <h2 className="text-xl font-semibold text-white">Add Artist</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Search Spotify by artist name, then add the artist to your library.
+              Search Spotify by artist name, then add the artist to your
+              library.
             </p>
           </div>
 
@@ -368,7 +398,6 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             type="button"
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
-            title="Close"
           >
             ×
           </button>
@@ -391,7 +420,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             <p className="mt-4 text-sm text-zinc-500">Searching...</p>
           ) : null}
 
-          <div className="mt-5 max-h-[52vh] overflow-y-auto pr-1">
+          <div className="mt-5 max-h-[52vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
             {results.length > 0 ? (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {results.map((artist) => {
@@ -524,15 +553,13 @@ function ArtistsTable({
     return (
       <div className="rounded-2xl border border-zinc-900 bg-black p-5">
         <p className="text-sm font-semibold text-white">No artists found.</p>
-        <p className="mt-1 text-sm text-zinc-500">
-          Try changing the filters or add a new artist.
-        </p>
+        <p className="mt-1 text-sm text-zinc-500">Try adding a new artist.</p>
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-zinc-900 bg-black">
+    <div className="overflow-x-auto rounded-2xl border border-zinc-900 bg-black [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
       <table className="min-w-[1320px] w-full border-collapse text-left text-sm">
         <thead className="border-b border-zinc-900 bg-zinc-950 text-[11px]">
           <tr>
@@ -765,6 +792,7 @@ function ArtistsTable({
 
 export default function MyArtistsPage() {
   const [baseArtists, setBaseArtists] = useState([]);
+  const [databaseArtists, setDatabaseArtists] = useState([]);
   const [addedArtists, setAddedArtists] = useState([]);
   const [removedArtistIds, setRemovedArtistIds] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
@@ -775,6 +803,56 @@ export default function MyArtistsPage() {
   const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+
+  async function loadDatabaseArtists() {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    if (!backendBaseUrl) return [];
+
+    const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail || data.message || "Could not load database artists."
+      );
+    }
+
+    return (data.artists || []).map(normalizeArtist);
+  }
+
+  async function syncFollowerSnapshots(artistsToSync) {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    if (!backendBaseUrl || artistsToSync.length === 0) return [];
+
+    const response = await fetch(
+      `${backendBaseUrl}/api/artist-library/sync-followers`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          artists: artistsToSync.map((artist) => ({
+            artistId: artist.id,
+            followers: Number(artist.followers || 0),
+          })),
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || "Could not sync followers.");
+    }
+
+    return data.artists || [];
+  }
 
   useEffect(() => {
     try {
@@ -796,20 +874,51 @@ export default function MyArtistsPage() {
   useEffect(() => {
     async function loadArtists() {
       try {
-        const response = await fetch("/api/spotify/artists", {
+        const artistsResponse = await fetch("/api/spotify/artists", {
           cache: "no-store",
         });
 
-        const data = await response.json();
+        const spotifyData = await artistsResponse.json();
 
-        if (!response.ok) {
+        if (!artistsResponse.ok) {
           throw new Error(
-            data.message || data.error || "Failed to load artists."
+            spotifyData.message ||
+              spotifyData.error ||
+              "Failed to load artists."
           );
         }
 
-        setBaseArtists((data.artists || []).map(normalizeArtist));
-        setNewReleases(data.newReleases || []);
+        const nextBaseArtists = (spotifyData.artists || []).map(normalizeArtist);
+
+        setBaseArtists(nextBaseArtists);
+        setNewReleases(spotifyData.newReleases || []);
+
+        try {
+          const nextDatabaseArtists = await loadDatabaseArtists();
+          setDatabaseArtists(nextDatabaseArtists);
+        } catch (databaseError) {
+          setDatabaseArtists([]);
+          console.warn(databaseError);
+        }
+
+        try {
+          const syncedFollowers = await syncFollowerSnapshots(nextBaseArtists);
+          const followersByArtistId = new Map(
+            syncedFollowers.map((item) => [item.artistId, item.followers7Days])
+          );
+
+          setBaseArtists((currentArtists) =>
+            currentArtists.map((artist) => ({
+              ...artist,
+              followers7Days:
+                followersByArtistId.get(artist.id) ||
+                artist.followers7Days ||
+                0,
+            }))
+          );
+        } catch (syncError) {
+          console.warn(syncError);
+        }
       } catch (error) {
         setErrorMessage(error.message);
       } finally {
@@ -831,41 +940,44 @@ export default function MyArtistsPage() {
   }, [toastMessage]);
 
   const artists = useMemo(() => {
-    const visibleBaseArtists = baseArtists.filter(
+    const activeBaseArtists = baseArtists.filter(
       (artist) => !removedArtistIds.includes(artist.id)
     );
 
-    const baseArtistIds = visibleBaseArtists.map((artist) => artist.id);
+    const databaseArtistIds = databaseArtists.map((artist) => artist.id);
 
-    const visibleAddedArtists = addedArtists.filter(
+    const activeAddedArtists = addedArtists.filter(
       (artist) =>
         !removedArtistIds.includes(artist.id) &&
-        !baseArtistIds.includes(artist.id)
+        !activeBaseArtists.some((baseArtist) => baseArtist.id === artist.id) &&
+        !databaseArtistIds.includes(artist.id)
     );
 
-    return [...visibleBaseArtists, ...visibleAddedArtists];
-  }, [baseArtists, addedArtists, removedArtistIds]);
-
-  const totalFollowers = useMemo(() => {
-    return artists.reduce(
-      (total, artist) => total + Number(artist.followers || 0),
-      0
+    const databaseArtistMap = new Map(
+      databaseArtists.map((artist) => [artist.id, artist])
     );
-  }, [artists]);
 
-  const totalFollowers7Days = useMemo(() => {
-    return artists.reduce(
-      (total, artist) => total + Number(artist.followers7Days || 0),
-      0
-    );
-  }, [artists]);
+    const mergedBaseArtists = activeBaseArtists.map((artist) => {
+      const databaseArtist = databaseArtistMap.get(artist.id);
 
-  const totalStreams = useMemo(() => {
-    return artists.reduce(
-      (total, artist) => total + Number(artist.streams || 0),
-      0
+      if (!databaseArtist) return artist;
+
+      return {
+        ...artist,
+        streams: databaseArtist.streams || artist.streams,
+        growthPercent: databaseArtist.growthPercent || artist.growthPercent,
+        followers7Days: databaseArtist.followers7Days || artist.followers7Days,
+      };
+    });
+
+    const databaseOnlyArtists = databaseArtists.filter(
+      (artist) =>
+        !removedArtistIds.includes(artist.id) &&
+        !activeBaseArtists.some((baseArtist) => baseArtist.id === artist.id)
     );
-  }, [artists]);
+
+    return [...mergedBaseArtists, ...databaseOnlyArtists, ...activeAddedArtists];
+  }, [baseArtists, databaseArtists, addedArtists, removedArtistIds]);
 
   const sortedArtists = useMemo(() => {
     const nextArtists = [...artists];
@@ -941,7 +1053,49 @@ export default function MyArtistsPage() {
     }
   }
 
-  function handleAddArtist(artist) {
+  async function handleAddArtist(artist) {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    if (backendBaseUrl) {
+      try {
+        const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            artistId: artist.id,
+            name: artist.name,
+            spotifyUrl: artist.spotifyUrl,
+            image: artist.image,
+            genres: artist.genres || [],
+            streams: artist.streams || 0,
+            growthPercent: artist.growthPercent || 0,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || data.message || "Could not add artist.");
+        }
+
+        setDatabaseArtists((currentArtists) => {
+          return [
+            ...currentArtists.filter(
+              (currentArtist) => currentArtist.id !== artist.id
+            ),
+            artist,
+          ];
+        });
+
+        setToastMessage(`${artist.name} added to database.`);
+        return;
+      } catch (error) {
+        setToastMessage(error.message);
+      }
+    }
+
     setAddedArtists((currentArtists) => {
       const nextArtists = [
         ...currentArtists.filter(
@@ -965,9 +1119,45 @@ export default function MyArtistsPage() {
 
       return nextIds;
     });
+
+    setToastMessage(`${artist.name} added locally.`);
   }
 
-  function handleRemoveArtist(artistId) {
+  async function handleRemoveArtist(artistId) {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    if (backendBaseUrl) {
+      try {
+        const response = await fetch(
+          `${backendBaseUrl}/api/artist-library/${artistId}`,
+          {
+            method: "DELETE",
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.detail || data.message || "Could not remove artist."
+          );
+        }
+
+        setDatabaseArtists((currentArtists) =>
+          currentArtists.filter((artist) => artist.id !== artistId)
+        );
+
+        setBaseArtists((currentArtists) =>
+          currentArtists.filter((artist) => artist.id !== artistId)
+        );
+
+        setToastMessage("Artist removed from database.");
+        return;
+      } catch (error) {
+        setToastMessage(error.message);
+      }
+    }
+
     setAddedArtists((currentArtists) => {
       const nextArtists = currentArtists.filter(
         (artist) => artist.id !== artistId
@@ -988,6 +1178,8 @@ export default function MyArtistsPage() {
 
       return nextIds;
     });
+
+    setToastMessage("Artist removed locally.");
   }
 
   return (
@@ -1000,19 +1192,12 @@ export default function MyArtistsPage() {
 
       <div className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsAddArtistOpen(true)}
-              className="rounded-xl bg-green-400 px-4 py-2 text-sm font-semibold text-black transition hover:bg-green-300"
-            >
-              Add Artist
-            </button>
-
-            <h1 className="text-3xl font-semibold tracking-tight">
-              My Artists
-            </h1>
-          </div>
+          <h1 className="text-3xl font-semibold tracking-tight">
+            My Artists{" "}
+            <span className="text-zinc-500">
+              ({isLoading ? "..." : artists.length})
+            </span>
+          </h1>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
             Manage artists, track new releases, view release tracks, search
@@ -1020,36 +1205,13 @@ export default function MyArtistsPage() {
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
-            <p className="text-xs text-zinc-500">Artists</p>
-            <p className="mt-1 text-xl font-semibold text-white">
-              {isLoading ? "..." : artists.length}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
-            <p className="text-xs text-zinc-500">Followers Database</p>
-            <p className="mt-1 text-xl font-semibold text-white">
-              {isLoading ? "..." : formatNumber(totalFollowers)}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-4 py-3">
-            <p className="text-xs text-zinc-500">7 Days</p>
-            <p
-              className={`mt-1 text-xl font-semibold ${
-                totalFollowers7Days > 0
-                  ? "text-green-400"
-                  : totalFollowers7Days < 0
-                  ? "text-red-400"
-                  : "text-zinc-400"
-              }`}
-            >
-              {isLoading ? "..." : formatDelta(totalFollowers7Days)}
-            </p>
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsAddArtistOpen(true)}
+          className="w-fit rounded-xl bg-green-400 px-5 py-3 text-sm font-semibold text-black transition hover:bg-green-300"
+        >
+          Add Artist
+        </button>
       </div>
 
       {errorMessage ? (
@@ -1075,16 +1237,16 @@ export default function MyArtistsPage() {
             </div>
 
             {isLoading ? (
-              <div className="grid gap-4 xl:grid-cols-3">
-                {Array.from({ length: 3 }).map((_, index) => (
+              <div className="flex gap-4 overflow-x-auto pb-3 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                {Array.from({ length: 5 }).map((_, index) => (
                   <div
                     key={index}
-                    className="h-[150px] animate-pulse rounded-3xl border border-zinc-900 bg-black"
+                    className="h-[150px] w-[360px] shrink-0 animate-pulse rounded-3xl border border-zinc-900 bg-black"
                   />
                 ))}
               </div>
             ) : newReleases.length > 0 ? (
-              <div className="grid gap-4 xl:grid-cols-3">
+              <div className="flex gap-4 overflow-x-auto pb-3 pr-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
                 {newReleases.map((release) => (
                   <ReleaseCard
                     key={`${release.id}-${release.artistId}`}
@@ -1107,18 +1269,6 @@ export default function MyArtistsPage() {
           </section>
 
           <section className="rounded-3xl border border-zinc-900 bg-zinc-950/60 p-7">
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-white">
-                Artist Library{" "}
-                <span className="text-zinc-500">
-                  ({isLoading ? "..." : artists.length})
-                </span>
-              </h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Click any table title to sort the artist database.
-              </p>
-            </div>
-
             <ArtistsTable
               artists={sortedArtists}
               isLoading={isLoading}
