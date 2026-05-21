@@ -305,8 +305,76 @@ function ReleaseCard({ release, onViewTracks }) {
 function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
+  const [directArtist, setDirectArtist] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState("");
+
+  function cleanSpotifyArtistId(value) {
+    if (!value) return "";
+
+    const trimmedValue = String(value).trim();
+
+    if (trimmedValue.includes("open.spotify.com/artist/")) {
+      return trimmedValue
+        .split("open.spotify.com/artist/")[1]
+        .split("?")[0]
+        .split("/")[0]
+        .trim();
+    }
+
+    if (trimmedValue.includes("spotify:artist:")) {
+      return trimmedValue
+        .split("spotify:artist:")[1]
+        .split("?")[0]
+        .split("/")[0]
+        .trim();
+    }
+
+    return trimmedValue.split("?")[0].split("/")[0].trim();
+  }
+
+  function isValidSpotifyArtistId(value) {
+    return /^[A-Za-z0-9]{22}$/.test(value);
+  }
+
+  function normalizeDirectArtist(artistDetailsData, originalArtistId) {
+    const artist = artistDetailsData.artist || {};
+    const releases = artistDetailsData.releases || [];
+    const latestRelease = releases[0] || null;
+
+    return normalizeArtist({
+      id: artist.id || originalArtistId,
+      name: artist.name || "Spotify Artist",
+      image: artist.image || null,
+      followers: artist.followers || 0,
+      popularity: artist.popularity || 0,
+      genres: artist.genres || [],
+      spotifyUrl:
+        artist.spotifyUrl ||
+        artist.external_urls?.spotify ||
+        `https://open.spotify.com/artist/${artist.id || originalArtistId}`,
+      streams: 0,
+      growthPercent: 0,
+      totalReleases: artist.totalReleases || releases.length || 0,
+      totalTracks:
+        artist.totalTracks ||
+        releases.reduce(
+          (total, release) => total + Number(release.totalTracks || 0),
+          0
+        ),
+      latestRelease: latestRelease
+        ? {
+            id: latestRelease.id,
+            name: latestRelease.name,
+            releaseDate: latestRelease.releaseDate,
+            totalTracks: latestRelease.totalTracks,
+            spotifyUrl: latestRelease.spotifyUrl,
+            image: latestRelease.image,
+          }
+        : null,
+      isManuallyAdded: true,
+    });
+  }
 
   useEffect(() => {
     if (!isOpen) return;
@@ -328,17 +396,46 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
     if (!isOpen) return;
 
     const timeoutId = setTimeout(async () => {
-      if (query.trim().length < 2) {
+      const trimmedQuery = query.trim();
+
+      setMessage("");
+      setDirectArtist(null);
+
+      if (trimmedQuery.length < 2) {
         setResults([]);
         return;
       }
 
+      const possibleArtistId = cleanSpotifyArtistId(trimmedQuery);
+
       try {
         setIsSearching(true);
-        setMessage("");
+
+        if (isValidSpotifyArtistId(possibleArtistId)) {
+          const response = await fetch(
+            `/api/spotify/artist-details?artistId=${encodeURIComponent(
+              possibleArtistId
+            )}`,
+            {
+              cache: "no-store",
+            }
+          );
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.message || data.error || "Artist ID lookup failed.");
+          }
+
+          const nextArtist = normalizeDirectArtist(data, possibleArtistId);
+
+          setDirectArtist(nextArtist);
+          setResults([]);
+          return;
+        }
 
         const response = await fetch(
-          `/api/spotify/search-artists?q=${encodeURIComponent(query.trim())}`,
+          `/api/spotify/search-artists?q=${encodeURIComponent(trimmedQuery)}`,
           {
             cache: "no-store",
           }
@@ -350,9 +447,11 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
           throw new Error(data.message || "Search failed.");
         }
 
-        setResults(data.artists || []);
+        setResults((data.artists || []).map(normalizeArtist));
       } catch (error) {
         setMessage(error.message);
+        setResults([]);
+        setDirectArtist(null);
       } finally {
         setIsSearching(false);
       }
@@ -365,13 +464,76 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
     const addedArtist = normalizeArtist({
       ...artist,
       isManuallyAdded: true,
-      streams: 0,
-      growthPercent: 0,
-      followers7Days: 0,
+      streams: artist.streams || 0,
+      growthPercent: artist.growthPercent || 0,
+      followers7Days: artist.followers7Days || 0,
     });
 
     await onAddArtist(addedArtist);
     setMessage(`${artist.name} added to Artist Library.`);
+  }
+
+  function ArtistSearchResultCard({ artist }) {
+    const isAlreadyAdded = currentArtistIds.includes(artist.id);
+
+    return (
+      <article className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4">
+        <div className="flex items-center gap-3">
+          <div className="h-14 w-14 overflow-hidden rounded-2xl bg-zinc-900">
+            {artist.image ? (
+              <img
+                src={artist.image}
+                alt={artist.name}
+                className="h-full w-full object-cover"
+              />
+            ) : null}
+          </div>
+
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-white">
+              {artist.name}
+            </h3>
+            <p className="mt-1 truncate text-xs text-zinc-500">
+              {artist.id}
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="rounded-full bg-black px-2 py-1 text-[10px] font-semibold text-zinc-400">
+                {formatNumber(artist.followers)} followers
+              </span>
+
+              <span className="rounded-full bg-black px-2 py-1 text-[10px] font-semibold text-zinc-400">
+                {artist.popularity}/100 popularity
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => handleAddArtist(artist)}
+            disabled={isAlreadyAdded}
+            className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+              isAlreadyAdded
+                ? "cursor-not-allowed bg-zinc-900 text-zinc-500"
+                : "bg-green-400 text-black hover:bg-green-300"
+            }`}
+          >
+            {isAlreadyAdded ? "Added" : "Add Artist"}
+          </button>
+
+          <Link
+            href={artist.spotifyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-white hover:border-green-400/60 hover:text-green-400"
+          >
+            <SpotifyIcon />
+          </Link>
+        </div>
+      </article>
+    );
   }
 
   if (!isOpen) return null;
@@ -389,8 +551,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
           <div>
             <h2 className="text-xl font-semibold text-white">Add Artist</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Search Spotify by artist name, then add the artist to your
-              library.
+              Search by artist name or paste a Spotify Artist ID/link.
             </p>
           </div>
 
@@ -408,7 +569,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             autoFocus
-            placeholder="Search artist name..."
+            placeholder="Search artist name, paste artist ID, or paste Spotify artist link..."
             className="w-full rounded-2xl border border-zinc-800 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-green-400/60"
           />
 
@@ -421,63 +582,18 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
           ) : null}
 
           <div className="mt-5 max-h-[52vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-            {results.length > 0 ? (
+            {directArtist ? (
+              <div>
+                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
+                  Artist ID Match
+                </p>
+                <ArtistSearchResultCard artist={directArtist} />
+              </div>
+            ) : results.length > 0 ? (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {results.map((artist) => {
-                  const isAlreadyAdded = currentArtistIds.includes(artist.id);
-
-                  return (
-                    <article
-                      key={artist.id}
-                      className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="h-14 w-14 overflow-hidden rounded-2xl bg-zinc-900">
-                          {artist.image ? (
-                            <img
-                              src={artist.image}
-                              alt={artist.name}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : null}
-                        </div>
-
-                        <div className="min-w-0">
-                          <h3 className="truncate text-sm font-semibold text-white">
-                            {artist.name}
-                          </h3>
-                          <p className="mt-1 truncate text-xs text-zinc-500">
-                            {artist.id}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleAddArtist(artist)}
-                          disabled={isAlreadyAdded}
-                          className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-                            isAlreadyAdded
-                              ? "cursor-not-allowed bg-zinc-900 text-zinc-500"
-                              : "bg-green-400 text-black hover:bg-green-300"
-                          }`}
-                        >
-                          {isAlreadyAdded ? "Added" : "Add Artist"}
-                        </button>
-
-                        <Link
-                          href={artist.spotifyUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-white hover:border-green-400/60 hover:text-green-400"
-                        >
-                          <SpotifyIcon />
-                        </Link>
-                      </div>
-                    </article>
-                  );
-                })}
+                {results.map((artist) => (
+                  <ArtistSearchResultCard key={artist.id} artist={artist} />
+                ))}
               </div>
             ) : query.trim().length >= 2 && !isSearching ? (
               <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-5">
@@ -485,7 +601,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
                   No artists found.
                 </p>
                 <p className="mt-1 text-sm text-zinc-500">
-                  Try searching with a different artist name.
+                  Try searching with a different artist name or paste the Spotify Artist ID.
                 </p>
               </div>
             ) : (
@@ -494,7 +610,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
                   Start searching.
                 </p>
                 <p className="mt-1 text-sm text-zinc-500">
-                  Type at least 2 characters to search Spotify.
+                  Type an artist name or paste a Spotify Artist ID.
                 </p>
               </div>
             )}
@@ -990,15 +1106,19 @@ export default function MyArtistsPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          artistId: artist.id,
-          name: artist.name,
-          spotifyUrl: artist.spotifyUrl,
-          image: artist.image,
-          genres: artist.genres || [],
-          streams: artist.streams || 0,
-          growthPercent: artist.growthPercent || 0,
-        }),
-      });
+  artistId: artist.id,
+  name: artist.name,
+  spotifyUrl: artist.spotifyUrl,
+  image: artist.image,
+  genres: artist.genres || [],
+  streams: artist.streams || 0,
+  growthPercent: artist.growthPercent || 0,
+  followers: artist.followers || 0,
+  popularity: artist.popularity || 0,
+  totalReleases: artist.totalReleases || 0,
+  totalTracks: artist.totalTracks || 0,
+  latestRelease: artist.latestRelease || null,
+}),
 
       const data = await response.json();
 
