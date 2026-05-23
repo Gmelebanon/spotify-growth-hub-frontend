@@ -55,11 +55,11 @@ function TrashIcon() {
 }
 
 function SortArrow({ active, direction }) {
-  if (!active) return <span className="ml-1 text-zinc-700">â†•</span>;
+  if (!active) return <span className="ml-1 text-zinc-700">↕</span>;
 
   return (
     <span className="ml-1 text-green-400">
-      {direction === "asc" ? "â†‘" : "â†“"}
+      {direction === "asc" ? "↑" : "↓"}
     </span>
   );
 }
@@ -78,8 +78,8 @@ function formatNumber(value) {
 function formatGrowth(value) {
   const number = Number(value || 0);
 
-  if (number > 0) return `â–² ${formatNumber(number)}%`;
-  if (number < 0) return `â–¼ ${formatNumber(Math.abs(number))}%`;
+  if (number > 0) return `▲ ${formatNumber(number)}%`;
+  if (number < 0) return `▼ ${formatNumber(Math.abs(number))}%`;
 
   return "0%";
 }
@@ -246,7 +246,7 @@ function ReleaseTracksModal({ release, onClose }) {
                 {release.name}
               </h2>
               <p className="mt-1 text-sm text-zinc-400">
-                {release.artistName} آ· {release.releaseDate}
+                {release.artistName} · {release.releaseDate}
               </p>
             </div>
           </div>
@@ -257,14 +257,14 @@ function ReleaseTracksModal({ release, onClose }) {
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
             title="Close"
           >
-            أ—
+            ×
           </button>
         </div>
 
         <div className="max-h-[55vh] overflow-y-auto p-5 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-          {tracks.length > 0 ? (
+          {release.tracks && release.tracks.length > 0 ? (
             <div className="space-y-2">
-              {tracks.map((track) => (
+              {release.tracks.map((track) => (
                 <div
                   key={track.id || `${release.id}-${track.trackNumber}`}
                   className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
@@ -274,7 +274,7 @@ function ReleaseTracksModal({ release, onClose }) {
                       {track.trackNumber}. {track.name}
                     </p>
                     <p className="mt-1 truncate text-xs text-zinc-500">
-                      {Array.isArray(track.artists) ? track.artists.join(", ") : track.artists}
+                      {track.artists?.join(", ")}
                       {track.explicit ? " · Explicit" : ""}
                     </p>
                   </div>
@@ -283,7 +283,7 @@ function ReleaseTracksModal({ release, onClose }) {
                     <p className="text-xs text-zinc-500">{track.duration}</p>
 
                     <Link
-                      href={track.spotifyUrl || release.spotifyUrl}
+                      href={track.spotifyUrl}
                       target="_blank"
                       rel="noreferrer"
                       className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-400 text-black hover:bg-green-300"
@@ -294,7 +294,9 @@ function ReleaseTracksModal({ release, onClose }) {
                 </div>
               ))}
             </div>
-          ) : null}
+          ) : (
+            <p className="text-sm text-zinc-500">No tracks found.</p>
+          )}
         </div>
       </div>
     </div>
@@ -302,15 +304,12 @@ function ReleaseTracksModal({ release, onClose }) {
 }
 
 function ReleaseCard({ release, onViewTracks }) {
-  const trackCount = Number(release.totalTracks || 1);
-  const trackLabel = `${trackCount} ${trackCount === 1 ? "track" : "tracks"}`;
-
   return (
     <article
       onClick={() => onViewTracks(release)}
-      className="group w-[190px] shrink-0 cursor-pointer overflow-hidden rounded-2xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_24px_rgba(34,197,94,0.08)]"
+      className="group flex h-[150px] w-[360px] shrink-0 cursor-pointer overflow-hidden rounded-3xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_32px_rgba(34,197,94,0.08)]"
     >
-      <div className="h-[118px] w-full overflow-hidden bg-zinc-950">
+      <div className="relative h-full w-[120px] shrink-0 overflow-hidden bg-zinc-950">
         {release.image ? (
           <img
             src={release.image}
@@ -324,29 +323,50 @@ function ReleaseCard({ release, onViewTracks }) {
         )}
       </div>
 
-      <div className="min-h-[116px] p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-[10px] text-zinc-500">
-            {formatDaysAgo(release.daysAgo)}
-          </p>
-          <span className="text-lg leading-none text-zinc-500">...</span>
+      <div className="flex min-w-0 flex-1 flex-col justify-between p-4">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-green-400">
+              {formatDaysAgo(release.daysAgo)}
+            </p>
+
+            <p className="rounded-full bg-zinc-900 px-2 py-1 text-[9px] font-semibold uppercase text-zinc-400">
+              {release.totalTracks} tracks
+            </p>
+          </div>
+
+          <h3 className="truncate text-base font-black uppercase leading-tight text-white">
+            {release.name}
+          </h3>
         </div>
 
-        <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-white">
-          {release.name}
-        </h3>
+        <div className="flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-zinc-400">
+              {release.artistName}
+            </p>
 
-        <p className="mt-2 truncate text-xs font-medium text-zinc-400">
-          {trackLabel}
-        </p>
+            <p className="mt-1 text-xs text-zinc-600">
+              {release.releaseDate}
+            </p>
+          </div>
 
-        <p className="mt-1 truncate text-xs text-zinc-500">
-          {release.artistName}
-        </p>
+          <Link
+            href={release.spotifyUrl}
+            target="_blank"
+            rel="noreferrer"
+            title="Open release on Spotify"
+            onClick={(event) => event.stopPropagation()}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-green-400 text-black transition hover:bg-green-300"
+          >
+            <SpotifyIcon className="h-4 w-4" />
+          </Link>
+        </div>
       </div>
     </article>
   );
 }
+
 function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -604,7 +624,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
           >
-            أ—
+            ×
           </button>
         </div>
 
@@ -860,7 +880,7 @@ function ArtistsTable({
 
                 <td className="px-4 py-4">
                   <span className="block max-w-[130px] truncate text-xs text-zinc-400">
-                    {artist.latestRelease?.name || "â€”"}
+                    {artist.latestRelease?.name || "—"}
                   </span>
                 </td>
 
@@ -890,7 +910,7 @@ export default function MyArtistsPage() {
   const [removedArtistIds, setRemovedArtistIds] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
   const [selectedRelease, setSelectedRelease] = useState(null);
-  const [sortKey, setSortKey] = useState("followers");
+  const [sortKey, setSortKey] = useState("popularity");
   const [sortDirection, setSortDirection] = useState("desc");
   const [isAddArtistOpen, setIsAddArtistOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
@@ -1345,23 +1365,9 @@ export default function MyArtistsPage() {
             type="button"
             onClick={handleRefreshArtists}
             disabled={isRefreshing}
-            className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-white transition hover:border-green-400/60 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
-            title={isRefreshing ? "Refreshing artists" : "Refresh artists"}
-            aria-label={isRefreshing ? "Refreshing artists" : "Refresh artists"}
+            className="w-fit rounded-xl border border-zinc-800 bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:border-green-400/60 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <svg
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-              className={`h-5 w-5 rotate-90 ${isRefreshing ? "animate-spin" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M21 12a9 9 0 0 1-15.3 6.4" />
-              <path d="M3 12a9 9 0 0 1 15.3-6.4" />
-              <path d="M6 18H3v3" />
-              <path d="M18 6h3V3" />
-            </svg>
+            {isRefreshing ? "Refreshing..." : "Refresh Artists"}
           </button>
 
           <button
@@ -1401,7 +1407,7 @@ export default function MyArtistsPage() {
                 {Array.from({ length: 5 }).map((_, index) => (
                   <div
                     key={index}
-                    className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
+                    className="h-[150px] w-[360px] shrink-0 animate-pulse rounded-3xl border border-zinc-900 bg-black"
                   />
                 ))}
               </div>
