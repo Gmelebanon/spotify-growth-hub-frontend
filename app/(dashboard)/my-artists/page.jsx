@@ -55,11 +55,11 @@ function TrashIcon() {
 }
 
 function SortArrow({ active, direction }) {
-  if (!active) return <span className="ml-1 text-zinc-700">â†•</span>;
+  if (!active) return <span className="ml-1 text-zinc-700">↕</span>;
 
   return (
     <span className="ml-1 text-green-400">
-      {direction === "asc" ? "â†‘" : "â†“"}
+      {direction === "asc" ? "↑" : "↓"}
     </span>
   );
 }
@@ -78,8 +78,8 @@ function formatNumber(value) {
 function formatGrowth(value) {
   const number = Number(value || 0);
 
-  if (number > 0) return `â–² ${formatNumber(number)}%`;
-  if (number < 0) return `â–¼ ${formatNumber(Math.abs(number))}%`;
+  if (number > 0) return `▲ ${formatNumber(number)}%`;
+  if (number < 0) return `▼ ${formatNumber(Math.abs(number))}%`;
 
   return "0%";
 }
@@ -200,7 +200,7 @@ function getBackendBaseUrl() {
 
 function ReleaseTracksModal({ release, onClose }) {
   useEffect(() => {
-    if (!release) return;
+    if (!release) return undefined;
 
     function handleKeyDown(event) {
       if (event.key === "Escape") {
@@ -210,43 +210,60 @@ function ReleaseTracksModal({ release, onClose }) {
 
     window.addEventListener("keydown", handleKeyDown);
 
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [release, onClose]);
 
   if (!release) return null;
 
+  const tracks =
+    release?.tracks && release.tracks.length > 0
+      ? release.tracks
+      : [
+          {
+            id: release?.id || "single-release",
+            name: release?.name || "Untitled Track",
+            trackNumber: 1,
+            duration: release?.duration || "",
+            artists: [release?.artistName || "Spotify Artist"],
+            spotifyUrl: release?.spotifyUrl,
+            explicit: false,
+          },
+        ];
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-8 backdrop-blur-sm"
       onMouseDown={onClose}
     >
       <div
-        className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
+        className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-zinc-900 p-5">
-          <div className="flex gap-4">
-            <div className="h-20 w-20 overflow-hidden rounded-2xl bg-zinc-900">
+        <div className="flex items-center justify-between gap-4 border-b border-zinc-900 p-5">
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-zinc-950">
               {release.image ? (
                 <img
                   src={release.image}
                   alt={release.name}
                   className="h-full w-full object-cover"
                 />
-              ) : null}
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-2xl font-black text-green-400">
+                  {release.name?.charAt(0) || "N"}
+                </div>
+              )}
             </div>
 
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-green-400">
                 Release Tracks
               </p>
-              <h2 className="mt-1 text-2xl font-black uppercase text-white">
+              <h2 className="mt-1 truncate text-2xl font-black uppercase text-white">
                 {release.name}
               </h2>
-              <p className="mt-1 text-sm text-zinc-400">
-                {release.artistName} آ· {release.releaseDate}
+              <p className="mt-1 truncate text-sm text-zinc-400">
+                {release.artistName} · {release.releaseDate}
               </p>
             </div>
           </div>
@@ -257,44 +274,45 @@ function ReleaseTracksModal({ release, onClose }) {
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
             title="Close"
           >
-            أ—
+            ×
           </button>
         </div>
 
         <div className="max-h-[55vh] overflow-y-auto p-5 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-          {tracks.length > 0 ? (
-            <div className="space-y-2">
-              {tracks.map((track) => (
-                <div
-                  key={track.id || `${release.id}-${track.trackNumber}`}
-                  className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">
-                      {track.trackNumber}. {track.name}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-zinc-500">
-                      {Array.isArray(track.artists) ? track.artists.join(", ") : track.artists}
-                      {track.explicit ? " · Explicit" : ""}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <p className="text-xs text-zinc-500">{track.duration}</p>
-
-                    <Link
-                      href={track.spotifyUrl || release.spotifyUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-400 text-black hover:bg-green-300"
-                    >
-                      <SpotifyIcon />
-                    </Link>
-                  </div>
+          <div className="space-y-2">
+            {tracks.map((track, index) => (
+              <div
+                key={`${track.id || track.name}-${index}`}
+                className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">
+                    {track.trackNumber || index + 1}. {track.name || release.name}
+                  </p>
+                  <p className="mt-1 truncate text-xs text-zinc-500">
+                    {(track.artists || [release.artistName]).join(", ")}
+                    {track.explicit ? " · Explicit" : ""}
+                  </p>
                 </div>
-              ))}
-            </div>
-          ) : null}
+
+                <div className="flex items-center gap-3">
+                  {track.duration ? (
+                    <p className="text-xs text-zinc-500">{track.duration}</p>
+                  ) : null}
+
+                  <Link
+                    href={track.spotifyUrl || release.spotifyUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-400 text-black hover:bg-green-300"
+                    title="Open on Spotify"
+                  >
+                    <SpotifyIcon />
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -326,10 +344,11 @@ function ReleaseCard({ release, onViewTracks }) {
 
       <div className="min-h-[116px] p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-[10px] text-zinc-500">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-green-400">
             {formatDaysAgo(release.daysAgo)}
           </p>
-          <span className="text-lg leading-none text-zinc-500">...</span>
+
+          <span className="text-lg leading-none text-zinc-600">...</span>
         </div>
 
         <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-white">
@@ -347,6 +366,7 @@ function ReleaseCard({ release, onViewTracks }) {
     </article>
   );
 }
+
 function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -604,7 +624,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition hover:border-red-400/50 hover:text-red-300"
           >
-            أ—
+            ×
           </button>
         </div>
 
@@ -860,7 +880,7 @@ function ArtistsTable({
 
                 <td className="px-4 py-4">
                   <span className="block max-w-[130px] truncate text-xs text-zinc-400">
-                    {artist.latestRelease?.name || "â€”"}
+                    {artist.latestRelease?.name || "—"}
                   </span>
                 </td>
 
@@ -893,6 +913,7 @@ export default function MyArtistsPage() {
   const [sortKey, setSortKey] = useState("followers");
   const [sortDirection, setSortDirection] = useState("desc");
   const [isAddArtistOpen, setIsAddArtistOpen] = useState(false);
+  const [isNewReleasesOpen, setIsNewReleasesOpen] = useState(true);
   const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -944,6 +965,72 @@ export default function MyArtistsPage() {
     }
 
     return data.artists || [];
+  }
+
+  async function saveArtistToDatabase(artist) {
+    const backendBaseUrl = getBackendBaseUrl();
+    const normalizedArtist = normalizeArtist(artist);
+
+    const response = await fetch(`${backendBaseUrl}/api/artist-library`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        artistId: normalizedArtist.id,
+        name: normalizedArtist.name,
+        spotifyUrl: normalizedArtist.spotifyUrl,
+        image: normalizedArtist.image,
+        genres: normalizedArtist.genres || [],
+        streams: normalizedArtist.streams || 0,
+        growthPercent: normalizedArtist.growthPercent || 0,
+        followers: normalizedArtist.followers || 0,
+        popularity: normalizedArtist.popularity || 0,
+        totalReleases: normalizedArtist.totalReleases || 0,
+        totalTracks: normalizedArtist.totalTracks || 0,
+        latestRelease: normalizedArtist.latestRelease || null,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail ||
+          data.message ||
+          `Could not save ${normalizedArtist.name} to database.`
+      );
+    }
+
+    return normalizedArtist;
+  }
+
+  async function saveMissingArtistsToDatabase(artistsToSave, savedArtists) {
+    const savedArtistIds = new Set(savedArtists.map((artist) => artist.id));
+
+    const missingArtists = artistsToSave.filter((artist) => {
+      return artist?.id && !savedArtistIds.has(artist.id);
+    });
+
+    const saved = [];
+    const failed = [];
+
+    for (const artist of missingArtists) {
+      try {
+        const savedArtist = await saveArtistToDatabase(artist);
+        saved.push(savedArtist);
+      } catch (error) {
+        failed.push({
+          id: artist.id,
+          name: artist.name,
+          message: error.message,
+        });
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    }
+
+    return { saved, failed };
   }
 
   useEffect(() => {
@@ -1174,9 +1261,43 @@ export default function MyArtistsPage() {
 
     try {
       setIsRefreshing(true);
-      setToastMessage("Refreshing artist stats...");
+      setToastMessage("Saving missing artists...");
 
-      const response = await fetch(
+      const artistsResponse = await fetch("/api/spotify/artists", {
+        cache: "no-store",
+      });
+
+      const spotifyData = await artistsResponse.json();
+
+      if (!artistsResponse.ok) {
+        throw new Error(
+          spotifyData.message ||
+            spotifyData.error ||
+            "Could not load Spotify artists."
+        );
+      }
+
+      const nextBaseArtists = (spotifyData.artists || []).map(normalizeArtist);
+      setBaseArtists(nextBaseArtists);
+
+      const currentDatabaseArtists = await loadDatabaseArtists();
+
+      const activeBaseArtistsToSave = nextBaseArtists.filter((artist) => {
+        return artist?.id && !removedArtistIds.includes(artist.id);
+      });
+
+      const { saved, failed } = await saveMissingArtistsToDatabase(
+        activeBaseArtistsToSave,
+        currentDatabaseArtists
+      );
+
+      setToastMessage(
+        saved.length > 0
+          ? `Saved ${saved.length} missing artists. Syncing metadata...`
+          : "All available artists are already saved. Syncing metadata..."
+      );
+
+      const syncResponse = await fetch(
         `${backendBaseUrl}/api/artist-library/sync-metadata`,
         {
           method: "POST",
@@ -1184,28 +1305,40 @@ export default function MyArtistsPage() {
         }
       );
 
-      const data = await response.json();
+      const syncData = await syncResponse.json();
 
-      if (!response.ok) {
+      if (!syncResponse.ok) {
         throw new Error(
-          data.detail || data.message || "Could not refresh artist stats."
+          syncData.detail ||
+            syncData.message ||
+            "Could not refresh artist metadata."
         );
       }
 
       const nextDatabaseArtists = await loadDatabaseArtists();
 
       setDatabaseArtists(nextDatabaseArtists);
-      setNewReleases((currentReleases) =>
+      setNewReleases(
         mergeNewReleases(
-          currentReleases,
+          spotifyData.newReleases || [],
           buildNewReleasesFromArtists(nextDatabaseArtists)
         )
       );
 
+      const failedMessage =
+        failed.length > 0
+          ? ` ${failed.length} failed: ${failed
+              .slice(0, 3)
+              .map((artist) => artist.name)
+              .join(", ")}${failed.length > 3 ? "..." : ""}.`
+          : "";
+
       setToastMessage(
-        `Artist stats refreshed${
-          typeof data.synced === "number" ? ` for ${data.synced} artists` : ""
-        }.`
+        `Artist library refreshed. Saved ${saved.length} new artist${
+          saved.length === 1 ? "" : "s"
+        }. Synced ${syncData.synced || nextDatabaseArtists.length} artist${
+          (syncData.synced || nextDatabaseArtists.length) === 1 ? "" : "s"
+        }.${failedMessage}`
       );
     } catch (error) {
       setToastMessage(`Refresh failed: ${error.message}`);
@@ -1340,7 +1473,7 @@ export default function MyArtistsPage() {
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={handleRefreshArtists}
@@ -1384,48 +1517,65 @@ export default function MyArtistsPage() {
       ) : (
         <>
           <section className="mb-6 rounded-3xl border border-zinc-900 bg-zinc-950/60 p-6">
-            <div className="mb-5">
-              <h2 className="text-lg font-semibold text-white">
-                New Releases{" "}
-                <span className="text-zinc-500">
-                  ({isLoading ? "..." : newReleases.length})
-                </span>
-              </h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Releases from the last 7 days.
-              </p>
-            </div>
-
-            {isLoading ? (
-              <div className="flex gap-4 overflow-x-auto pb-3 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-                {Array.from({ length: 5 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
-                  />
-                ))}
-              </div>
-            ) : newReleases.length > 0 ? (
-              <div className="flex gap-4 overflow-x-auto pb-3 pr-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-                {newReleases.map((release) => (
-                  <ReleaseCard
-                    key={`${release.id}-${release.artistId}`}
-                    release={release}
-                    onViewTracks={setSelectedRelease}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-zinc-900 bg-black p-5">
-                <p className="text-sm font-semibold text-white">
-                  No new releases in the last 7 days.
-                </p>
+            <button
+              type="button"
+              onClick={() => setIsNewReleasesOpen((current) => !current)}
+              className="flex w-full items-center justify-between gap-4 text-left"
+            >
+              <div>
+                <h2 className="text-lg font-semibold text-white">
+                  New Releases{" "}
+                  <span className="text-zinc-500">
+                    ({isLoading ? "..." : newReleases.length})
+                  </span>
+                </h2>
                 <p className="mt-1 text-sm text-zinc-500">
-                  When one of your artists releases new music, it will appear
-                  here automatically.
+                  Releases from the last 7 days.
                 </p>
               </div>
-            )}
+
+              <span
+                className={`text-xl text-zinc-500 transition ${
+                  isNewReleasesOpen ? "rotate-180" : ""
+                }`}
+              >
+                ˄
+              </span>
+            </button>
+
+            {isNewReleasesOpen ? (
+              <div className="mt-5">
+                {isLoading ? (
+                  <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                    {Array.from({ length: 5 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
+                      />
+                    ))}
+                  </div>
+                ) : newReleases.length > 0 ? (
+                  <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 pr-2 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                    {newReleases.map((release) => (
+                      <ReleaseCard
+                        key={`${release.id}-${release.artistId}`}
+                        release={release}
+                        onViewTracks={setSelectedRelease}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-zinc-900 bg-black p-5">
+                    <p className="text-sm font-semibold text-white">
+                      No new releases in the last 7 days.
+                    </p>
+                    <p className="mt-1 text-sm text-zinc-500">
+                      Press the refresh icon to sync all saved artists and load the latest releases.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : null}
           </section>
 
           <ArtistsTable
