@@ -114,10 +114,11 @@ function normalizeArtist(artist) {
     totalReleases: artist.totalReleases || artist.releases || 0,
     totalTracks: artist.totalTracks || artist.tracks || 0,
     latestRelease: artist.latestRelease || null,
+    recentReleases:
+      artist.recentReleases || artist.recent_releases || artist.releases || [],
     isManuallyAdded: Boolean(artist.isManuallyAdded),
   };
 }
-
 
 function getReleaseDaysAgo(releaseDate) {
   if (!releaseDate) return null;
@@ -134,18 +135,25 @@ function getReleaseDaysAgo(releaseDate) {
 }
 
 function buildNewReleasesFromArtists(artists) {
-  return artists
-    .map((artist) => {
-      const release = artist.latestRelease;
+  const releases = [];
 
-      if (!release || !release.releaseDate) return null;
+  artists.forEach((artist) => {
+    const artistReleases =
+      Array.isArray(artist.recentReleases) && artist.recentReleases.length > 0
+        ? artist.recentReleases
+        : artist.latestRelease
+        ? [artist.latestRelease]
+        : [];
+
+    artistReleases.forEach((release) => {
+      if (!release || !release.releaseDate) return;
 
       const daysAgo = getReleaseDaysAgo(release.releaseDate);
 
-      if (daysAgo === null || daysAgo < 0 || daysAgo > 7) return null;
+      if (daysAgo === null || daysAgo < 0 || daysAgo > 7) return;
 
-      return {
-        id: release.id || `${artist.id}-${release.name}`,
+      releases.push({
+        id: release.id || `${artist.id}-${release.name}-${release.releaseDate}`,
         artistId: artist.id,
         artistName: artist.name,
         name: release.name || "Untitled Release",
@@ -156,14 +164,15 @@ function buildNewReleasesFromArtists(artists) {
           `https://open.spotify.com/artist/${artist.id}`,
         releaseDate: release.releaseDate,
         daysAgo,
-        totalTracks: release.totalTracks || 0,
+        totalTracks: release.totalTracks || release.total_tracks || 1,
         tracks: release.tracks || [],
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      return new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime();
+      });
     });
+  });
+
+  return releases.sort((a, b) => {
+    return new Date(b.releaseDate || 0).getTime() - new Date(a.releaseDate || 0).getTime();
+  });
 }
 
 function mergeNewReleases(primaryReleases, databaseReleases) {
@@ -172,7 +181,9 @@ function mergeNewReleases(primaryReleases, databaseReleases) {
   [...databaseReleases, ...primaryReleases].forEach((release) => {
     if (!release) return;
 
-    const key = release.id || `${release.artistId}-${release.name}`;
+    const key =
+      release.id ||
+      `${release.artistId}-${release.name}-${release.releaseDate || ""}`;
     releasesById.set(key, release);
   });
 
@@ -200,7 +211,7 @@ function getBackendBaseUrl() {
 
 function ReleaseTracksModal({ release, onClose }) {
   useEffect(() => {
-    if (!release) return undefined;
+    if (!release) return;
 
     function handleKeyDown(event) {
       if (event.key === "Escape") {
@@ -210,7 +221,9 @@ function ReleaseTracksModal({ release, onClose }) {
 
     window.addEventListener("keydown", handleKeyDown);
 
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [release, onClose]);
 
   if (!release) return null;
@@ -226,43 +239,38 @@ function ReleaseTracksModal({ release, onClose }) {
             duration: release?.duration || "",
             artists: [release?.artistName || "Spotify Artist"],
             spotifyUrl: release?.spotifyUrl,
-            explicit: false,
           },
         ];
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-8 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur"
       onMouseDown={onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
+        className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-zinc-800 bg-black shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-4 border-b border-zinc-900 p-5">
-          <div className="flex min-w-0 items-center gap-4">
-            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-zinc-950">
+        <div className="flex items-start justify-between gap-4 border-b border-zinc-900 p-5">
+          <div className="flex gap-4">
+            <div className="h-20 w-20 overflow-hidden rounded-2xl bg-zinc-900">
               {release.image ? (
                 <img
                   src={release.image}
                   alt={release.name}
                   className="h-full w-full object-cover"
                 />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-2xl font-black text-green-400">
-                  {release.name?.charAt(0) || "N"}
-                </div>
-              )}
+              ) : null}
             </div>
 
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-green-400">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
                 Release Tracks
               </p>
-              <h2 className="mt-1 truncate text-2xl font-black uppercase text-white">
+              <h2 className="mt-1 text-2xl font-black uppercase text-white">
                 {release.name}
               </h2>
-              <p className="mt-1 truncate text-sm text-zinc-400">
+              <p className="mt-1 text-sm text-zinc-400">
                 {release.artistName} · {release.releaseDate}
               </p>
             </div>
@@ -282,7 +290,7 @@ function ReleaseTracksModal({ release, onClose }) {
           <div className="space-y-2">
             {tracks.map((track, index) => (
               <div
-                key={`${track.id || track.name}-${index}`}
+                key={track.id || `${release.id}-${track.trackNumber || index}`}
                 className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-900 bg-zinc-950 p-4"
               >
                 <div className="min-w-0">
@@ -305,7 +313,6 @@ function ReleaseTracksModal({ release, onClose }) {
                     target="_blank"
                     rel="noreferrer"
                     className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-400 text-black hover:bg-green-300"
-                    title="Open on Spotify"
                   >
                     <SpotifyIcon />
                   </Link>
@@ -318,6 +325,7 @@ function ReleaseTracksModal({ release, onClose }) {
     </div>
   );
 }
+
 
 function ReleaseCard({ release, onViewTracks }) {
   const trackCount = Number(release.totalTracks || 1);
@@ -344,18 +352,18 @@ function ReleaseCard({ release, onViewTracks }) {
 
       <div className="min-h-[116px] p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-green-400">
+          <p className="text-[10px] font-semibold text-green-400">
             {formatDaysAgo(release.daysAgo)}
           </p>
 
-          <span className="text-lg leading-none text-zinc-600">...</span>
+          <span className="text-lg leading-none text-zinc-500">...</span>
         </div>
 
         <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-white">
           {release.name}
         </h3>
 
-        <p className="mt-2 truncate text-xs font-medium text-zinc-400">
+        <p className="mt-2 truncate text-xs font-medium text-zinc-300">
           {trackLabel}
         </p>
 
@@ -366,6 +374,7 @@ function ReleaseCard({ release, onViewTracks }) {
     </article>
   );
 }
+
 
 function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
   const [query, setQuery] = useState("");
@@ -436,8 +445,18 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
             totalTracks: latestRelease.totalTracks,
             spotifyUrl: latestRelease.spotifyUrl,
             image: latestRelease.image,
+            tracks: latestRelease.tracks || [],
           }
         : null,
+      recentReleases: releases.map((release) => ({
+        id: release.id,
+        name: release.name,
+        releaseDate: release.releaseDate,
+        totalTracks: release.totalTracks,
+        spotifyUrl: release.spotifyUrl,
+        image: release.image,
+        tracks: release.tracks || [],
+      })),
       isManuallyAdded: true,
     });
   }
@@ -913,10 +932,10 @@ export default function MyArtistsPage() {
   const [sortKey, setSortKey] = useState("followers");
   const [sortDirection, setSortDirection] = useState("desc");
   const [isAddArtistOpen, setIsAddArtistOpen] = useState(false);
-  const [isNewReleasesOpen, setIsNewReleasesOpen] = useState(true);
   const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isNewReleasesOpen, setIsNewReleasesOpen] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
   async function loadDatabaseArtists() {
@@ -989,6 +1008,7 @@ export default function MyArtistsPage() {
         totalReleases: normalizedArtist.totalReleases || 0,
         totalTracks: normalizedArtist.totalTracks || 0,
         latestRelease: normalizedArtist.latestRelease || null,
+        recentReleases: normalizedArtist.recentReleases || [],
       }),
     });
 
@@ -1021,8 +1041,7 @@ export default function MyArtistsPage() {
         saved.push(savedArtist);
       } catch (error) {
         failed.push({
-          id: artist.id,
-          name: artist.name,
+          artist,
           message: error.message,
         });
       }
@@ -1031,6 +1050,92 @@ export default function MyArtistsPage() {
     }
 
     return { saved, failed };
+  }
+
+  async function handleRefreshArtists() {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    try {
+      setIsRefreshing(true);
+      setToastMessage("Loading Spotify artists...");
+
+      const artistsResponse = await fetch("/api/spotify/artists", {
+        cache: "no-store",
+      });
+
+      const spotifyData = await artistsResponse.json();
+
+      if (!artistsResponse.ok) {
+        throw new Error(
+          spotifyData.message ||
+            spotifyData.error ||
+            "Could not load Spotify artists."
+        );
+      }
+
+      const nextBaseArtists = (spotifyData.artists || []).map(normalizeArtist);
+      setBaseArtists(nextBaseArtists);
+
+      const currentDatabaseArtists = await loadDatabaseArtists();
+
+      const activeBaseArtistsToSave = nextBaseArtists.filter((artist) => {
+        return artist?.id && !removedArtistIds.includes(artist.id);
+      });
+
+      setToastMessage("Saving missing artists to database...");
+
+      const { saved, failed } = await saveMissingArtistsToDatabase(
+        activeBaseArtistsToSave,
+        currentDatabaseArtists
+      );
+
+      setToastMessage(
+        saved.length > 0
+          ? `Saved ${saved.length} missing artists. Syncing metadata...`
+          : "All visible artists are already saved. Syncing metadata..."
+      );
+
+      const syncResponse = await fetch(
+        `${backendBaseUrl}/api/artist-library/sync-metadata`,
+        {
+          method: "POST",
+          cache: "no-store",
+        }
+      );
+
+      const syncData = await syncResponse.json();
+
+      if (!syncResponse.ok) {
+        throw new Error(
+          syncData.detail ||
+            syncData.message ||
+            "Could not refresh artist metadata."
+        );
+      }
+
+      const nextDatabaseArtists = await loadDatabaseArtists();
+
+      setDatabaseArtists(nextDatabaseArtists);
+      setNewReleases(buildNewReleasesFromArtists(nextDatabaseArtists));
+
+      const failedText =
+        failed.length > 0
+          ? ` ${failed.length} failed: ${failed
+              .slice(0, 3)
+              .map((item) => item.artist?.name)
+              .join(", ")}.`
+          : "";
+
+      setToastMessage(
+        `Artist library refreshed. Saved ${saved.length}. Synced ${
+          syncData.synced || nextDatabaseArtists.length
+        }/${syncData.total || nextDatabaseArtists.length}.${failedText}`
+      );
+    } catch (error) {
+      setToastMessage(`Refresh failed: ${error.message}`);
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -1256,97 +1361,6 @@ export default function MyArtistsPage() {
     }
   }
 
-  async function handleRefreshArtists() {
-    const backendBaseUrl = getBackendBaseUrl();
-
-    try {
-      setIsRefreshing(true);
-      setToastMessage("Saving missing artists...");
-
-      const artistsResponse = await fetch("/api/spotify/artists", {
-        cache: "no-store",
-      });
-
-      const spotifyData = await artistsResponse.json();
-
-      if (!artistsResponse.ok) {
-        throw new Error(
-          spotifyData.message ||
-            spotifyData.error ||
-            "Could not load Spotify artists."
-        );
-      }
-
-      const nextBaseArtists = (spotifyData.artists || []).map(normalizeArtist);
-      setBaseArtists(nextBaseArtists);
-
-      const currentDatabaseArtists = await loadDatabaseArtists();
-
-      const activeBaseArtistsToSave = nextBaseArtists.filter((artist) => {
-        return artist?.id && !removedArtistIds.includes(artist.id);
-      });
-
-      const { saved, failed } = await saveMissingArtistsToDatabase(
-        activeBaseArtistsToSave,
-        currentDatabaseArtists
-      );
-
-      setToastMessage(
-        saved.length > 0
-          ? `Saved ${saved.length} missing artists. Syncing metadata...`
-          : "All available artists are already saved. Syncing metadata..."
-      );
-
-      const syncResponse = await fetch(
-        `${backendBaseUrl}/api/artist-library/sync-metadata`,
-        {
-          method: "POST",
-          cache: "no-store",
-        }
-      );
-
-      const syncData = await syncResponse.json();
-
-      if (!syncResponse.ok) {
-        throw new Error(
-          syncData.detail ||
-            syncData.message ||
-            "Could not refresh artist metadata."
-        );
-      }
-
-      const nextDatabaseArtists = await loadDatabaseArtists();
-
-      setDatabaseArtists(nextDatabaseArtists);
-      setNewReleases(
-        mergeNewReleases(
-          spotifyData.newReleases || [],
-          buildNewReleasesFromArtists(nextDatabaseArtists)
-        )
-      );
-
-      const failedMessage =
-        failed.length > 0
-          ? ` ${failed.length} failed: ${failed
-              .slice(0, 3)
-              .map((artist) => artist.name)
-              .join(", ")}${failed.length > 3 ? "..." : ""}.`
-          : "";
-
-      setToastMessage(
-        `Artist library refreshed. Saved ${saved.length} new artist${
-          saved.length === 1 ? "" : "s"
-        }. Synced ${syncData.synced || nextDatabaseArtists.length} artist${
-          (syncData.synced || nextDatabaseArtists.length) === 1 ? "" : "s"
-        }.${failedMessage}`
-      );
-    } catch (error) {
-      setToastMessage(`Refresh failed: ${error.message}`);
-    } finally {
-      setIsRefreshing(false);
-    }
-  }
-
   async function handleAddArtist(artist) {
     const backendBaseUrl = getBackendBaseUrl();
 
@@ -1520,7 +1534,7 @@ export default function MyArtistsPage() {
             <button
               type="button"
               onClick={() => setIsNewReleasesOpen((current) => !current)}
-              className="flex w-full items-center justify-between gap-4 text-left"
+              className="mb-5 flex w-full items-start justify-between gap-4 text-left"
             >
               <div>
                 <h2 className="text-lg font-semibold text-white">
@@ -1535,46 +1549,46 @@ export default function MyArtistsPage() {
               </div>
 
               <span
-                className={`text-xl text-zinc-500 transition ${
+                className={`flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-800 text-zinc-400 transition ${
                   isNewReleasesOpen ? "rotate-180" : ""
                 }`}
+                aria-hidden="true"
               >
-                ˄
+                ˅
               </span>
             </button>
 
             {isNewReleasesOpen ? (
-              <div className="mt-5">
-                {isLoading ? (
-                  <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-                    {Array.from({ length: 5 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
-                      />
-                    ))}
-                  </div>
-                ) : newReleases.length > 0 ? (
-                  <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 pr-2 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-                    {newReleases.map((release) => (
-                      <ReleaseCard
-                        key={`${release.id}-${release.artistId}`}
-                        release={release}
-                        onViewTracks={setSelectedRelease}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-zinc-900 bg-black p-5">
-                    <p className="text-sm font-semibold text-white">
-                      No new releases in the last 7 days.
-                    </p>
-                    <p className="mt-1 text-sm text-zinc-500">
-                      Press the refresh icon to sync all saved artists and load the latest releases.
-                    </p>
-                  </div>
-                )}
-              </div>
+              isLoading ? (
+                <div className="flex gap-4 overflow-x-auto pb-3 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
+                    />
+                  ))}
+                </div>
+              ) : newReleases.length > 0 ? (
+                <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 pr-2 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                  {newReleases.map((release) => (
+                    <ReleaseCard
+                      key={`${release.id}-${release.artistId}-${release.releaseDate}`}
+                      release={release}
+                      onViewTracks={setSelectedRelease}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-zinc-900 bg-black p-5">
+                  <p className="text-sm font-semibold text-white">
+                    No new releases in the last 7 days.
+                  </p>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    When one of your artists releases new music, it will appear
+                    here automatically.
+                  </p>
+                </div>
+              )
             ) : null}
           </section>
 
