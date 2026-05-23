@@ -10,10 +10,25 @@ import {
 } from "@/lib/api/accounts";
 import { ApiError } from "@/lib/api/client";
 
+type ArtistSyncMetadataResult = {
+  success: boolean;
+  synced: number;
+  failed: number;
+  total: number;
+  results?: Array<{
+    artistId: string;
+    name?: string | null;
+    ok: boolean;
+    message?: string;
+    error?: string;
+  }>;
+};
+
 type SyncState = {
   loading: boolean;
   error: string | null;
   result: SyncAllAccountsResponse | null;
+  artistSync: ArtistSyncMetadataResult | null;
   completedAt: string | null;
 };
 
@@ -88,6 +103,34 @@ function formatTimeOnly(value?: string | null) {
   });
 }
 
+function getBackendBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    "https://spotify-growth-hub-backend.onrender.com"
+  );
+}
+
+async function syncArtistLibraryMetadata() {
+  const backendBaseUrl = getBackendBaseUrl();
+
+  const response = await fetch(`${backendBaseUrl}/api/artist-library/sync-metadata`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      data?.detail || data?.message || "Failed to sync artist metadata",
+    );
+  }
+
+  return data as ArtistSyncMetadataResult;
+}
 
 function isDateLike(value: unknown) {
   if (typeof value !== "string" && typeof value !== "number") return false;
@@ -218,6 +261,7 @@ export default function DashboardPage() {
     loading: false,
     error: null,
     result: null,
+    artistSync: null,
     completedAt: null,
   });
 
@@ -249,6 +293,7 @@ export default function DashboardPage() {
       loading: true,
       error: null,
       result: null,
+      artistSync: null,
       completedAt: null,
     });
 
@@ -259,10 +304,23 @@ export default function DashboardPage() {
         timeoutMs: 180000,
       });
 
+      let artistSync: ArtistSyncMetadataResult | null = null;
+      let artistSyncError: string | null = null;
+
+      try {
+        artistSync = await syncArtistLibraryMetadata();
+      } catch (error) {
+        artistSyncError =
+          error instanceof Error
+            ? error.message
+            : "Artist metadata sync failed";
+      }
+
       setSyncState({
         loading: false,
-        error: null,
+        error: artistSyncError,
         result,
+        artistSync,
         completedAt: new Date().toISOString(),
       });
 
@@ -277,6 +335,7 @@ export default function DashboardPage() {
         loading: false,
         error: message,
         result: null,
+        artistSync: null,
         completedAt: null,
       });
     }
@@ -415,6 +474,15 @@ export default function DashboardPage() {
       });
     }
 
+    if (syncState.artistSync) {
+      items.push({
+        title: "Artist library synced",
+        description: `${syncState.artistSync.synced} artists updated, ${syncState.artistSync.failed} failed`,
+        time: syncState.completedAt,
+        tone: syncState.artistSync.failed > 0 ? "amber" : "emerald",
+      });
+    }
+
     if (syncState.error) {
       items.push({
         title: "Sync failed",
@@ -446,7 +514,13 @@ export default function DashboardPage() {
     }
 
     return items.slice(0, 6);
-  }, [accounts, syncState.completedAt, syncState.error, syncState.result]);
+  }, [
+    accounts,
+    syncState.artistSync,
+    syncState.completedAt,
+    syncState.error,
+    syncState.result,
+  ]);
 
   return (
     <div className="min-h-screen space-y-6 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_32%),radial-gradient(circle_at_top_left,rgba(39,39,42,0.9),transparent_34%)] p-6 text-zinc-100">
@@ -490,7 +564,7 @@ export default function DashboardPage() {
               disabled={accountsLoading || syncState.loading}
               className="inline-flex items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {syncState.loading ? "Syncing all accounts..." : "Sync ALL"}
+              {syncState.loading ? "Syncing all data..." : "Sync ALL"}
             </button>
           )}
         </div>
@@ -872,6 +946,11 @@ export default function DashboardPage() {
             <span className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-300">
               Total: {syncState.result.total}
             </span>
+            {syncState.artistSync ? (
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
+                Artists synced: {syncState.artistSync.synced}/{syncState.artistSync.total}
+              </span>
+            ) : null}
           </div>
 
           <div className="mt-5 overflow-x-auto">
