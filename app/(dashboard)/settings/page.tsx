@@ -577,9 +577,9 @@ export default function SettingsPage() {
       setUsers(databaseUsers);
       setDatabaseUsersConnected(true);
     } catch {
-      const localUsers = getUsers().map((user, index) => {
-        const localRecord = getLocalUserRecord(user.username) || {};
+      const localUsers = getUsers().map((user: { username?: string }, index: number) => {
         const username = String(user.username || "");
+        const localRecord = getLocalUserRecord(username) || {};
         const storedRole = String(localRecord.role || (isMasterUser({ username }) ? "admin" : "viewer")).toLowerCase();
         const role: Role = storedRole === "admin" ? "admin" : "viewer";
 
