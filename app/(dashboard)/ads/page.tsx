@@ -1054,6 +1054,22 @@ export default function AdsPage() {
   }, [activeAccountId, accounts, setActiveAccountId]);
 
   useEffect(() => {
+    const nextCountry = new URLSearchParams(window.location.search)
+      .get("country")
+      ?.trim();
+
+    if (!nextCountry) return;
+
+    setFilters((current) => {
+      if (current.country === nextCountry) return current;
+      return { ...current, country: nextCountry };
+    });
+    setHiddenMode("visible");
+    setRowPage(1);
+    setShowAllRows(false);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
 
     try {
