@@ -1343,7 +1343,10 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
   const map = new Map<
     string,
     {
-      tracksByIdentity: Map<string, CurationTrack>;
+      // Key: a unique slot key (identity + position) so each occurrence in the
+      // array is counted separately, even when two tracks share the same Spotify
+      // ID (i.e. the exact same song imported from two different playlists).
+      tracksBySlot: Map<string, CurationTrack>;
       originalIndexes: number[];
       exactTitles: Set<string>;
       artists: Set<string>;
@@ -1355,16 +1358,18 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
     if (!normalizedTitle) return;
 
     const current = map.get(normalizedTitle) ?? {
-      tracksByIdentity: new Map<string, CurationTrack>(),
+      tracksBySlot: new Map<string, CurationTrack>(),
       originalIndexes: [],
       exactTitles: new Set<string>(),
       artists: new Set<string>(),
     };
 
-    const identity = trackIdentity(track);
+    // Use position-aware slot key so the same Spotify track appearing at two
+    // different positions (from two different playlists) is counted twice.
+    const slotKey = `${trackIdentity(track)}::${index}`;
 
-    if (!current.tracksByIdentity.has(identity)) {
-      current.tracksByIdentity.set(identity, track);
+    if (!current.tracksBySlot.has(slotKey)) {
+      current.tracksBySlot.set(slotKey, track);
       current.originalIndexes.push(index);
     }
 
@@ -1376,7 +1381,7 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
 
   return Array.from(map.entries())
     .map(([normalizedTitle, group]) => {
-      const uniqueTracks = Array.from(group.tracksByIdentity.values());
+      const uniqueTracks = Array.from(group.tracksBySlot.values());
 
       return {
         id: `duplicate-group-${normalizedTitle}`,
@@ -1384,7 +1389,7 @@ function groupDuplicateTracks(tracks: CurationTrack[]): DuplicateGroup[] {
         tracks: uniqueTracks,
         originalIndexes: group.originalIndexes,
         riskType:
-          group.exactTitles.size === 1 && group.artists.size > 1
+          group.exactTitles.size === 1 && group.artists.size === 1
             ? "exact"
             : "similar",
       } satisfies DuplicateGroup;
@@ -1523,7 +1528,9 @@ function SideSection({
 
   const filteredCsvPlaylistOptions = useMemo(() => {
     const search = csvDropdownSearch.trim().toLowerCase();
-    const items = csvPlaylistOptions ?? [];
+    const items = [...(csvPlaylistOptions ?? [])].sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+    );
     if (!search) return items;
 
     return items.filter((item) =>
@@ -1601,6 +1608,9 @@ function SideSection({
   const [draggedTrackIndex, setDraggedTrackIndex] = useState<number | null>(
     null,
   );
+  const [selectedTrackIds, setSelectedTrackIds] = useState<string[]>([]);
+  const [lastSelectedTrackIndex, setLastSelectedTrackIndex] = useState<number | null>(null);
+  const [trackUndoStack, setTrackUndoStack] = useState<CurationTrack[][]>([]);
 
   const randomShuffleTracks = () => {
     setImportedLinks((prev) => {
@@ -1755,6 +1765,93 @@ function SideSection({
     setDraggedTrackIndex(null);
   };
 
+  const getVisibleTrackId = (track: CurationTrack, index: number) =>
+    `${trackIdentity(track)}::${index}`;
+
+  const visibleTrackIds = useMemo(
+    () => tracks.map((track, index) => getVisibleTrackId(track, index)),
+    [tracks],
+  );
+
+  useEffect(() => {
+    setSelectedTrackIds((current) =>
+      current.filter((id) => visibleTrackIds.includes(id)),
+    );
+  }, [visibleTrackIds]);
+
+  const replaceVisibleTracks = (nextTracks: CurationTrack[]) => {
+    setImportedLinks((prev) => {
+      if ((prev ?? []).length === 0) return prev;
+      return (prev ?? []).map((item, index) =>
+        index === 0
+          ? { ...item, mergedTracks: nextTracks }
+          : { ...item, mergedTracks: [] },
+      );
+    });
+  };
+
+  const deleteSingleVisibleTrack = (trackIndex: number) => {
+    setTrackUndoStack((current) => [...current, [...tracks]]);
+    replaceVisibleTracks(tracks.filter((_, index) => index !== trackIndex));
+    setSelectedTrackIds((current) =>
+      current.filter((id) => id !== visibleTrackIds[trackIndex]),
+    );
+    setLastSelectedTrackIndex(null);
+  };
+
+  const handleVisibleTrackSelect = (trackIndex: number, shiftKey = false) => {
+    const trackId = visibleTrackIds[trackIndex];
+    if (!trackId) return;
+
+    if (shiftKey && lastSelectedTrackIndex !== null) {
+      const start = Math.min(lastSelectedTrackIndex, trackIndex);
+      const end = Math.max(lastSelectedTrackIndex, trackIndex);
+      const rangeIds = visibleTrackIds.slice(start, end + 1);
+      setSelectedTrackIds((current) =>
+        Array.from(new Set([...current, ...rangeIds])),
+      );
+      return;
+    }
+
+    setSelectedTrackIds((current) =>
+      current.includes(trackId)
+        ? current.filter((id) => id !== trackId)
+        : [...current, trackId],
+    );
+    setLastSelectedTrackIndex(trackIndex);
+  };
+
+  const selectAllVisibleTracks = () => {
+    setSelectedTrackIds(visibleTrackIds);
+  };
+
+  const deselectAllVisibleTracks = () => {
+    setSelectedTrackIds([]);
+    setLastSelectedTrackIndex(null);
+  };
+
+  const deleteSelectedVisibleTracks = () => {
+    if (selectedTrackIds.length === 0) return;
+    const selectedSet = new Set(selectedTrackIds);
+    setTrackUndoStack((current) => [...current, [...tracks]]);
+    replaceVisibleTracks(
+      tracks.filter(
+        (track, index) => !selectedSet.has(getVisibleTrackId(track, index)),
+      ),
+    );
+    setSelectedTrackIds([]);
+    setLastSelectedTrackIndex(null);
+  };
+
+  const undoVisibleTrackDelete = () => {
+    const previous = trackUndoStack[trackUndoStack.length - 1];
+    if (!previous) return;
+    replaceVisibleTracks(previous);
+    setSelectedTrackIds([]);
+    setLastSelectedTrackIndex(null);
+    setTrackUndoStack((current) => current.slice(0, -1));
+  };
+
   return (
     <div className="rounded-2xl bg-[linear-gradient(180deg,rgba(39,39,42,0.35),rgba(9,9,11,0.9))] p-4">
       <div className="mb-4 flex items-start justify-between gap-4">
@@ -1839,7 +1936,7 @@ function SideSection({
                   className="my-2 h-10 w-full rounded-lg border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
                 />
 
-                <div className="max-h-80 overflow-y-auto pr-1">
+                <div className="curation-green-scrollbar max-h-80 overflow-y-auto rounded-lg bg-black pr-1">
                   {filteredCsvPlaylistOptions.length === 0 ? (
                     <div className="px-2 py-3 text-sm text-zinc-500">No playlists saved.</div>
                   ) : (
@@ -1987,8 +2084,46 @@ function SideSection({
       </div>
 
       <div className="mt-4 rounded-2xl border border-zinc-800 bg-black p-4">
-        <div className="mb-3 text-sm font-semibold text-white">
-          Tracks In List
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-white">
+            Tracks In List
+          </div>
+
+          {(tracks ?? []).length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={selectAllVisibleTracks}
+                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={deselectAllVisibleTracks}
+                disabled={selectedTrackIds.length === 0}
+                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Deselect
+              </button>
+              <button
+                type="button"
+                onClick={deleteSelectedVisibleTracks}
+                disabled={selectedTrackIds.length === 0}
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Delete Selected ({selectedTrackIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={undoVisibleTrackDelete}
+                disabled={trackUndoStack.length === 0}
+                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-green-400 transition hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Undo
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {(tracks ?? []).length === 0 ? (
@@ -1996,9 +2131,11 @@ function SideSection({
             No tracks in this list yet.
           </div>
         ) : (
-          <div className="scrollbar-spotify max-h-[280px] space-y-2 overflow-y-auto pr-1">
+          <div className="curation-green-scrollbar max-h-[280px] space-y-2 overflow-y-auto rounded-xl bg-black pr-1">
             {(tracks ?? []).map((track, index) => {
               const colorIndexes = trackColorMap.get(trackKey(track)) ?? [];
+              const trackId = getVisibleTrackId(track, index);
+              const selected = selectedTrackIds.includes(trackId);
 
               return (
                 <div
@@ -2007,9 +2144,21 @@ function SideSection({
                   onDragStart={() => setDraggedTrackIndex(index)}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={() => reorderVisibleTrack(index)}
-                  className="flex cursor-move items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                  onClick={(event) => handleVisibleTrackSelect(index, event.shiftKey)}
+                  className={`flex cursor-move items-center justify-between gap-3 rounded-xl border bg-zinc-950 px-4 py-3 ${selected ? "border-green-500" : "border-zinc-800"}`}
                 >
                   <div className="flex min-w-0 items-center">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleVisibleTrackSelect(index, event.shiftKey);
+                      }}
+                      className={`mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-green-400 bg-green-500" : "border-zinc-600 bg-black"}`}
+                      aria-label={selected ? "Deselect track" : "Select track"}
+                    >
+                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
+                    </button>
                     <TrackDots
                       colorIndexes={colorIndexes}
                       colorPalette={colorPalette}
@@ -2020,7 +2169,10 @@ function SideSection({
                   </div>
 
                   <button
-                    onClick={() => removeTrack(track)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteSingleVisibleTrack(index);
+                    }}
                     className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20"
                   >
                     X
@@ -2229,17 +2381,24 @@ function DuplicateGroupCard({
       </div>
 
       <div className="space-y-2">
-        {group.tracks.map((track) => {
-          const calculatedIndex = findTrackIndexByIdentity(
-            displayedTracks,
-            track,
-          );
+        {group.tracks.map((track, slotIndex) => {
+          // Find the Nth occurrence of this identity in displayedTracks so that
+          // each duplicate slot maps to its own position in the result list.
+          const identity = trackIdentity(track);
+          let occurrenceCount = 0;
+          const calculatedIndex = displayedTracks.findIndex((t) => {
+            if (trackIdentity(t) === identity) {
+              if (occurrenceCount === slotIndex) return true;
+              occurrenceCount += 1;
+            }
+            return false;
+          });
           const displayNumber =
             calculatedIndex >= 0 ? calculatedIndex + 1 : "?";
 
           return (
             <div
-              key={trackIdentity(track)}
+              key={`${trackIdentity(track)}::${slotIndex}`}
               className="flex items-center justify-between rounded-xl border border-green-500/35 bg-black px-4 py-3"
             >
               <div className="flex min-w-0 items-center text-sm text-zinc-200">
@@ -3435,7 +3594,7 @@ export default function CurationPage() {
               Run curation to generate a result.
             </div>
           ) : (
-            <div className="scrollbar-spotify max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            <div className="curation-green-scrollbar max-h-[420px] space-y-2 overflow-y-auto pr-1">
               {displayedCurationResult.map((track, index) => {
                 const key = trackKey(track);
                 const isSource = sourceTrackKeys.has(key);
@@ -3456,13 +3615,14 @@ export default function CurationPage() {
                 const selected = selectedResultIndexes.includes(index);
                 const borderClass = selected
                   ? "border-green-400 border-2"
-                  : isDuplicate
-                    ? "border-green-500 border-2"
-                    : isSource
-                      ? "border-red-500/20"
-                      : isMine
-                        ? "border-yellow-500/20"
-                        : "border-zinc-800";
+                  : isSource
+                    ? "border-red-500/20"
+                    : isMine
+                      ? "border-yellow-500/20"
+                      : "border-zinc-800";
+                const duplicateTextClass = isDuplicate
+                  ? "text-green-400"
+                  : "text-zinc-300";
 
                 return (
                   <div
@@ -3488,8 +3648,13 @@ export default function CurationPage() {
                           className={`h-2.5 w-2.5 rounded-full ${sourceColorClass}`}
                         />
                       </div>
-                      <div className="min-w-0 text-sm text-zinc-300">
-                        {index + 1}. {formatTrackLine(track)}
+                      <div className={`min-w-0 text-sm ${duplicateTextClass}`}>
+                        <span>{index + 1}. {formatTrackLine(track)}</span>
+                        {isDuplicate ? (
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-green-400">
+                            Double
+                          </span>
+                        ) : null}
                       </div>
                     </div>
 
@@ -3749,6 +3914,29 @@ export default function CurationPage() {
           </div>
         </div>
       ) : null}
+
+      <style jsx global>{`
+        .curation-green-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #10b981 #000000;
+        }
+
+        .curation-green-scrollbar::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+
+        .curation-green-scrollbar::-webkit-scrollbar-track {
+          background: #000000;
+          border-radius: 9999px;
+        }
+
+        .curation-green-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #10b981 0%, #22c55e 100%);
+          border: 2px solid #000000;
+          border-radius: 9999px;
+        }
+      `}</style>
 
       <SavedCurationsCard
         savedCurations={savedCurations}
