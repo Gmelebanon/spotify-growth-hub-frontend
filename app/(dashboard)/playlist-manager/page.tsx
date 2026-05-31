@@ -132,6 +132,10 @@ function formatDateTime(value: string | null | undefined) {
   return date.toLocaleString();
 }
 
+function makeCurationTrackKey(track: AddedTrack, index: number) {
+  return `${track.id || track.spotify_id || track.title}__${track.title}__${track.artist}__${index}`;
+}
+
 function normalizeState(
   raw: Partial<PlaylistManagerState>,
 ): PlaylistManagerState {
@@ -694,6 +698,9 @@ export default function PlaylistManagerPage() {
   const [placementNumber, setPlacementNumber] = useState("");
   const [addTrackMode, setAddTrackMode] = useState<AddTrackMode>("current");
   const [trackDragIndex, setTrackDragIndex] = useState<number | null>(null);
+  const [selectedTrackKeys, setSelectedTrackKeys] = useState<Set<string>>(() => new Set());
+  const [lastSelectedTrackIndex, setLastSelectedTrackIndex] = useState<number | null>(null);
+  const [trackUndoStack, setTrackUndoStack] = useState<AddedTrack[][]>([]);
   const [syncProgress, setSyncProgress] = useState<Record<string, number>>({});
   const [syncStatus, setSyncStatus] = useState<Record<string, string>>({});
   const csvInputRef = useRef<HTMLInputElement | null>(null);
@@ -820,6 +827,24 @@ export default function PlaylistManagerPage() {
   ).length;
 
   const importedSyncedCount = visibleSyncedPlaylists.length;
+
+  const sortedSavedMasterPlaylists = useMemo(() => {
+    return [...state.savedMasterPlaylists].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+  }, [state.savedMasterPlaylists]);
+
+  const selectedTrackCount = useMemo(() => {
+    if (!selectedCurationBox) return 0;
+    return selectedCurationBox.tracks.filter((track, index) =>
+      selectedTrackKeys.has(makeCurationTrackKey(track, index)),
+    ).length;
+  }, [selectedCurationBox, selectedTrackKeys]);
+
+  useEffect(() => {
+    setSelectedTrackKeys(new Set());
+    setLastSelectedTrackIndex(null);
+  }, [selectedCurationBox?.id]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1208,26 +1233,102 @@ export default function PlaylistManagerPage() {
     });
   };
 
+  const handleToggleCurationTrack = (trackIndex: number, shiftKey = false) => {
+    if (!selectedCurationBox) return;
+
+    const tracks = selectedCurationBox.tracks;
+    const clickedKey = makeCurationTrackKey(tracks[trackIndex], trackIndex);
+
+    setSelectedTrackKeys((current) => {
+      const next = new Set(current);
+
+      if (shiftKey && lastSelectedTrackIndex !== null) {
+        const start = Math.min(lastSelectedTrackIndex, trackIndex);
+        const end = Math.max(lastSelectedTrackIndex, trackIndex);
+        for (let index = start; index <= end; index += 1) {
+          next.add(makeCurationTrackKey(tracks[index], index));
+        }
+      } else if (next.has(clickedKey)) {
+        next.delete(clickedKey);
+      } else {
+        next.add(clickedKey);
+      }
+
+      return next;
+    });
+
+    setLastSelectedTrackIndex(trackIndex);
+  };
+
+  const handleSelectAllCurationTracks = () => {
+    if (!selectedCurationBox) return;
+
+    setSelectedTrackKeys(
+      new Set(
+        selectedCurationBox.tracks.map((track, index) =>
+          makeCurationTrackKey(track, index),
+        ),
+      ),
+    );
+    setLastSelectedTrackIndex(null);
+  };
+
+  const handleDeselectCurationTracks = () => {
+    setSelectedTrackKeys(new Set());
+    setLastSelectedTrackIndex(null);
+  };
+
+  const handleUndoCurationTrackDelete = () => {
+    const previousTracks = trackUndoStack[trackUndoStack.length - 1];
+    if (!previousTracks) return;
+
+    updateSelectedCurationTracks(previousTracks);
+    setTrackUndoStack((current) => current.slice(0, -1));
+    handleDeselectCurationTracks();
+    setPageMessage("Deleted curation tracks restored. Click Save to store this change.");
+  };
+
+  const handleDeleteSelectedCurationTracks = () => {
+    if (!selectedCurationBox || selectedTrackCount === 0) return;
+
+    const previousTracks = selectedCurationBox.tracks;
+    const tracks = previousTracks.filter(
+      (track, index) => !selectedTrackKeys.has(makeCurationTrackKey(track, index)),
+    );
+
+    setTrackUndoStack((current) => [...current, previousTracks]);
+    updateSelectedCurationTracks(tracks);
+    handleDeselectCurationTracks();
+    setPageMessage(`${selectedTrackCount} selected curation track(s) deleted. Use Undo to restore them.`);
+  };
+
   const handleRemoveTrack = (trackIndex: number) => {
     if (!selectedCurationBox) return;
 
-    const tracks = selectedCurationBox.tracks.filter(
+    const previousTracks = selectedCurationBox.tracks;
+    const tracks = previousTracks.filter(
       (_, index) => index !== trackIndex,
     );
+    setTrackUndoStack((current) => [...current, previousTracks]);
     updateSelectedCurationTracks(tracks);
+    handleDeselectCurationTracks();
   };
 
   const handleClearCurationTracks = () => {
     if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) return;
 
     const confirmed = window.confirm(
-      `Clear all songs from "${selectedCurationBox.curationName || "Manual Curation"}"?\n\nThis only clears the Playlist Manager curation list. It will not delete songs from Spotify until you sync/save to Spotify.`,
+      `Clear all songs from "${selectedCurationBox.curationName || "Manual Curation"}"?
+
+This only clears the Playlist Manager curation list. It will not delete songs from Spotify until you sync/save to Spotify.`,
     );
 
     if (!confirmed) return;
 
+    setTrackUndoStack((current) => [...current, selectedCurationBox.tracks]);
     updateSelectedCurationTracks([]);
-    setPageMessage("Curation tracks cleared. Click Save to store this change.");
+    handleDeselectCurationTracks();
+    setPageMessage("Curation tracks cleared. Use Undo to restore them, or click Save to store this change.");
   };
 
   const handleDropTrack = (targetIndex: number) => {
@@ -1557,6 +1658,48 @@ export default function PlaylistManagerPage() {
 
   return (
     <div className="min-h-screen bg-black px-8 py-10 text-white">
+      <style jsx global>{`
+        html,
+        body {
+          scrollbar-color: #22c55e #000000;
+          scrollbar-width: thin;
+          background: #000000;
+        }
+
+        *::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+
+        *::-webkit-scrollbar-track {
+          background: #000000;
+        }
+
+        *::-webkit-scrollbar-thumb {
+          background: #22c55e;
+          border-radius: 999px;
+          border: 2px solid #000000;
+        }
+
+        *::-webkit-scrollbar-thumb:hover {
+          background: #16a34a;
+        }
+
+        .scrollbar-spotify {
+          scrollbar-color: #22c55e #000000;
+          scrollbar-width: thin;
+        }
+
+        .playlist-select {
+          color-scheme: dark;
+          scrollbar-color: #22c55e #000000;
+        }
+
+        .playlist-select option {
+          background: #000000;
+          color: #ffffff;
+        }
+      `}</style>
       <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="text-4xl font-semibold tracking-tight">
@@ -1614,10 +1757,10 @@ export default function PlaylistManagerPage() {
             <select
               value={state.selectedSavedMasterPlaylistId ?? ""}
               onChange={(event) => handleSelectMaster(event.target.value)}
-              className="h-12 flex-1 rounded-xl border border-zinc-800 bg-black px-4 text-sm font-semibold text-white outline-none focus:border-green-500"
+              className="playlist-select h-12 flex-1 rounded-xl border border-zinc-800 bg-black px-4 text-sm font-semibold text-white outline-none focus:border-green-500"
             >
               <option value="">Master Playlist</option>
-              {state.savedMasterPlaylists.map((playlist) => (
+              {sortedSavedMasterPlaylists.map((playlist) => (
                 <option key={playlist.id} value={playlist.id}>
                   {playlist.name}
                 </option>
@@ -1725,21 +1868,59 @@ export default function PlaylistManagerPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-end gap-3">
                   <span className="text-xs text-zinc-400">
                     {selectedCurationBox?.tracks.length ?? 0} tracks
                   </span>
-                  <button
-                    type="button"
-                    disabled={
-                      !selectedCurationBox ||
-                      selectedCurationBox.tracks.length === 0
-                    }
-                    onClick={handleClearCurationTracks}
-                    className="rounded-xl border border-red-500/40 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Clear
-                  </button>
+
+                  {selectedCurationBox && selectedCurationBox.tracks.length > 0 ? (
+                    selectedTrackCount > 0 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleDeselectCurationTracks}
+                          className="rounded-xl border border-zinc-700 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-900"
+                        >
+                          Deselect
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeleteSelectedCurationTracks}
+                          className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20"
+                        >
+                          Delete Selected ({selectedTrackCount})
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleSelectAllCurationTracks}
+                          className="rounded-xl border border-zinc-700 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-900"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClearCurationTracks}
+                          className="rounded-xl border border-red-500/40 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20"
+                        >
+                          Clear
+                        </button>
+                      </>
+                    )
+                  ) : null}
+
+                  {trackUndoStack.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleUndoCurationTrackDelete}
+                      className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm font-semibold text-green-300 hover:bg-green-500/20"
+                    >
+                      Undo
+                    </button>
+                  ) : null}
+
                   <button
                     type="button"
                     onClick={() => setAddTrackOpen(true)}
@@ -1757,35 +1938,60 @@ export default function PlaylistManagerPage() {
                 </div>
               ) : (
                 <div className="scrollbar-spotify max-h-[520px] space-y-2 overflow-y-auto pr-2">
-                  {selectedCurationBox.tracks.map((track, index) => (
-                    <div
-                      key={`${track.id}-${index}`}
-                      draggable
-                      onDragStart={() => setTrackDragIndex(index)}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => handleDropTrack(index)}
-                      className="cursor-grab rounded-xl border border-green-500/40 bg-zinc-950 px-4 py-3 active:cursor-grabbing"
-                    >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-white">
-                            {index + 1}. {track.title}
-                          </div>
-                          <div className="mt-1 truncate text-xs text-zinc-500">
-                            {track.artist}
-                          </div>
-                        </div>
+                  {selectedCurationBox.tracks.map((track, index) => {
+                    const trackKey = makeCurationTrackKey(track, index);
+                    const isSelected = selectedTrackKeys.has(trackKey);
 
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTrack(index)}
-                          className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/20"
-                        >
-                          Remove
-                        </button>
+                    return (
+                      <div
+                        key={trackKey}
+                        draggable
+                        onClick={(event) => handleToggleCurationTrack(index, event.shiftKey)}
+                        onDragStart={() => setTrackDragIndex(index)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={() => handleDropTrack(index)}
+                        className={`cursor-grab rounded-xl border px-4 py-3 transition active:cursor-grabbing ${
+                          isSelected
+                            ? "border-green-500 bg-green-500/10 shadow-[0_0_0_1px_rgba(34,197,94,0.25)]"
+                            : "border-zinc-800 bg-zinc-950 hover:border-zinc-700"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => undefined}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleToggleCurationTrack(index, event.shiftKey);
+                              }}
+                              className="h-4 w-4 accent-green-500"
+                            />
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-white">
+                                {index + 1}. {track.title}
+                              </div>
+                              <div className="mt-1 truncate text-xs text-zinc-500">
+                                {track.artist}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleRemoveTrack(index);
+                            }}
+                            className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/20"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1887,6 +2093,7 @@ export default function PlaylistManagerPage() {
                       <input
                         type="checkbox"
                         checked={playlist.checked}
+                        className="h-4 w-4 accent-green-500"
                         onChange={(event) =>
                           persistState({
                             ...state,

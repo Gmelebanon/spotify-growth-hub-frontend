@@ -1,8 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+
+function SpotifyIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M12 1.8C6.37 1.8 1.8 6.37 1.8 12S6.37 22.2 12 22.2 22.2 17.63 22.2 12 17.63 1.8 12 1.8Zm4.68 14.72a.76.76 0 0 1-1.04.25c-2.86-1.75-6.46-2.15-10.7-1.18a.76.76 0 1 1-.34-1.48c4.64-1.06 8.62-.6 11.83 1.36.36.22.47.69.25 1.05Zm1.25-2.78a.95.95 0 0 1-1.3.31c-3.27-2.01-8.25-2.59-12.11-1.42a.95.95 0 1 1-.55-1.82c4.41-1.34 9.9-.69 13.65 1.61.45.28.59.87.31 1.32Zm.1-2.9C14.1 8.51 7.62 8.3 3.9 9.43a1.14 1.14 0 1 1-.66-2.18c4.27-1.3 11.44-1.05 15.96 1.63a1.14 1.14 0 1 1-1.17 1.96Z" />
+    </svg>
+  );
+}
 
 const primaryNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: "▦" },
@@ -19,7 +32,7 @@ const middleNavItems = [
 
 const secondaryNavItems = [
   { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
-  { label: "Trades", href: "/trades", icon: "↔" },
+    { label: "Trades", href: "/trades", icon: "↔" },
   { label: "AI", href: "/ai", icon: "✦" },
   { label: "Settings", href: "/settings", icon: "⚙" },
 ];
@@ -32,7 +45,7 @@ function NavLink({
 }: {
   href: string;
   label: string;
-  icon: string;
+  icon: ReactNode;
   collapsed: boolean;
 }) {
   const pathname = usePathname();

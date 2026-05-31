@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getAccounts } from "@/lib/api/accounts";
 import { useActiveAccountStore } from "@/lib/store/activeAccount";
@@ -50,6 +50,10 @@ type PlaylistRow = {
   playlist_url?: string | null;
   external_url?: string | null;
   url?: string | null;
+  image_url?: string | null;
+  imageUrl?: string | null;
+  cover_url?: string | null;
+  artwork_url?: string | null;
   name: string;
   title?: string;
   followers?: number;
@@ -607,8 +611,330 @@ function GrowthCell({ value }: { value: number | undefined | null }) {
   return <span className={colorClass}>{formatGrowth(safe)}</span>;
 }
 
-function getTrackCount(playlist: PlaylistRow) {
-  return playlist.tracks_count ?? playlist.total_tracks ?? 0;
+function AdsSelect({
+  value,
+  options,
+  placeholder,
+  onChange,
+  widthClass = "w-[108px]",
+  title,
+  searchable = true,
+}: {
+  value: string;
+  options: string[];
+  placeholder: string;
+  onChange: (value: string) => void;
+  widthClass?: string;
+  title?: string;
+  searchable?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const selectedLabel = value || placeholder;
+  const cleanOptions = useMemo(
+    () =>
+      uniqueValues(options.filter(Boolean)).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }),
+      ),
+    [options],
+  );
+  const visibleOptions = useMemo(() => {
+    const query = searchValue.trim().toLowerCase();
+    if (!query) return cleanOptions;
+    return cleanOptions.filter((option) => option.toLowerCase().includes(query));
+  }, [cleanOptions, searchValue]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: globalThis.MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (target && ref.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSearchValue("");
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open]);
+
+  return (
+    <div ref={ref} className={`relative ${widthClass}`} title={title || selectedLabel}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-black px-2 text-left text-xs font-semibold text-white outline-none transition focus:border-green-500 hover:border-green-500/70"
+      >
+        <span className="min-w-0 truncate">{selectedLabel}</span>
+        <span className="shrink-0 text-green-400">▾</span>
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[220px] rounded-lg border border-green-500/50 bg-black p-1 shadow-2xl shadow-black/50">
+          {searchable ? (
+            <input
+              ref={inputRef}
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+              placeholder={`Type ${placeholder.toLowerCase()}...`}
+              className="mb-1 h-8 w-full rounded-md border border-zinc-800 bg-black px-2 text-xs font-semibold text-white outline-none placeholder:text-zinc-600 focus:border-green-500"
+            />
+          ) : null}
+
+          <div className="ads-green-scrollbar max-h-72 overflow-y-auto rounded-md bg-black py-1">
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+              className={`block w-full truncate px-2 py-2 text-left text-xs font-semibold transition hover:bg-green-500/15 ${!value ? "bg-green-500/20 text-green-300" : "text-white"}`}
+            >
+              {placeholder}
+            </button>
+            {visibleOptions.length === 0 ? (
+              <div className="px-2 py-3 text-xs font-semibold text-zinc-500">
+                No matches
+              </div>
+            ) : (
+              visibleOptions.map((option) => (
+                <button
+                  type="button"
+                  key={`${placeholder}-${option}`}
+                  onClick={() => {
+                    onChange(option);
+                    setOpen(false);
+                  }}
+                  className={`block w-full truncate px-2 py-2 text-left text-xs font-semibold transition hover:bg-green-500/15 ${value === option ? "bg-green-500/20 text-green-300" : "text-white"}`}
+                >
+                  {option}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
+function readPlaylistManagerName(item: Record<string, unknown>) {
+  return String(
+    item.name ??
+      item.playlist_name ??
+      item.playlistName ??
+      item.title ??
+      item.display_name ??
+      "",
+  ).trim();
+}
+
+function extractPlaylistManagerItemsFromState(
+  state: Record<string, unknown> | null | undefined,
+) {
+  const output: Array<Record<string, unknown>> = [];
+
+  const pushArray = (value: unknown) => {
+    if (Array.isArray(value)) {
+      output.push(...(value as Array<Record<string, unknown>>));
+    }
+  };
+
+  pushArray(state?.savedPlaylists);
+  pushArray(state?.syncedPlaylists);
+  pushArray(state?.importedPlaylists);
+  pushArray(state?.playlists);
+  pushArray(state?.masterPlaylists);
+  pushArray(state?.savedMasterPlaylists);
+  pushArray(state?.synced_playlists);
+  pushArray(state?.imported_playlists);
+
+  return output;
+}
+
+function loadPlaylistManagerItemsFromLocalStorage() {
+  if (typeof window === "undefined") return [] as Array<Record<string, unknown>>;
+
+  const keys = [
+    "nerd-engine-playlist-manager-state",
+    "playlist-manager-state",
+    "nerd-engine-master-playlists",
+    "nerd-engine-saved-master-playlists",
+    "nerd-engine-playlist-manager-master-playlists",
+    "playlist-manager-master-playlists",
+    "masterPlaylists",
+    "savedMasterPlaylists",
+  ];
+
+  const items: Array<Record<string, unknown>> = [];
+
+  for (const key of keys) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+
+      if (Array.isArray(parsed)) {
+        items.push(...(parsed as Array<Record<string, unknown>>));
+      } else if (parsed && typeof parsed === "object") {
+        items.push(...extractPlaylistManagerItemsFromState(parsed as Record<string, unknown>));
+      }
+    } catch {
+      // Ignore invalid local storage records.
+    }
+  }
+
+  return items;
+}
+
+function readPlaylistManagerId(item: Record<string, unknown>, fallbackName = "") {
+  const value =
+    item.id ??
+    item.playlistId ??
+    item.playlist_id ??
+    item.spotify_playlist_id ??
+    item.spotify_id ??
+    item.target_master_playlist_id ??
+    fallbackName;
+
+  return String(value || fallbackName || "").trim();
+}
+
+function readPlaylistManagerTrackCount(item: Record<string, unknown>) {
+  return (
+    Number(
+      item.tracks_count ??
+        item.track_count ??
+        item.total_tracks ??
+        item.tracksTotal ??
+        item.tracks,
+    ) || 0
+  );
+}
+
+function mergePlaylistManagerList(
+  currentList: unknown,
+  nextItem: Record<string, unknown>,
+) {
+  const list = Array.isArray(currentList)
+    ? ([...(currentList as Array<Record<string, unknown>>)] as Array<Record<string, unknown>>)
+    : [];
+
+  const nextName = readPlaylistManagerName(nextItem).toLowerCase();
+  const nextId = readPlaylistManagerId(nextItem).toLowerCase();
+
+  const exists = list.some((item) => {
+    const name = readPlaylistManagerName(item).toLowerCase();
+    const id = readPlaylistManagerId(item).toLowerCase();
+    return Boolean((nextName && name === nextName) || (nextId && id === nextId));
+  });
+
+  return exists ? list : [...list, nextItem];
+}
+
+function isAdsManagedPlaylistManagerItem(item: Record<string, unknown>) {
+  const source = String(item.source ?? item.managedBy ?? item.managed_by ?? "").toLowerCase();
+  return (
+    source.includes("ads-master-dropdown") ||
+    source.includes("ads") ||
+    item.adsManaged === true ||
+    item.ads_managed === true
+  );
+}
+
+function removeAdsManagedPlaylistManagerItem(
+  currentList: unknown,
+  targetName: string,
+) {
+  const targetKey = targetName.trim().toLowerCase();
+  if (!targetKey) return Array.isArray(currentList) ? currentList : [];
+
+  const list = Array.isArray(currentList)
+    ? ([...(currentList as Array<Record<string, unknown>>)] as Array<Record<string, unknown>>)
+    : [];
+
+  return list.filter((item) => {
+    const name = readPlaylistManagerName(item).toLowerCase();
+    const id = readPlaylistManagerId(item).toLowerCase();
+    const matchesTarget = Boolean((name && name === targetKey) || (id && id === targetKey));
+
+    if (!matchesTarget) return true;
+
+    // Only remove playlists that Ads added automatically. Do not delete
+    // playlists the user manually synced/imported in Playlist Manager.
+    return !isAdsManagedPlaylistManagerItem(item);
+  });
+}
+
+function persistPlaylistManagerStateLocally(nextState: Record<string, unknown>) {
+  if (typeof window === "undefined") return;
+
+  const stateKeys = [
+    "nerd-engine-playlist-manager-state",
+    "playlist-manager-state",
+  ];
+
+  const syncedPlaylists = Array.isArray(nextState.syncedPlaylists)
+    ? nextState.syncedPlaylists
+    : Array.isArray(nextState.synced_playlists)
+      ? nextState.synced_playlists
+      : [];
+  const importedPlaylists = Array.isArray(nextState.importedPlaylists)
+    ? nextState.importedPlaylists
+    : Array.isArray(nextState.imported_playlists)
+      ? nextState.imported_playlists
+      : [];
+
+  const arrayKeys: Array<[string, unknown]> = [
+    ["nerd-engine-playlist-manager-synced-playlists", syncedPlaylists],
+    ["playlist-manager-synced-playlists", syncedPlaylists],
+    ["syncedPlaylists", syncedPlaylists],
+    ["synced_playlists", syncedPlaylists],
+    ["nerd-engine-playlist-manager-imported-playlists", importedPlaylists],
+    ["playlist-manager-imported-playlists", importedPlaylists],
+    ["importedPlaylists", importedPlaylists],
+    ["imported_playlists", importedPlaylists],
+  ];
+
+  for (const key of stateKeys) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(nextState));
+    } catch {
+      // Keep database save as the source of truth if local storage fails.
+    }
+  }
+
+  for (const [key, value] of arrayKeys) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Keep database save as the source of truth if local storage fails.
+    }
+  }
+}
+
+function getTrackCount(playlist: PlaylistRow | null | undefined) {
+  return playlist?.tracks_count ?? playlist?.total_tracks ?? 0;
 }
 
 function adsFormatDayLabel(dayOffset: number) {
@@ -995,6 +1321,7 @@ async function saveAdsMetaToDatabase(
 }
 
 export default function AdsPage() {
+  const queryClient = useQueryClient();
   const activeAccountId = useActiveAccountStore((s) => s.activeAccountId);
   const setActiveAccountId = useActiveAccountStore((s) => s.setActiveAccountId);
 
@@ -1365,47 +1692,343 @@ export default function AdsPage() {
     });
   };
 
+  const savePlaylistManagerState = async (nextState: Record<string, unknown>) => {
+    persistPlaylistManagerStateLocally(nextState);
+
+    const bodyWithQueryUser = JSON.stringify({ state: nextState });
+    const bodyWithUserKey = JSON.stringify({ user_key: "global", state: nextState });
+    const bodyWithQueryStateJson = JSON.stringify({ state_json: nextState });
+    const bodyWithStateJson = JSON.stringify({ user_key: "global", state_json: nextState });
+    const bodyRawState = JSON.stringify(nextState);
+
+    const attempts = [
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state`,
+        method: "PUT",
+        body: bodyWithStateJson,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state`,
+        method: "POST",
+        body: bodyWithStateJson,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "PUT",
+        body: bodyWithQueryStateJson,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "PATCH",
+        body: bodyWithQueryStateJson,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "POST",
+        body: bodyWithQueryStateJson,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "PUT",
+        body: bodyWithQueryUser,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "PATCH",
+        body: bodyWithQueryUser,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "POST",
+        body: bodyWithQueryUser,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state`,
+        method: "PUT",
+        body: bodyWithUserKey,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state`,
+        method: "POST",
+        body: bodyWithUserKey,
+      },
+      {
+        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        method: "PUT",
+        body: bodyRawState,
+      },
+    ];
+
+    let lastError = "Could not save playlist manager state.";
+
+    for (const attempt of attempts) {
+      try {
+        const response = await fetch(attempt.url, {
+          method: attempt.method,
+          headers: { "Content-Type": "application/json" },
+          body: attempt.body,
+        });
+
+        if (response.ok) return true;
+
+        lastError = await response.text();
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    throw new Error(lastError);
+  };
+
+  const ensureMasterPlaylistInManager = async (masterName: string) => {
+    const selectedName = masterName.trim();
+    if (!selectedName) return;
+
+    const currentState =
+      ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) || {};
+
+    const selectedNameKey = selectedName.toLowerCase();
+    const managerItems = [
+      ...extractPlaylistManagerItemsFromState(currentState),
+      ...loadPlaylistManagerItemsFromLocalStorage(),
+    ];
+    const matchedManagerItem = managerItems.find(
+      (item) => readPlaylistManagerName(item).toLowerCase() === selectedNameKey,
+    );
+
+    const matchedPlaylist = playlists.find(
+      (playlist) => playlist.name.trim().toLowerCase() === selectedNameKey,
+    ) as PlaylistRow | undefined;
+
+    const now = new Date().toISOString();
+    const sourceId = matchedManagerItem
+      ? readPlaylistManagerId(matchedManagerItem, selectedName)
+      : "";
+    const playlistId =
+      matchedPlaylist?.spotify_playlist_id ||
+      matchedPlaylist?.spotify_id ||
+      matchedPlaylist?.id ||
+      sourceId ||
+      selectedName;
+
+    const accountId =
+      matchedPlaylist?.account_id ??
+      (matchedManagerItem?.accountId as number | undefined) ??
+      (matchedManagerItem?.account_id as number | undefined) ??
+      null;
+    const accountName =
+      (accountId ? getAccountName(accountId) : "") ||
+      String(
+        matchedManagerItem?.accountName ??
+          matchedManagerItem?.account_name ??
+          matchedManagerItem?.active_account_name ??
+          "",
+      );
+    const trackCount = matchedPlaylist
+      ? getTrackCount(matchedPlaylist)
+      : matchedManagerItem
+        ? readPlaylistManagerTrackCount(matchedManagerItem)
+        : 0;
+    const imageUrl = String(
+      matchedPlaylist?.image_url ??
+        matchedManagerItem?.image_url ??
+        matchedManagerItem?.imageUrl ??
+        "",
+    );
+    const playlistUrl = String(
+      matchedPlaylist?.playlist_url ??
+        matchedPlaylist?.spotify_url ??
+        matchedPlaylist?.external_url ??
+        matchedManagerItem?.playlist_url ??
+        matchedManagerItem?.spotify_url ??
+        matchedManagerItem?.external_url ??
+        "",
+    );
+    const lastSyncedAt = matchedPlaylist
+      ? getPlaylistManagerLastSynced(matchedPlaylist)
+      : String(
+          matchedManagerItem?.lastSyncedAt ??
+            matchedManagerItem?.last_synced_at ??
+            matchedManagerItem?.synced_at ??
+            now,
+        );
+
+    const nextSyncedPlaylist = {
+      ...(matchedManagerItem ?? {}),
+      id: String(playlistId),
+      playlistId: String(playlistId),
+      playlist_id: String(playlistId),
+      spotify_id: matchedPlaylist?.spotify_id || matchedPlaylist?.spotify_playlist_id || matchedManagerItem?.spotify_id || null,
+      spotify_playlist_id: matchedPlaylist?.spotify_playlist_id || matchedPlaylist?.spotify_id || matchedManagerItem?.spotify_playlist_id || null,
+      name: selectedName,
+      title: selectedName,
+      playlist_name: selectedName,
+      playlistName: selectedName,
+      display_name: selectedName,
+      accountId,
+      account_id: accountId,
+      accountName,
+      account_name: accountName,
+      followers: matchedPlaylist?.followers ?? matchedManagerItem?.followers ?? 0,
+      tracks: trackCount,
+      track_count: trackCount,
+      tracks_count: trackCount,
+      total_tracks: trackCount,
+      image_url: imageUrl || null,
+      imageUrl: imageUrl || null,
+      spotify_url: playlistUrl || null,
+      playlist_url: playlistUrl || null,
+      external_url: playlistUrl || null,
+      lastSyncedAt,
+      last_synced_at: lastSyncedAt,
+      syncedAt: lastSyncedAt,
+      synced_at: lastSyncedAt,
+      createdAt: (matchedManagerItem?.createdAt as string | undefined) ?? now,
+      created_at: (matchedManagerItem?.created_at as string | undefined) ?? now,
+      source: "ads-master-dropdown",
+      managedBy: "ads-master-dropdown",
+      managed_by: "ads-master-dropdown",
+      adsManaged: true,
+      ads_managed: true,
+    };
+
+    const nextState = {
+      ...currentState,
+      syncedPlaylists: mergePlaylistManagerList(currentState.syncedPlaylists, nextSyncedPlaylist),
+      importedPlaylists: mergePlaylistManagerList(currentState.importedPlaylists, nextSyncedPlaylist),
+      synced_playlists: mergePlaylistManagerList(currentState.synced_playlists, nextSyncedPlaylist),
+      imported_playlists: mergePlaylistManagerList(currentState.imported_playlists, nextSyncedPlaylist),
+    };
+
+    await savePlaylistManagerState(nextState);
+    await playlistManagerStateQuery.refetch();
+    queryClient.invalidateQueries({ queryKey: ["playlist-manager-state-for-ads"] });
+  };
+
+  const fetchLatestPlaylistManagerState = async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) return null;
+
+      const payload = await response.json();
+      return (payload?.state ?? null) as Record<string, unknown> | null;
+    } catch {
+      return null;
+    }
+  };
+
+  const removeOldMasterPlaylistFromManager = async (oldMasterName: string) => {
+    const oldName = oldMasterName.trim();
+    if (!oldName) return;
+
+    const latestState = await fetchLatestPlaylistManagerState();
+    const currentState =
+      latestState ??
+      ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) ??
+      {};
+
+    const nextState = {
+      ...currentState,
+      syncedPlaylists: removeAdsManagedPlaylistManagerItem(currentState.syncedPlaylists, oldName),
+      importedPlaylists: removeAdsManagedPlaylistManagerItem(currentState.importedPlaylists, oldName),
+      synced_playlists: removeAdsManagedPlaylistManagerItem(currentState.synced_playlists, oldName),
+      imported_playlists: removeAdsManagedPlaylistManagerItem(currentState.imported_playlists, oldName),
+    };
+
+    await savePlaylistManagerState(nextState);
+    await playlistManagerStateQuery.refetch();
+    queryClient.invalidateQueries({ queryKey: ["playlist-manager-state-for-ads"] });
+  };
+
   const updateRowData = (playlist: PlaylistRow, updates: Partial<RowMeta>) => {
     const key = playlistKey(playlist);
+    const previousRowData = {
+      ...getDefaultRowData(playlist),
+      ...rowData[key],
+    };
+    const previousMaster = String(previousRowData.master || "").trim();
+    const nextMaster = Object.prototype.hasOwnProperty.call(updates, "master")
+      ? String(updates.master || "").trim()
+      : previousMaster;
+
     const next = {
       ...rowData,
       [key]: {
-        ...getDefaultRowData(playlist),
-        ...rowData[key],
+        ...previousRowData,
         ...updates,
       },
     };
     persistRowData(next);
     saveAdsSettingsToDatabase(playlist.id, playlist.name, next[key]);
     saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
+
+    if (Object.prototype.hasOwnProperty.call(updates, "master")) {
+      const oldMasterStillUsed = Object.values(next).some((item) => {
+        return String(item?.master || "").trim().toLowerCase() === previousMaster.toLowerCase();
+      });
+
+      Promise.resolve()
+        .then(async () => {
+          if (nextMaster) {
+            await ensureMasterPlaylistInManager(nextMaster);
+          }
+
+          if (
+            previousMaster &&
+            previousMaster.toLowerCase() !== nextMaster.toLowerCase() &&
+            !oldMasterStillUsed
+          ) {
+            await removeOldMasterPlaylistFromManager(previousMaster);
+          }
+        })
+        .catch((error) => {
+          console.error("Could not sync master playlist change to Playlist Manager", error);
+        });
+    }
   };
 
   const masterOptions = useMemo(() => {
-    const state = playlistManagerStateQuery.data as
-      | { savedPlaylists?: Array<Record<string, unknown>>; syncedPlaylists?: Array<Record<string, unknown>>; playlists?: Array<Record<string, unknown>> }
-      | null
-      | undefined;
+    const state = playlistManagerStateQuery.data as Record<string, unknown> | null | undefined;
 
-    const savedItems =
-      state?.savedPlaylists ??
-      state?.syncedPlaylists ??
-      state?.playlists ??
-      [];
+    const savedItems: Array<Record<string, unknown>> = [];
+    const pushSavedArray = (value: unknown) => {
+      if (Array.isArray(value)) {
+        savedItems.push(...(value as Array<Record<string, unknown>>));
+      }
+    };
 
-    const names = savedItems
-      .map((item) =>
-        String(
-          item.name ??
-            item.playlist_name ??
-            item.playlistName ??
-            item.title ??
-            "",
-        ).trim(),
-      )
-      .filter(Boolean);
+    // Only show playlists that were intentionally saved in Playlist Manager.
+    // Do not include synced/imported/all playlist arrays here, otherwise the
+    // Master dropdown becomes a full playlist list again.
+    pushSavedArray(state?.savedPlaylists);
+    pushSavedArray(state?.saved_playlists);
+    pushSavedArray(state?.savedMasterPlaylists);
+    pushSavedArray(state?.saved_master_playlists);
+    pushSavedArray(state?.masterPlaylists);
+    pushSavedArray(state?.master_playlists);
 
-    return uniqueValues(names.length > 0 ? names : playlists.map((playlist) => playlist.name));
-  }, [playlistManagerStateQuery.data, playlists]);
+    const localSavedItems = loadPlaylistManagerItemsFromLocalStorage().filter((item) => {
+      const source = String(item.source ?? item.type ?? item.kind ?? "").toLowerCase();
+      return (
+        source.includes("saved") ||
+        source.includes("master") ||
+        Boolean(item.saved) ||
+        Boolean(item.isSaved) ||
+        Boolean(item.is_saved)
+      );
+    });
+
+    const names = [...savedItems, ...localSavedItems]
+      .map(readPlaylistManagerName)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+    return uniqueValues(names);
+  }, [playlistManagerStateQuery.data]);
   const listedCountries = useMemo(
     () =>
       uniqueValues(playlists.map((playlist) => getRowData(playlist).country)),
@@ -2530,81 +3153,51 @@ export default function AdsPage() {
                         <GrowthCell value={getFollowerGainSum(playlist, 7)} />
                       </div>
                       <div className="px-2">
-                        <select
+                        <AdsSelect
                           value={data.category}
-                          onChange={(e) =>
+                          placeholder="Category"
+                          options={categoryOptions.filter((option) => option !== "Category")}
+                          onChange={(value) =>
                             updateRowData(playlist, {
-                              category: e.target.value,
+                              category: value || "Category",
                             })
                           }
-                          className="h-8 w-[108px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                        >
-                          {categoryOptions.map((option) => (
-                            <option
-                              key={`${key}-category-${option}`}
-                              value={option}
-                            >
-                              {option}
-                            </option>
-                          ))}
-                        </select>
+                          widthClass="w-[108px]"
+                        />
                       </div>
                       <div className="px-2">
-                        <select
+                        <AdsSelect
                           value={data.genre}
-                          onChange={(e) =>
-                            updateRowData(playlist, { genre: e.target.value })
+                          placeholder="Genre"
+                          options={genreOptions.filter((option) => option !== "Genre")}
+                          onChange={(value) =>
+                            updateRowData(playlist, { genre: value || "Genre" })
                           }
-                          className="h-8 w-[108px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                        >
-                          {genreOptions.map((option) => (
-                            <option
-                              key={`${key}-genre-${option}`}
-                              value={option}
-                            >
-                              {option}
-                            </option>
-                          ))}
-                        </select>
+                          widthClass="w-[108px]"
+                        />
                       </div>
                       <div className="px-1">
-                        <select
+                        <AdsSelect
                           value={data.country}
-                          onChange={(e) =>
-                            updateRowData(playlist, { country: e.target.value })
+                          placeholder="Country"
+                          options={countryOptions}
+                          onChange={(value) =>
+                            updateRowData(playlist, { country: value })
                           }
-                          className="h-8 w-[80px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
+                          widthClass="w-[80px]"
                           title={data.country || "Country"}
-                        >
-                          <option value="">Country</option>
-                          {countryOptions.map((country, index) => (
-                            <option
-                              key={`country-${country}-${index}`}
-                              value={country}
-                            >
-                              {country}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       <div className="px-2">
-                        <select
+                        <AdsSelect
                           value={data.master}
-                          onChange={(e) =>
-                            updateRowData(playlist, { master: e.target.value })
+                          placeholder="Master"
+                          options={masterOptions}
+                          onChange={(value) =>
+                            updateRowData(playlist, { master: value })
                           }
-                          className="h-8 w-[120px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                        >
-                          <option value="">Master</option>
-                          {masterOptions.map((name, index) => (
-                            <option
-                              key={`master-${playlist.id}-${index}-${name}`}
-                              value={name}
-                            >
-                              {truncateTitle(name)}
-                            </option>
-                          ))}
-                        </select>
+                          widthClass="w-[120px]"
+                        />
                       </div>
                       <div className="px-2">{data.ads.length}</div>
                       <div className="px-2">{getTrackCount(playlist)}</div>
@@ -2678,6 +3271,29 @@ export default function AdsPage() {
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        .ads-green-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #22c55e #000000;
+        }
+
+        .ads-green-scrollbar::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+
+        .ads-green-scrollbar::-webkit-scrollbar-track {
+          background: #000000;
+          border-radius: 9999px;
+        }
+
+        .ads-green-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #22c55e 0%, #10b981 100%);
+          border: 2px solid #000000;
+          border-radius: 9999px;
+        }
+      `}</style>
 
       {optionModalType ? (
         <div

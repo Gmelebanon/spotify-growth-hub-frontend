@@ -93,6 +93,133 @@ function formatDelta(value) {
   return "0";
 }
 
+function toNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeDateKey(value) {
+  if (!value) return null;
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+
+  return parsedDate.toISOString().slice(0, 10);
+}
+
+function getTodayDateKey() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today.toISOString().slice(0, 10);
+}
+
+function getDateDaysAgo(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function getHistoryDate(historyRow) {
+  return normalizeDateKey(
+    historyRow?.date ||
+      historyRow?.created_at ||
+      historyRow?.createdAt ||
+      historyRow?.snapshot_date ||
+      historyRow?.snapshotDate
+  );
+}
+
+function getHistoryFollowers(historyRow) {
+  return toNumber(
+    historyRow?.followers ??
+      historyRow?.follower_count ??
+      historyRow?.followerCount ??
+      historyRow?.count ??
+      historyRow?.value,
+    null
+  );
+}
+
+function calculateFollowers7DaysFromHistory(artist) {
+  const history =
+    artist.followerHistory ||
+    artist.followersHistory ||
+    artist.followers_history ||
+    artist.follower_history ||
+    artist.history ||
+    artist.snapshots ||
+    artist.followerSnapshots ||
+    artist.follower_snapshots ||
+    [];
+
+  if (!Array.isArray(history) || history.length === 0) return null;
+
+  const currentFollowers = toNumber(artist.followers, null);
+  if (currentFollowers === null) return null;
+
+  const todayKey = getTodayDateKey();
+  const sevenDaysAgo = getDateDaysAgo(7);
+
+  const snapshots = history
+    .map((row) => {
+      const dateKey = getHistoryDate(row);
+      const followers = getHistoryFollowers(row);
+
+      if (!dateKey || followers === null) return null;
+
+      const dateValue = new Date(`${dateKey}T00:00:00`);
+      if (Number.isNaN(dateValue.getTime())) return null;
+
+      return { dateKey, dateValue, followers };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.dateValue.getTime() - b.dateValue.getTime());
+
+  if (snapshots.length === 0) return null;
+
+  const previousSnapshots = snapshots.filter((snapshot) => {
+    return snapshot.dateKey < todayKey;
+  });
+
+  if (previousSnapshots.length === 0) return null;
+
+  const sevenDayWindowSnapshots = previousSnapshots.filter((snapshot) => {
+    return snapshot.dateValue >= sevenDaysAgo;
+  });
+
+  const baselineSnapshot =
+    sevenDayWindowSnapshots[0] || previousSnapshots[previousSnapshots.length - 1];
+
+  return currentFollowers - baselineSnapshot.followers;
+}
+
+function getFollowers7DaysValue(artist) {
+  const calculatedFromHistory = calculateFollowers7DaysFromHistory(artist);
+
+  if (calculatedFromHistory !== null) {
+    return calculatedFromHistory;
+  }
+
+  return toNumber(
+    artist.followers7Days ??
+      artist.followers_7_days ??
+      artist.followers7days ??
+      artist.followers_7d ??
+      artist.growth7Days ??
+      artist.growth_7_days ??
+      artist.growth7d ??
+      artist.growth_7d ??
+      artist.sevenDays ??
+      artist.seven_days,
+    0
+  );
+}
+
 function normalizeArtist(artist) {
   const artistId = artist.id || artist.artistId;
 
@@ -101,7 +228,7 @@ function normalizeArtist(artist) {
     name: artist.name || "Spotify Artist",
     image: artist.image || artist.imageUrl || null,
     followers: artist.followers || 0,
-    followers7Days: artist.followers7Days || 0,
+    followers7Days: getFollowers7DaysValue(artist),
     popularity: artist.popularity || 0,
     genres: artist.genres || [],
     spotifyUrl:
@@ -334,7 +461,7 @@ function ReleaseCard({ release, onViewTracks }) {
   return (
     <article
       onClick={() => onViewTracks(release)}
-      className="group w-[190px] shrink-0 cursor-pointer overflow-hidden rounded-2xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_24px_rgba(34,197,94,0.08)]"
+      className="group w-full min-w-0 cursor-pointer overflow-hidden rounded-2xl border border-zinc-900 bg-black transition duration-300 hover:border-green-400/60 hover:shadow-[0_0_24px_rgba(34,197,94,0.08)]"
     >
       <div className="h-[118px] w-full overflow-hidden bg-zinc-950">
         {release.image ? (
@@ -350,7 +477,7 @@ function ReleaseCard({ release, onViewTracks }) {
         )}
       </div>
 
-      <div className="min-h-[116px] p-3">
+      <div className="min-h-[104px] p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <p className="text-[10px] font-semibold text-green-400">
             {formatDaysAgo(release.daysAgo)}
@@ -547,7 +674,7 @@ function AddArtistModal({ isOpen, currentArtistIds, onAddArtist, onClose }) {
       isManuallyAdded: true,
       streams: artist.streams || 0,
       growthPercent: artist.growthPercent || 0,
-      followers7Days: artist.followers7Days || 0,
+      followers7Days: getFollowers7DaysValue(artist),
     });
 
     await onAddArtist(addedArtist);
@@ -1188,18 +1315,33 @@ export default function MyArtistsPage() {
         try {
           const syncedFollowers = await syncFollowerSnapshots(nextBaseArtists);
           const followersByArtistId = new Map(
-            syncedFollowers.map((item) => [item.artistId, item.followers7Days])
+            syncedFollowers.map((item) => [
+              item.artistId || item.artist_id || item.id,
+              toNumber(
+                item.followers7Days ??
+                  item.followers_7_days ??
+                  item.followers7days ??
+                  item.growth7Days ??
+                  item.growth_7_days ??
+                  item.growth7d ??
+                  item.growth_7d,
+                0
+              ),
+            ])
           );
 
-          setBaseArtists((currentArtists) =>
-            currentArtists.map((artist) => ({
-              ...artist,
-              followers7Days:
-                followersByArtistId.get(artist.id) ||
-                artist.followers7Days ||
-                0,
-            }))
-          );
+          const applySyncedFollowerGrowth = (currentArtists) =>
+            currentArtists.map((artist) => {
+              if (!followersByArtistId.has(artist.id)) return artist;
+
+              return {
+                ...artist,
+                followers7Days: followersByArtistId.get(artist.id),
+              };
+            });
+
+          setBaseArtists(applySyncedFollowerGrowth);
+          setDatabaseArtists(applySyncedFollowerGrowth);
         } catch (syncError) {
           console.warn(syncError);
         }
@@ -1257,7 +1399,9 @@ export default function MyArtistsPage() {
         databaseArtist.growthPercent || artist.growthPercent || 0,
       followers: databaseArtist.followers || artist.followers || 0,
       followers7Days:
-        databaseArtist.followers7Days || artist.followers7Days || 0,
+        Number(databaseArtist.followers7Days || 0) !== 0
+          ? databaseArtist.followers7Days
+          : artist.followers7Days || 0,
       popularity: databaseArtist.popularity || artist.popularity || 0,
       genres:
         databaseArtist.genres && databaseArtist.genres.length > 0
@@ -1530,7 +1674,7 @@ export default function MyArtistsPage() {
         </section>
       ) : (
         <>
-          <section className="mb-6 rounded-3xl border border-zinc-900 bg-zinc-950/60 p-6">
+          <section className="mb-6 overflow-hidden rounded-3xl border border-zinc-900 bg-zinc-950/60 p-6">
             <button
               type="button"
               onClick={() => setIsNewReleasesOpen((current) => !current)}
@@ -1560,16 +1704,16 @@ export default function MyArtistsPage() {
 
             {isNewReleasesOpen ? (
               isLoading ? (
-                <div className="flex gap-4 overflow-x-auto pb-3 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-                  {Array.from({ length: 5 }).map((_, index) => (
+                <div className="new-releases-carousel pb-3">
+                  {Array.from({ length: 8 }).map((_, index) => (
                     <div
                       key={index}
-                      className="h-[234px] w-[190px] shrink-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
+                      className="h-[228px] w-full min-w-0 animate-pulse rounded-2xl border border-zinc-900 bg-black"
                     />
                   ))}
                 </div>
               ) : newReleases.length > 0 ? (
-                <div className="flex cursor-grab gap-4 overflow-x-auto pb-3 pr-2 active:cursor-grabbing [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
+                <div className="new-releases-carousel cursor-grab pb-3 pr-2 active:cursor-grabbing">
                   {newReleases.map((release) => (
                     <ReleaseCard
                       key={`${release.id}-${release.artistId}-${release.releaseDate}`}
@@ -1603,6 +1747,64 @@ export default function MyArtistsPage() {
           />
         </>
       )}
+
+      <style jsx global>{`
+        .new-releases-carousel {
+          display: grid;
+          grid-auto-flow: column;
+          grid-auto-columns: calc((100% - 5rem) / 6);
+          gap: 1rem;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: thin;
+          scrollbar-color: #10b981 #000000;
+        }
+
+        .new-releases-carousel::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .new-releases-carousel::-webkit-scrollbar-track {
+          background: #000000;
+          border-radius: 9999px;
+        }
+
+        .new-releases-carousel::-webkit-scrollbar-thumb {
+          background: linear-gradient(90deg, #10b981 0%, #22c55e 100%);
+          border-radius: 9999px;
+        }
+
+        @media (max-width: 1535px) {
+          .new-releases-carousel {
+            grid-auto-columns: calc((100% - 4rem) / 5);
+          }
+        }
+
+        @media (max-width: 1279px) {
+          .new-releases-carousel {
+            grid-auto-columns: calc((100% - 3rem) / 4);
+          }
+        }
+
+        @media (max-width: 1023px) {
+          .new-releases-carousel {
+            grid-auto-columns: calc((100% - 2rem) / 3);
+          }
+        }
+
+        @media (max-width: 767px) {
+          .new-releases-carousel {
+            grid-auto-columns: calc((100% - 1rem) / 2);
+          }
+        }
+
+        @media (max-width: 520px) {
+          .new-releases-carousel {
+            grid-auto-columns: 82%;
+          }
+        }
+      `}</style>
 
       <AddArtistModal
         isOpen={isAddArtistOpen}
