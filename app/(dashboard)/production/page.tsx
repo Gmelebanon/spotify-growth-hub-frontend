@@ -255,7 +255,6 @@ function getRowTextColorClass(color: string) {
   }
 }
 
-
 function getRowTextColorStyle(color: string) {
   switch (color) {
     case "blue":
@@ -299,6 +298,50 @@ function rowToRestorePayload(row: SmartSegmentRow): RowPatch {
   };
 }
 
+function rowToCreatePayload(row: SmartSegmentRow, tableName: string): RowPatch {
+  return {
+    table_name: tableName,
+    song: normalizeTextValue(row.song, true),
+    key_signature: normalizeTextValue(row.key_signature),
+    chords: normalizeTextValue(row.chords),
+    tempo: normalizeTextValue(row.tempo),
+    genre: normalizeTextValue(row.genre),
+    row_color: row.row_color || "",
+    afropop: row.afropop,
+    soft_pop: row.soft_pop,
+    hyper_pop: row.hyper_pop,
+    garage: row.garage,
+    chill_house: row.chill_house,
+    techno: row.techno,
+    reggae: row.reggae,
+    afro_house: row.afro_house,
+  };
+}
+
+function rowsToClipboardText(rows: SmartSegmentRow[]) {
+  const headers = [
+    "Song",
+    "Key",
+    "Chords",
+    "Tempo",
+    "Genre",
+    ...SEGMENT_COLUMNS.map((segment) => segment.label),
+  ];
+
+  const values = rows.map((row) => [
+    row.song,
+    row.key_signature,
+    row.chords,
+    row.tempo,
+    row.genre,
+    ...SEGMENT_COLUMNS.map((segment) => (row[segment.key] ? "TRUE" : "FALSE")),
+  ]);
+
+  return [headers, ...values]
+    .map((line) => line.map((value) => String(value || "")).join("\t"))
+    .join("\n");
+}
+
 export default function ProductionPage() {
   const [tables, setTables] = useState<SmartSegmentTable[]>([]);
   const [activeViewName, setActiveViewName] = useState<ViewName>("Stems");
@@ -337,6 +380,8 @@ export default function ProductionPage() {
   const [sheetActionError, setSheetActionError] = useState<string | null>(null);
   const [isDeletingSheet, setIsDeletingSheet] = useState(false);
   const [isRenamingSheet, setIsRenamingSheet] = useState(false);
+  const [copiedRows, setCopiedRows] = useState<SmartSegmentRow[]>([]);
+  const [isPastingRows, setIsPastingRows] = useState(false);
 
   const timersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const patchesRef = useRef<Record<number, RowPatch>>({});
@@ -611,6 +656,20 @@ export default function ProductionPage() {
       focusedCellStartRef.current = null;
     },
     [pushUndo, scheduleSave, updateRowLocally],
+  );
+
+  const handleExistingCellKeyDown = useCallback(
+    (
+      event:
+        | React.KeyboardEvent<HTMLInputElement>
+        | React.KeyboardEvent<HTMLSelectElement>,
+    ) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.currentTarget.blur();
+      }
+    },
+    [],
   );
 
   const handleSegmentChange = useCallback(
@@ -1181,6 +1240,66 @@ export default function ProductionPage() {
     [activeRows, pushUndo, selectedRowIds, tables],
   );
 
+  const handleCopySelectedRows = useCallback(async () => {
+    const rowsToCopy = activeSelectedRows.map((row) => ({ ...row }));
+    if (rowsToCopy.length === 0) return;
+
+    setCopiedRows(rowsToCopy);
+
+    try {
+      await navigator.clipboard?.writeText(rowsToClipboardText(rowsToCopy));
+    } catch {
+      // Browser clipboard permission can fail. The in-app copy still works.
+    }
+  }, [activeSelectedRows]);
+
+  const handlePasteRows = useCallback(async () => {
+    if (isAllView || copiedRows.length === 0 || isPastingRows) return;
+
+    setIsPastingRows(true);
+    setError(null);
+
+    try {
+      const createdRows = await Promise.all(
+        copiedRows.map(async (row) => {
+          const response = await fetch(
+            `${API_BASE_URL}/api/production/smart-segments/rows`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(rowToCreatePayload(row, activeViewName)),
+            },
+          );
+
+          if (!response.ok) {
+            throw new Error("Failed to paste copied rows.");
+          }
+
+          return normalizeRow((await response.json()) as SmartSegmentRow);
+        }),
+      );
+
+      setTables((currentTables) =>
+        currentTables.map((table) =>
+          table.name === activeViewName
+            ? { ...table, rows: [...table.rows, ...createdRows] }
+            : table,
+        ),
+      );
+
+      createdRows.forEach((row) => {
+        pushUndo({ type: "createRow", label: "Undo paste", row });
+      });
+      setSelectedRowIds(new Set(createdRows.map((row) => row.id)));
+      selectedRowIdsRef.current = new Set(createdRows.map((row) => row.id));
+      setLastSelectedRowId(createdRows[createdRows.length - 1]?.id || null);
+    } catch {
+      setError("Failed to paste copied rows.");
+    } finally {
+      setIsPastingRows(false);
+    }
+  }, [activeViewName, copiedRows, isAllView, isPastingRows, pushUndo]);
+
   const handleUndo = useCallback(async () => {
     if (undoStack.length === 0 || isUndoing) return;
 
@@ -1307,10 +1426,31 @@ export default function ProductionPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const activeElement = document.activeElement;
+      const isTyping =
+        activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement instanceof HTMLSelectElement ||
+        activeElement?.getAttribute("contenteditable") === "true";
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         if (undoStack.length > 0) {
           event.preventDefault();
           handleUndo();
+        }
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        if (!isTyping && activeSelectedCount > 0) {
+          event.preventDefault();
+          handleCopySelectedRows();
+        }
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+        if (!isTyping && copiedRows.length > 0 && !isAllView) {
+          event.preventDefault();
+          handlePasteRows();
         }
       }
 
@@ -1325,7 +1465,15 @@ export default function ProductionPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleUndo, undoStack.length]);
+  }, [
+    activeSelectedCount,
+    copiedRows.length,
+    handleCopySelectedRows,
+    handlePasteRows,
+    handleUndo,
+    isAllView,
+    undoStack.length,
+  ]);
 
   const getStatusLabel = (rowId: number) => {
     const status = saveStatusByRow[rowId];
@@ -1393,6 +1541,28 @@ export default function ProductionPage() {
               Create
             </button>
 
+            {copiedRows.length > 0 && !isAllView ? (
+              <button
+                onClick={handlePasteRows}
+                disabled={isPastingRows}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-sm font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
+                title={`Paste copied rows (${copiedRows.length}), or press Ctrl+V`}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M8 4h8v4H8z" />
+                  <path d="M16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2" />
+                </svg>
+              </button>
+            ) : null}
+
             {undoStack.length > 0 ? (
               <button
                 onClick={handleUndo}
@@ -1406,6 +1576,25 @@ export default function ProductionPage() {
 
             {activeSelectedCount > 0 ? (
               <>
+                <button
+                  onClick={handleCopySelectedRows}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-sm font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400"
+                  title={`Copy selected rows (${activeSelectedCount}), or press Ctrl+C`}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                </button>
+
                 <button
                   onClick={handleDeleteSelectedRows}
                   disabled={isDeletingRows}
@@ -1764,6 +1953,7 @@ export default function ProductionPage() {
                             onBlur={(event) =>
                               handleTextBlur(row, "song", event.target.value)
                             }
+                            onKeyDown={handleExistingCellKeyDown}
                             className={`h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm ${rowTextClass} outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black`}
                             style={rowTextStyle}
                           />
@@ -1789,6 +1979,7 @@ export default function ProductionPage() {
                                 event.target.value,
                               )
                             }
+                            onKeyDown={handleExistingCellKeyDown}
                             className={`h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm ${rowTextClass} outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black`}
                             style={rowTextStyle}
                           />
@@ -1808,6 +1999,7 @@ export default function ProductionPage() {
                             onBlur={(event) =>
                               handleTextBlur(row, "chords", event.target.value)
                             }
+                            onKeyDown={handleExistingCellKeyDown}
                             className={`h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm ${rowTextClass} outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black`}
                             style={rowTextStyle}
                           />
@@ -1823,6 +2015,7 @@ export default function ProductionPage() {
                             onBlur={(event) =>
                               handleTextBlur(row, "tempo", event.target.value)
                             }
+                            onKeyDown={handleExistingCellKeyDown}
                             className={`h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm ${rowTextClass} outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black`}
                             style={rowTextStyle}
                           />
@@ -1838,6 +2031,7 @@ export default function ProductionPage() {
                             onBlur={(event) =>
                               handleTextBlur(row, "genre", event.target.value)
                             }
+                            onKeyDown={handleExistingCellKeyDown}
                             className={`h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm ${rowTextClass} outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black`}
                             style={rowTextStyle}
                           >
