@@ -1,500 +1,993 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import {
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { getAccounts } from "@/lib/api/accounts";
-import { getPlaylists, syncAllPlaylistsForAccount } from "@/lib/api/playlists";
-import { useActiveAccountStore } from "@/lib/store/activeAccount";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "https://spotify-growth-hub-backend.onrender.com";
 
-type SortField =
-  | "playlist"
-  | "genre"
-  | "account"
-  | "followers"
-  | "tracks"
-  | "growth24h"
-  | "growth7d"
-  | "growth30d";
+const TABLE_NAMES = ["Stems", "Remakes", "Vocals"] as const;
 
-type SortOrder = "asc" | "desc";
-
-type AccountRow = {
-  id: number;
-  display_name?: string;
+const TABLE_NAME_MAP: Record<string, TableName> = {
+  "TCC - Spotify Shared - Prod Stems": "Stems",
+  "TCC - Spotify Shared - Prod Remakes": "Remakes",
+  "TCC - Spotify Shared - Prod Vocals": "Vocals",
+  "Production Stems": "Stems",
+  "Production Remakes": "Remakes",
+  "Production Vocals": "Vocals",
+  "Stems": "Stems",
+  "Remakes": "Remakes",
+  "Vocals": "Vocals",
 };
 
-type PlaylistRow = {
+const SEGMENT_COLUMNS = [
+  { key: "afropop", label: "Afropop" },
+  { key: "soft_pop", label: "Soft Pop" },
+  { key: "hyper_pop", label: "Hyper Pop" },
+  { key: "garage", label: "Garage" },
+  { key: "chill_house", label: "Chill House" },
+  { key: "techno", label: "Techno" },
+  { key: "reggae", label: "Reggae" },
+  { key: "afro_house", label: "Afro House" },
+] as const;
+
+const TEXT_COLUMNS = [
+  { key: "song", label: "Song", width: "w-[220px]" },
+  { key: "key_signature", label: "Key", width: "w-[100px]" },
+  { key: "chords", label: "Chords", width: "w-[150px]" },
+  { key: "tempo", label: "Tempo", width: "w-[80px]" },
+  { key: "genre", label: "Genre", width: "w-[130px]" },
+] as const;
+
+const GENRE_OPTIONS = [
+  "-",
+  "Afro House",
+  "Afropop",
+  "Chill House",
+  "EDM",
+  "Garage",
+  "House",
+  "Hyper Pop",
+  "Hyper Techno",
+  "Pop",
+  "Reggae",
+  "Soft Pop",
+  "Tech House",
+  "Techno",
+] as const;
+
+type TableName = (typeof TABLE_NAMES)[number];
+type SegmentKey = (typeof SEGMENT_COLUMNS)[number]["key"];
+type TextKey = (typeof TEXT_COLUMNS)[number]["key"];
+type SortKey = TextKey | SegmentKey;
+type SortDirection = "asc" | "desc";
+
+type SmartSegmentRow = {
   id: number;
-  account_id?: number;
+  table_name: string;
+  sort_order: number;
+  song: string;
+  key_signature: string;
+  chords: string;
+  tempo: string;
+  genre: string;
+  afropop: boolean;
+  soft_pop: boolean;
+  hyper_pop: boolean;
+  garage: boolean;
+  chill_house: boolean;
+  techno: boolean;
+  reggae: boolean;
+  afro_house: boolean;
+};
+
+type SmartSegmentTable = {
   name: string;
-  followers: number;
-  tracks_count?: number;
-  growth?: number;
-  growth_24h?: number;
-  growth_7d?: number;
-  growth_30d?: number;
-  genre?: string | null;
+  rows: SmartSegmentRow[];
 };
 
-const ALL_ACCOUNTS_ID = -1;
-const GENRES_STORAGE_KEY = "playlist-page-genres-v2";
-const PLAYLIST_GENRES_STORAGE_KEY = "playlist-page-playlist-genres-v2";
+type RowPatch = Partial<
+  Pick<
+    SmartSegmentRow,
+    | "song"
+    | "key_signature"
+    | "chords"
+    | "tempo"
+    | "genre"
+    | "afropop"
+    | "soft_pop"
+    | "hyper_pop"
+    | "garage"
+    | "chill_house"
+    | "techno"
+    | "reggae"
+    | "afro_house"
+  >
+>;
 
-function playlistGenreKey(playlist: PlaylistRow) {
-  return `${playlist.account_id ?? "unknown"}-${playlist.id}`;
+type DraftRow = RowPatch;
+
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+const EMPTY_DRAFT_ROW: Required<DraftRow> = {
+  song: "",
+  key_signature: "",
+  chords: "",
+  tempo: "",
+  genre: "",
+  afropop: false,
+  soft_pop: false,
+  hyper_pop: false,
+  garage: false,
+  chill_house: false,
+  techno: false,
+  reggae: false,
+  afro_house: false,
+};
+
+function normalizeTableName(name: string): TableName {
+  return TABLE_NAME_MAP[name] || "Stems";
 }
 
-function getGrowth24h(playlist: PlaylistRow) {
-  return playlist.growth_24h ?? playlist.growth ?? 0;
+function normalizeTextValue(value: string, allowEmpty = false) {
+  const cleaned = value.trim();
+  if (cleaned.length > 0) return cleaned;
+  return allowEmpty ? "" : "-";
 }
 
-function getGrowth7d(playlist: PlaylistRow) {
-  return playlist.growth_7d ?? 0;
+function getComparableValue(row: SmartSegmentRow, key: SortKey) {
+  const value = row[key];
+
+  if (typeof value === "boolean") {
+    return value ? "1" : "0";
+  }
+
+  return String(value || "").toLowerCase();
 }
 
-function getGrowth30d(playlist: PlaylistRow) {
-  return playlist.growth_30d ?? 0;
-}
+function sortRows(rows: SmartSegmentRow[], key: SortKey | null, direction: SortDirection) {
+  if (!key) {
+    return [...rows].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  }
 
-function formatGrowth(value: number) {
-  if (value > 0) return `+${value}`;
-  return `${value}`;
-}
+  return [...rows].sort((a, b) => {
+    const first = getComparableValue(a, key);
+    const second = getComparableValue(b, key);
 
-export default function PlaylistsPage() {
-  const queryClient = useQueryClient();
+    const result = first.localeCompare(second, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
 
-  const activeAccountId = useActiveAccountStore((s) => s.activeAccountId);
-  const setActiveAccountId = useActiveAccountStore((s) => s.setActiveAccountId);
-
-  const [search, setSearch] = useState("");
-  const [sortField, setSortField] = useState<SortField>("followers");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
-  const [genres, setGenres] = useState<string[]>(["Pop", "House", "Techno"]);
-  const [playlistGenres, setPlaylistGenres] = useState<Record<string, string>>({});
-  const [genreFilter, setGenreFilter] = useState("all");
-  const [accountFilter, setAccountFilter] = useState<number>(ALL_ACCOUNTS_ID);
-
-  const accountsQuery = useQuery<AccountRow[]>({
-    queryKey: ["accounts"],
-    queryFn: getAccounts,
+    return direction === "asc" ? result : -result;
   });
+}
 
-  const accounts = accountsQuery.data ?? [];
+function createEmptyDraftRow(): Required<DraftRow> {
+  return { ...EMPTY_DRAFT_ROW };
+}
 
-  useEffect(() => {
-    if (!activeAccountId && accounts.length > 0) {
-      setActiveAccountId(accounts[0].id);
-    }
-  }, [activeAccountId, accounts, setActiveAccountId]);
+export default function ProductionPage() {
+  const [tables, setTables] = useState<SmartSegmentTable[]>([]);
+  const [activeTableName, setActiveTableName] = useState<TableName>("Stems");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<number>>(new Set());
+  const [lastSelectedRowId, setLastSelectedRowId] = useState<number | null>(null);
+  const [saveStatusByRow, setSaveStatusByRow] = useState<Record<number, SaveStatus>>({});
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [draftRows, setDraftRows] = useState<Record<TableName, Required<DraftRow>>>({
+    Stems: createEmptyDraftRow(),
+    Remakes: createEmptyDraftRow(),
+    Vocals: createEmptyDraftRow(),
+  });
+  const [isCreatingRow, setIsCreatingRow] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isDeletingRows, setIsDeletingRows] = useState(false);
 
-  useEffect(() => {
+  const timersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const patchesRef = useRef<Record<number, RowPatch>>({});
+
+  const loadTables = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
     try {
-      const storedGenres = window.localStorage.getItem(GENRES_STORAGE_KEY);
-      const storedPlaylistGenres = window.localStorage.getItem(PLAYLIST_GENRES_STORAGE_KEY);
+      const response = await fetch(`${API_BASE_URL}/api/production/smart-segments`, {
+        cache: "no-store",
+      });
 
-      if (storedGenres) setGenres(JSON.parse(storedGenres));
-      if (storedPlaylistGenres) setPlaylistGenres(JSON.parse(storedPlaylistGenres));
-    } catch {
-      setGenres(["Pop", "House", "Techno"]);
-      setPlaylistGenres({});
+      if (!response.ok) {
+        throw new Error("Failed to load production tables.");
+      }
+
+      const data = (await response.json()) as SmartSegmentTable[];
+      const normalizedData = data.map((table) => ({
+        ...table,
+        name: normalizeTableName(table.name),
+        rows: table.rows.map((row) => ({
+          ...row,
+          table_name: normalizeTableName(row.table_name),
+        })),
+      }));
+
+      const tablesByName = new Map<TableName, SmartSegmentTable>();
+      normalizedData.forEach((table) => {
+        const tableName = normalizeTableName(table.name);
+        tablesByName.set(tableName, {
+          name: tableName,
+          rows: [...(tablesByName.get(tableName)?.rows || []), ...table.rows],
+        });
+      });
+
+      setTables(
+        TABLE_NAMES.map((tableName) => ({
+          name: tableName,
+          rows: tablesByName.get(tableName)?.rows || [],
+        })),
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Failed to load production tables.",
+      );
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(GENRES_STORAGE_KEY, JSON.stringify(genres));
-  }, [genres]);
+    loadTables();
 
-  useEffect(() => {
-    window.localStorage.setItem(
-      PLAYLIST_GENRES_STORAGE_KEY,
-      JSON.stringify(playlistGenres),
-    );
-  }, [playlistGenres]);
+    return () => {
+      Object.values(timersRef.current).forEach((timer) => clearTimeout(timer));
+    };
+  }, [loadTables]);
 
-  const singleAccountPlaylistsQuery = useQuery({
-    queryKey: ["playlists", activeAccountId],
-    queryFn: () => getPlaylists(activeAccountId as number),
-    enabled: !!activeAccountId && activeAccountId !== ALL_ACCOUNTS_ID,
-  });
-
-  const allAccountPlaylistQueries = useQueries({
-    queries: accounts.map((account) => ({
-      queryKey: ["playlists", account.id],
-      queryFn: () => getPlaylists(account.id),
-      enabled: activeAccountId === ALL_ACCOUNTS_ID,
-    })),
-  });
-
-  const playlistsData = useMemo(() => {
-    if (activeAccountId === ALL_ACCOUNTS_ID) {
-      return allAccountPlaylistQueries.flatMap((query, index) => {
-        const account = accounts[index];
-
-        return ((query.data ?? []) as PlaylistRow[]).map((playlist) => ({
-          ...playlist,
-          account_id: playlist.account_id ?? account?.id,
-        }));
-      });
-    }
-
-    return ((singleAccountPlaylistsQuery.data ?? []) as PlaylistRow[]).map(
-      (playlist) => ({
-        ...playlist,
-        account_id: playlist.account_id ?? activeAccountId ?? undefined,
-      }),
-    );
-  }, [
-    activeAccountId,
-    accounts,
-    allAccountPlaylistQueries,
-    singleAccountPlaylistsQuery.data,
-  ]);
-
-  const isLoading =
-    activeAccountId === ALL_ACCOUNTS_ID
-      ? allAccountPlaylistQueries.some((query) => query.isLoading)
-      : singleAccountPlaylistsQuery.isLoading;
-
-  const isError =
-    activeAccountId === ALL_ACCOUNTS_ID
-      ? allAccountPlaylistQueries.some((query) => query.isError)
-      : singleAccountPlaylistsQuery.isError;
-
-  const syncAllMutation = useMutation({
-    mutationFn: async () => {
-      if (activeAccountId === ALL_ACCOUNTS_ID) {
-        await Promise.all(
-          accounts.map((account) => syncAllPlaylistsForAccount(account.id, 500, 0)),
-        );
-        return;
+  const activeTable = useMemo(() => {
+    return (
+      tables.find((table) => table.name === activeTableName) || {
+        name: activeTableName,
+        rows: [],
       }
+    );
+  }, [activeTableName, tables]);
 
-      await syncAllPlaylistsForAccount(activeAccountId as number, 500, 0);
-    },
-    onSuccess: async () => {
-      if (activeAccountId === ALL_ACCOUNTS_ID) {
-        await Promise.all(
-          accounts.map((account) =>
-            queryClient.invalidateQueries({
-              queryKey: ["playlists", account.id],
-            }),
-          ),
+  const visibleRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    const filteredRows = !query
+      ? activeTable.rows
+      : activeTable.rows.filter((row) =>
+          [row.song, row.key_signature, row.chords, row.tempo, row.genre]
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
         );
-        return;
-      }
 
-      await queryClient.invalidateQueries({
-        queryKey: ["playlists", activeAccountId],
-      });
-    },
-  });
+    return sortRows(filteredRows, sortKey, sortDirection);
+  }, [activeTable.rows, search, sortDirection, sortKey]);
 
-  const getAccountName = (accountId?: number) => {
-    if (!accountId) return "—";
-    return accounts.find((account) => account.id === accountId)?.display_name || "—";
-  };
+  const selectedVisibleCount = useMemo(() => {
+    return visibleRows.filter((row) => selectedRowIds.has(row.id)).length;
+  }, [selectedRowIds, visibleRows]);
 
-  const filtered = useMemo(() => {
-    let data = playlistsData;
+  const activeSelectedCount = useMemo(() => {
+    const activeRowIds = new Set(activeTable.rows.map((row) => row.id));
+    return Array.from(selectedRowIds).filter((rowId) => activeRowIds.has(rowId)).length;
+  }, [activeTable.rows, selectedRowIds]);
 
-    if (search) {
-      data = data.filter((p) =>
-        p.name.toLowerCase().includes(search.toLowerCase()),
+  const updateRowLocally = useCallback((rowId: number, patch: RowPatch) => {
+    setTables((currentTables) =>
+      currentTables.map((table) => ({
+        ...table,
+        rows: table.rows.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                ...patch,
+              }
+            : row,
+        ),
+      })),
+    );
+  }, []);
+
+  const saveRow = useCallback(async (rowId: number) => {
+    const patch = patchesRef.current[rowId];
+    if (!patch) return;
+
+    delete patchesRef.current[rowId];
+
+    setSaveStatusByRow((current) => ({
+      ...current,
+      [rowId]: "saving",
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/production/smart-segments/rows/${rowId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(patch),
+        },
       );
-    }
 
-    if (genreFilter !== "all") {
-      data = data.filter((p) => playlistGenres[playlistGenreKey(p)] === genreFilter);
-    }
-
-    if (accountFilter !== ALL_ACCOUNTS_ID) {
-      data = data.filter((p) => p.account_id === accountFilter);
-    }
-
-    return [...data].sort((a, b) => {
-      const dir = sortOrder === "asc" ? 1 : -1;
-
-      if (sortField === "playlist") {
-        return a.name.localeCompare(b.name) * dir;
+      if (!response.ok) {
+        throw new Error("Autosave failed.");
       }
 
-      if (sortField === "genre") {
-        const genreA = playlistGenres[playlistGenreKey(a)] || "";
-        const genreB = playlistGenres[playlistGenreKey(b)] || "";
-        return genreA.localeCompare(genreB) * dir;
+      const savedRow = (await response.json()) as SmartSegmentRow;
+      setTables((currentTables) =>
+        currentTables.map((table) => ({
+          ...table,
+          rows: table.rows.map((row) =>
+            row.id === rowId
+              ? {
+                  ...savedRow,
+                  table_name: normalizeTableName(savedRow.table_name),
+                }
+              : row,
+          ),
+        })),
+      );
+
+      setSaveStatusByRow((current) => ({
+        ...current,
+        [rowId]: "saved",
+      }));
+    } catch {
+      setSaveStatusByRow((current) => ({
+        ...current,
+        [rowId]: "error",
+      }));
+    }
+  }, [updateRowLocally]);
+
+  const scheduleSave = useCallback(
+    (rowId: number, patch: RowPatch) => {
+      patchesRef.current[rowId] = {
+        ...patchesRef.current[rowId],
+        ...patch,
+      };
+
+      setSaveStatusByRow((current) => ({
+        ...current,
+        [rowId]: "idle",
+      }));
+
+      if (timersRef.current[rowId]) {
+        clearTimeout(timersRef.current[rowId]);
       }
 
-      if (sortField === "account") {
-        return getAccountName(a.account_id).localeCompare(getAccountName(b.account_id)) * dir;
-      }
+      timersRef.current[rowId] = setTimeout(() => {
+        saveRow(rowId);
+      }, 650);
+    },
+    [saveRow],
+  );
 
-      if (sortField === "followers") return (a.followers - b.followers) * dir;
-      if (sortField === "tracks") return ((a.tracks_count ?? 0) - (b.tracks_count ?? 0)) * dir;
-      if (sortField === "growth24h") return (getGrowth24h(a) - getGrowth24h(b)) * dir;
-      if (sortField === "growth7d") return (getGrowth7d(a) - getGrowth7d(b)) * dir;
-      if (sortField === "growth30d") return (getGrowth30d(a) - getGrowth30d(b)) * dir;
+  const handleTextChange = useCallback(
+    (row: SmartSegmentRow, field: TextKey, value: string) => {
+      const patch = { [field]: value } as RowPatch;
+      updateRowLocally(row.id, patch);
+      scheduleSave(row.id, patch);
+    },
+    [scheduleSave, updateRowLocally],
+  );
 
-      return 0;
-    });
-  }, [
-    playlistsData,
-    search,
-    sortField,
-    sortOrder,
-    playlistGenres,
-    genreFilter,
-    accountFilter,
-    accounts,
-  ]);
+  const handleTextBlur = useCallback(
+    (row: SmartSegmentRow, field: TextKey, value: string) => {
+      const finalValue = normalizeTextValue(value, field === "song");
+      const patch = { [field]: finalValue } as RowPatch;
+      updateRowLocally(row.id, patch);
+      scheduleSave(row.id, patch);
+    },
+    [scheduleSave, updateRowLocally],
+  );
 
-  const toggleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+  const handleSegmentChange = useCallback(
+    (row: SmartSegmentRow, field: SegmentKey, value: boolean) => {
+      const patch = { [field]: value } as RowPatch;
+      updateRowLocally(row.id, patch);
+      scheduleSave(row.id, patch);
+    },
+    [scheduleSave, updateRowLocally],
+  );
+
+  const handleDraftTextChange = useCallback(
+    (field: TextKey, value: string) => {
+      setCreateError(null);
+      setDraftRows((current) => ({
+        ...current,
+        [activeTableName]: {
+          ...current[activeTableName],
+          [field]: value,
+        },
+      }));
+    },
+    [activeTableName],
+  );
+
+  const handleDraftSegmentChange = useCallback(
+    (field: SegmentKey, value: boolean) => {
+      setCreateError(null);
+      setDraftRows((current) => ({
+        ...current,
+        [activeTableName]: {
+          ...current[activeTableName],
+          [field]: value,
+        },
+      }));
+    },
+    [activeTableName],
+  );
+
+  const handleCreateRow = useCallback(async () => {
+    const draft = draftRows[activeTableName];
+    const hasAnyValue =
+      Boolean(draft.song.trim()) ||
+      Boolean(draft.key_signature.trim()) ||
+      Boolean(draft.chords.trim()) ||
+      Boolean(draft.tempo.trim()) ||
+      Boolean(draft.genre.trim()) ||
+      SEGMENT_COLUMNS.some((segment) => Boolean(draft[segment.key]));
+
+    if (!hasAnyValue) {
+      setCreateError("Fill at least one cell before saving.");
       return;
     }
 
-    setSortField(field);
-    setSortOrder("asc");
-  };
+    setIsCreatingRow(true);
+    setCreateError(null);
 
-  const arrowFor = (field: SortField) => {
-    if (sortField !== field) return "";
-    return sortOrder === "asc" ? "↑" : "↓";
-  };
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/production/smart-segments/rows`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          table_name: activeTableName,
+          song: normalizeTextValue(draft.song, true),
+          key_signature: normalizeTextValue(draft.key_signature),
+          chords: normalizeTextValue(draft.chords),
+          tempo: normalizeTextValue(draft.tempo),
+          genre: normalizeTextValue(draft.genre),
+          afropop: draft.afropop,
+          soft_pop: draft.soft_pop,
+          hyper_pop: draft.hyper_pop,
+          garage: draft.garage,
+          chill_house: draft.chill_house,
+          techno: draft.techno,
+          reggae: draft.reggae,
+          afro_house: draft.afro_house,
+        }),
+      });
 
-  const headerClass = (field: SortField) =>
-  `cursor-pointer font-semibold ${
-    sortField === field ? "text-green-400" : "text-zinc-400"
-  }`;
+      if (!response.ok) {
+        throw new Error("Failed to save the new row.");
+      }
 
-  const handleAddGenre = (playlist: PlaylistRow) => {
-    const name = window.prompt("Enter new genre name");
-    if (!name) return;
+      const createdRow = (await response.json()) as SmartSegmentRow;
 
-    const cleaned = name.trim();
-    if (!cleaned) return;
+      setTables((currentTables) =>
+        currentTables.map((table) =>
+          table.name === activeTableName
+            ? {
+                ...table,
+                rows: [
+                  ...table.rows,
+                  {
+                    ...createdRow,
+                    table_name: normalizeTableName(createdRow.table_name),
+                  },
+                ],
+              }
+            : table,
+        ),
+      );
 
-    const exists = genres.some(
-      (genre) => genre.toLowerCase() === cleaned.toLowerCase(),
-    );
-
-    if (!exists) {
-      setGenres([...genres, cleaned]);
+      setDraftRows((current) => ({
+        ...current,
+        [activeTableName]: createEmptyDraftRow(),
+      }));
+    } catch (requestError) {
+      setCreateError(
+        requestError instanceof Error ? requestError.message : "Failed to save the new row.",
+      );
+    } finally {
+      setIsCreatingRow(false);
     }
+  }, [activeTableName, draftRows]);
 
-    setPlaylistGenres({
-      ...playlistGenres,
-      [playlistGenreKey(playlist)]: cleaned,
+  const handleSort = useCallback((key: SortKey) => {
+    setSortKey((currentKey) => {
+      if (currentKey === key) {
+        setSortDirection((currentDirection) =>
+          currentDirection === "asc" ? "desc" : "asc",
+        );
+        return currentKey;
+      }
+
+      setSortDirection("asc");
+      return key;
     });
-  };
+  }, []);
 
-  const handleGenreChange = async (p: PlaylistRow, value: string) => {
-  const API_BASE_URL =
-    process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
+  const handleSelectRow = useCallback(
+    (rowId: number, checked: boolean, shiftKey: boolean) => {
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
 
-  let finalGenre = value;
+        if (shiftKey && lastSelectedRowId !== null) {
+          const startIndex = visibleRows.findIndex((row) => row.id === lastSelectedRowId);
+          const endIndex = visibleRows.findIndex((row) => row.id === rowId);
 
-  if (value === "__add__") {
-    const name = window.prompt("Enter genre");
-    if (!name) return;
+          if (startIndex !== -1 && endIndex !== -1) {
+            const [from, to] =
+              startIndex < endIndex ? [startIndex, endIndex] : [endIndex, startIndex];
 
-    finalGenre = name.trim();
-    if (!finalGenre) return;
+            visibleRows.slice(from, to + 1).forEach((row) => {
+              if (checked) {
+                next.add(row.id);
+              } else {
+                next.delete(row.id);
+              }
+            });
+          } else if (checked) {
+            next.add(rowId);
+          } else {
+            next.delete(rowId);
+          }
+        } else if (checked) {
+          next.add(rowId);
+        } else {
+          next.delete(rowId);
+        }
 
-    const exists = genres.some(
-      (genre) => genre.toLowerCase() === finalGenre.toLowerCase(),
+        return next;
+      });
+
+      setLastSelectedRowId(rowId);
+    },
+    [lastSelectedRowId, visibleRows],
+  );
+
+  const handleSelectAllVisible = useCallback(
+    (checked: boolean) => {
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        visibleRows.forEach((row) => {
+          if (checked) {
+            next.add(row.id);
+          } else {
+            next.delete(row.id);
+          }
+        });
+        return next;
+      });
+    },
+    [visibleRows],
+  );
+
+  const handleDeleteSelectedRows = useCallback(async () => {
+    const activeRowIds = new Set(activeTable.rows.map((row) => row.id));
+    const rowIdsToDelete = Array.from(selectedRowIds).filter((rowId) =>
+      activeRowIds.has(rowId),
     );
 
-    if (!exists) {
-      setGenres([...genres, finalGenre]);
+    if (rowIdsToDelete.length === 0) return;
+
+    setIsDeletingRows(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/production/smart-segments/rows`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ row_ids: rowIdsToDelete }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete selected rows.");
+      }
+
+      setTables((currentTables) =>
+        currentTables.map((table) =>
+          table.name === activeTableName
+            ? {
+                ...table,
+                rows: table.rows.filter((row) => !rowIdsToDelete.includes(row.id)),
+              }
+            : table,
+        ),
+      );
+
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        rowIdsToDelete.forEach((rowId) => next.delete(rowId));
+        return next;
+      });
+      setLastSelectedRowId(null);
+    } catch {
+      setError("Failed to delete selected rows.");
+    } finally {
+      setIsDeletingRows(false);
     }
-  }
+  }, [activeTable.rows, activeTableName, selectedRowIds]);
 
-  setPlaylistGenres({
-    ...playlistGenres,
-    [playlistGenreKey(p)]: finalGenre,
-  });
+  const getStatusLabel = (rowId: number) => {
+    const status = saveStatusByRow[rowId];
+    if (status === "saving") return "Saving";
+    if (status === "saved") return "Saved";
+    if (status === "error") return "Error";
+    return "";
+  };
 
-  await fetch(`${API_BASE_URL}/api/playlists/${p.id}/genre`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      genre: finalGenre || null,
-    }),
-  });
-};
+  const getSortLabel = (key: SortKey) => {
+    if (sortKey !== key) return "↕";
+    return sortDirection === "asc" ? "A-Z" : "Z-A";
+  };
+
+  const draftRow = draftRows[activeTableName];
 
   return (
-    <div className="min-h-screen bg-black px-8 py-10 text-white">
-      <div className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <h1 className="text-4xl font-semibold tracking-tight">Production</h1>
-          <p className="mt-2 text-sm text-zinc-500">
-            Browse, switch accounts, sync data, and open details.
-          </p>
-        </div>
+    <div className="min-h-screen bg-black px-4 py-8 text-white sm:px-6 lg:px-8">
+      <div className="mb-8">
+        <h1 className="text-4xl font-semibold tracking-tight">Production</h1>
 
-        <div className="flex items-end gap-3">
-          <div>
-            <label className="mb-2 block text-xs text-zinc-400">ACTIVE ACCOUNT</label>
-            <select
-              value={activeAccountId ?? ""}
-              onChange={(e) => {
-                const value = Number(e.target.value);
-                setActiveAccountId(value);
-                setAccountFilter(value);
-              }}
-              className="h-11 w-[220px] rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm text-white"
-            >
-              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
-
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            onClick={() => syncAllMutation.mutate()}
-            disabled={!activeAccountId || syncAllMutation.isPending}
-            className="h-11 rounded-xl bg-green-600 px-5 text-sm font-semibold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {syncAllMutation.isPending ? "Syncing..." : "Sync All"}
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-950">
-        <div className="flex flex-col gap-4 border-b border-zinc-800 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
-          <h2 className="text-xl font-semibold">Library</h2>
-
-          <div className="flex flex-wrap gap-3">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search playlist..."
-              className="h-10 w-[260px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white"
-            />
-
-            <select
-              value={genreFilter}
-              onChange={(e) => setGenreFilter(e.target.value)}
-              className="h-10 w-[160px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white"
-            >
-              <option value="all">All Genres</option>
-              {genres.map((genre) => (
-                <option key={genre} value={genre}>
-                  {genre}
-                </option>
-              ))}
-            </select>
-
-          
-          </div>
-        </div>
-
-        <div className="grid grid-cols-[minmax(240px,1fr)_130px_140px_100px_100px_100px_110px_100px] border-b border-zinc-800 px-5 py-3 text-xs">
-  <div className={headerClass("playlist")} onClick={() => toggleSort("playlist")}>
-    Playlist A&gt;Z {arrowFor("playlist")}
-  </div>
-
-  <div className={headerClass("genre")} onClick={() => toggleSort("genre")}>
-    Genre {arrowFor("genre")}
-  </div>
-
-  <div className={headerClass("account")} onClick={() => toggleSort("account")}>
-    Account {arrowFor("account")}
-  </div>
-
-  <div className={headerClass("growth24h")} onClick={() => toggleSort("growth24h")}>
-    24 H {arrowFor("growth24h")}
-  </div>
-
-  <div className={headerClass("growth7d")} onClick={() => toggleSort("growth7d")}>
-    7 D {arrowFor("growth7d")}
-  </div>
-
-  <div className={headerClass("growth30d")} onClick={() => toggleSort("growth30d")}>
-    30 D {arrowFor("growth30d")}
-  </div>
-
-  <div className={headerClass("followers")} onClick={() => toggleSort("followers")}>
-    Followers {arrowFor("followers")}
-  </div>
-
-  <div className={headerClass("tracks")} onClick={() => toggleSort("tracks")}>
-    Tracks {arrowFor("tracks")}
-  </div>
-</div>
-
-        {isLoading ? (
-          <div className="px-5 py-8 text-sm text-zinc-400">Loading playlists...</div>
-        ) : isError ? (
-          <div className="px-5 py-8 text-sm text-red-400">
-            Failed to load playlists.
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="px-5 py-8 text-sm text-zinc-400">
-            No playlists found.
-          </div>
-        ) : (
-          <div>
-            {filtered.map((p) => (
-              <div
-                key={`${p.account_id}-${p.id}`}
-                className="grid grid-cols-[minmax(240px,1fr)_130px_140px_100px_100px_100px_110px_100px] border-b border-zinc-900 px-5 py-4 text-sm"
+        <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            {TABLE_NAMES.map((tableName) => (
+              <button
+                key={tableName}
+                onClick={() => {
+                  setActiveTableName(tableName);
+                  setSelectedRowIds(new Set());
+                  setLastSelectedRowId(null);
+                  setSortKey(null);
+                  setSortDirection("asc");
+                  setCreateError(null);
+                }}
+                className={
+                  activeTableName === tableName
+                    ? "h-11 rounded-xl border border-green-500 bg-green-500 px-5 text-sm font-semibold text-black"
+                    : "h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-5 text-sm font-semibold text-zinc-300 hover:border-green-500 hover:text-green-400"
+                }
               >
-                <Link
-                  href={`/playlists/${p.id}`}
-                  className="truncate text-white hover:text-green-400"
-                >
-                  {p.name}
-                </Link>
-
-                <div>
-                  <select
-                    value={playlistGenres[playlistGenreKey(p)] || ""}
-                    onChange={(e) => handleGenreChange(p, e.target.value)}
-                    className="h-8 w-[110px] rounded-lg border border-zinc-800 bg-black px-2 text-xs text-white outline-none focus:border-green-500"
-                  >
-                    <option value="">Select</option>
-
-                    {genres.map((genre) => (
-                      <option key={genre} value={genre}>
-                        {genre}
-                      </option>
-                    ))}
-
-                    <option value="__add__">+ Add Genre</option>
-                  </select>
-                </div>
-
-                <div className="truncate text-xs text-zinc-400">
-                  {getAccountName(p.account_id)}
-                </div>
-
-                <div className="text-green-400">{formatGrowth(getGrowth24h(p))}</div>
-                <div className="text-green-400">{formatGrowth(getGrowth7d(p))}</div>
-                <div className="text-green-400">{formatGrowth(getGrowth30d(p))}</div>
-                <div>{p.followers}</div>
-                <div>{p.tracks_count ?? 0}</div>
-              </div>
+                {tableName}
+              </button>
             ))}
           </div>
-        )}
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={`Search ${activeTableName}...`}
+              className="h-11 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-green-500 sm:w-[280px]"
+            />
+
+            {activeSelectedCount > 0 ? (
+              <button
+                onClick={handleDeleteSelectedRows}
+                disabled={isDeletingRows}
+                className="h-11 min-w-[132px] whitespace-nowrap rounded-xl border border-red-900/70 bg-red-950/40 px-5 text-sm font-semibold text-red-300 hover:border-red-500 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isDeletingRows ? "Deleting..." : `Delete (${activeSelectedCount})`}
+              </button>
+            ) : null}
+
+            <button
+              onClick={loadTables}
+              className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-5 text-sm font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
       </div>
+
+      {isLoading ? (
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-950 px-5 py-8 text-sm text-zinc-400">
+          Loading production tables...
+        </div>
+      ) : error ? (
+        <div className="rounded-2xl border border-red-900/60 bg-red-950/30 px-5 py-8 text-sm text-red-300">
+          {error}
+        </div>
+      ) : (
+        <section className="mt-10 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+          <div className="flex flex-col gap-2 border-b border-zinc-800 px-5 py-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">{activeTableName}</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                {visibleRows.length} visible rows · {activeTable.rows.length} total rows
+              </p>
+            </div>
+
+            {createError ? (
+              <p className="text-xs font-medium text-red-400">{createError}</p>
+            ) : null}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1240px] table-fixed border-collapse text-left text-sm">
+              <thead className="border-b border-zinc-800 bg-black/40 text-xs uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="w-[48px] px-3 py-3 text-center font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={visibleRows.length > 0 && selectedVisibleCount === visibleRows.length}
+                      onChange={(event) => handleSelectAllVisible(event.target.checked)}
+                      className="h-4 w-4 rounded border-zinc-700 bg-black accent-green-500"
+                      aria-label="Select all visible rows"
+                    />
+                  </th>
+
+                  {TEXT_COLUMNS.map((column) => (
+                    <th
+                      key={column.key}
+                      className={`${column.width} px-4 py-3 font-semibold`}
+                    >
+                      <button
+                        onClick={() => handleSort(column.key)}
+                        className="flex items-center gap-2 text-left hover:text-green-400"
+                      >
+                        <span>{column.label}</span>
+                        <span className="text-[10px] normal-case text-zinc-600">
+                          {getSortLabel(column.key)}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
+
+                  {SEGMENT_COLUMNS.map((segment) => (
+                    <th
+                      key={segment.key}
+                      className="w-[86px] px-2 py-3 text-center font-semibold"
+                    >
+                      <button
+                        onClick={() => handleSort(segment.key)}
+                        className="mx-auto flex items-center gap-2 hover:text-green-400"
+                      >
+                        <span>{segment.label}</span>
+                        <span className="text-[10px] normal-case text-zinc-600">
+                          {getSortLabel(segment.key)}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
+
+                  <th className="w-[70px] px-3 py-3 text-center font-semibold">Save</th>
+                  <th className="w-[76px] px-3 py-3 font-semibold">Status</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                <tr className="border-b border-zinc-900 bg-green-950/10">
+                  <td className="px-2 py-2 text-center" />
+
+                  {TEXT_COLUMNS.map((column) => (
+                    <td key={column.key} className="px-2 py-2">
+                      {column.key === "genre" ? (
+                        <select
+                          value={String(draftRow.genre || "-")}
+                          onChange={(event) =>
+                            handleDraftTextChange("genre", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-zinc-800 bg-black px-2 text-sm text-white outline-none focus:border-green-500"
+                        >
+                          {GENRE_OPTIONS.map((genre) => (
+                            <option key={genre} value={genre}>
+                              {genre === "-" ? "Genre" : genre}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={String(draftRow[column.key] || "")}
+                          onChange={(event) =>
+                            handleDraftTextChange(column.key, event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              handleCreateRow();
+                            }
+                          }}
+                          placeholder={column.label}
+                          className="h-8 w-full rounded-lg border border-zinc-800 bg-black px-2 text-sm text-white outline-none placeholder:text-zinc-700 focus:border-green-500"
+                        />
+                      )}
+                    </td>
+                  ))}
+
+                  {SEGMENT_COLUMNS.map((segment) => (
+                    <td key={segment.key} className="px-2 py-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(draftRow[segment.key])}
+                        onChange={(event) =>
+                          handleDraftSegmentChange(segment.key, event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-zinc-700 bg-black accent-green-500"
+                        aria-label={`New row ${segment.label}`}
+                      />
+                    </td>
+                  ))}
+
+                  <td className="px-2 py-2 text-center">
+                    <button
+                      onClick={handleCreateRow}
+                      disabled={isCreatingRow}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-green-700 bg-green-500 text-lg font-bold text-black hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-60"
+                      title="Save new row"
+                      aria-label="Save new row"
+                    >
+                      ↵
+                    </button>
+                  </td>
+
+                  <td className="px-3 py-2 text-xs text-zinc-500">
+                    {isCreatingRow ? "Saving" : ""}
+                  </td>
+                </tr>
+
+                {visibleRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={16}
+                      className="px-5 py-8 text-center text-sm text-zinc-500"
+                    >
+                      No rows match your search.
+                    </td>
+                  </tr>
+                ) : (
+                  visibleRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={
+                        selectedRowIds.has(row.id)
+                          ? "border-b border-zinc-900 bg-green-950/20 last:border-b-0"
+                          : "border-b border-zinc-900 last:border-b-0 hover:bg-white/[0.02]"
+                      }
+                    >
+                      <td className="px-2 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedRowIds.has(row.id)}
+                          readOnly
+                          onClick={(event) => {
+                            handleSelectRow(
+                              row.id,
+                              event.currentTarget.checked,
+                              event.shiftKey,
+                            );
+                          }}
+                          className="h-4 w-4 rounded border-zinc-700 bg-black accent-green-500"
+                          aria-label={`Select ${row.song || "row"}`}
+                        />
+                      </td>
+
+                      <td className="px-2 py-2">
+                        <input
+                          value={row.song}
+                          onChange={(event) =>
+                            handleTextChange(row, "song", event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleTextBlur(row, "song", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-white outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black"
+                        />
+                      </td>
+
+                      <td className="px-2 py-2">
+                        <input
+                          value={row.key_signature}
+                          onChange={(event) =>
+                            handleTextChange(row, "key_signature", event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleTextBlur(row, "key_signature", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-zinc-200 outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black"
+                        />
+                      </td>
+
+                      <td className="px-2 py-2">
+                        <input
+                          value={row.chords}
+                          onChange={(event) =>
+                            handleTextChange(row, "chords", event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleTextBlur(row, "chords", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-zinc-200 outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black"
+                        />
+                      </td>
+
+                      <td className="px-2 py-2">
+                        <input
+                          value={row.tempo}
+                          onChange={(event) =>
+                            handleTextChange(row, "tempo", event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleTextBlur(row, "tempo", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-zinc-200 outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black"
+                        />
+                      </td>
+
+                      <td className="px-2 py-2">
+                        <select
+                          value={row.genre || "-"}
+                          onChange={(event) =>
+                            handleTextChange(row, "genre", event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleTextBlur(row, "genre", event.target.value)
+                          }
+                          className="h-8 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-zinc-200 outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black"
+                        >
+                          {GENRE_OPTIONS.map((genre) => (
+                            <option key={genre} value={genre}>
+                              {genre}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+
+                      {SEGMENT_COLUMNS.map((segment) => (
+                        <td key={segment.key} className="px-2 py-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(row[segment.key])}
+                            onChange={(event) =>
+                              handleSegmentChange(row, segment.key, event.target.checked)
+                            }
+                            className="h-4 w-4 rounded border-zinc-700 bg-black accent-green-500"
+                            aria-label={`${row.song} ${segment.label}`}
+                          />
+                        </td>
+                      ))}
+
+                      <td className="px-3 py-2 text-center text-xs text-zinc-600">—</td>
+
+                      <td className="px-3 py-2 text-xs">
+                        <span
+                          className={
+                            saveStatusByRow[row.id] === "error"
+                              ? "text-red-400"
+                              : saveStatusByRow[row.id] === "saving"
+                                ? "text-yellow-400"
+                                : saveStatusByRow[row.id] === "saved"
+                                  ? "text-green-400"
+                                  : "text-zinc-600"
+                          }
+                        >
+                          {getStatusLabel(row.id)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
