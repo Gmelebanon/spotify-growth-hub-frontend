@@ -28,6 +28,7 @@ const primaryNavItems = [
 const middleNavItems = [
   { label: "Playlists", href: "/ads", icon: "◉" },
   { label: "Production", href: "/production", icon: "▷" },
+  { label: "Mashups", href: "/mashups", icon: "×" },
 ];
 
 const secondaryNavItems = [
