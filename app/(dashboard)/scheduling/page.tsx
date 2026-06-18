@@ -79,7 +79,7 @@ type Column = {
   label: string;
   field: TextField;
   width: string;
-  type?: "status" | "date" | "platform";
+  type?: "status" | "date";
 };
 
 type UndoAction =
@@ -124,20 +124,14 @@ const EMPTY_NEW_ROW: NewRow = {
 };
 
 const COLUMNS: Column[] = [
+  { label: "Release Date", field: "release_date", width: "min-w-[160px]", type: "date" },
+  { label: "Artist", field: "artist", width: "min-w-[190px]" },
+  { label: "Song", field: "song", width: "min-w-[230px]" },
+  { label: "Album", field: "album", width: "min-w-[160px]" },
   { label: "Genre", field: "genre", width: "min-w-[150px]" },
   { label: "Status", field: "status", width: "min-w-[150px]", type: "status" },
-  { label: "Artist", field: "artist", width: "min-w-[190px]" },
-  { label: "Album", field: "album", width: "min-w-[160px]" },
-  { label: "Song", field: "song", width: "min-w-[230px]" },
-  { label: "Release Date", field: "release_date", width: "min-w-[160px]", type: "date" },
-  {
-    label: "Platform Status",
-    field: "platform_status",
-    width: "min-w-[160px]",
-    type: "platform",
-  },
-  { label: "RN Account", field: "rn_account", width: "min-w-[150px]" },
-  { label: "Remarks", field: "remarks", width: "min-w-[280px]" },
+  { label: "Distribution", field: "rn_account", width: "min-w-[170px]" },
+  { label: "Notes", field: "remarks", width: "min-w-[300px]" },
 ];
 
 function normalizeValue(value: string | boolean | null | undefined) {
@@ -145,52 +139,8 @@ function normalizeValue(value: string | boolean | null | undefined) {
   return String(value ?? "").trim();
 }
 
-function statusClass(value: string) {
-  return STATUS_STYLES[value] || "bg-zinc-800 text-zinc-300";
-}
-
 function statusTextClass(value: string) {
   return STATUS_TEXT[value] || "text-white";
-}
-
-function StatusBadge({ value }: { value: string }) {
-  const label = value || "-";
-
-  if (!value || value === "-") {
-    return <span className="text-zinc-600">—</span>;
-  }
-
-  if (label === "Rejected") {
-    return (
-      <span
-        className="inline-flex rounded-md px-2 py-1 text-xs font-bold"
-        style={{ backgroundColor: "#dc2626", color: "#ffffff" }}
-      >
-        Rejected
-      </span>
-    );
-  }
-
-  if (label === "Online") {
-    return (
-      <span
-        className="inline-flex rounded-md px-2 py-1 text-xs font-bold"
-        style={{ backgroundColor: "#16a34a", color: "#ffffff" }}
-      >
-        Online
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className={`inline-flex rounded-md px-2 py-1 text-xs font-bold ${statusClass(
-        label,
-      )}`}
-    >
-      {label}
-    </span>
-  );
 }
 
 function formatDateForInput(value: string) {
@@ -207,24 +157,20 @@ function formatDateForInput(value: string) {
   return `${year}-${month}-${day}`;
 }
 
-function platformStatusForRow(row: SchedulingRow, onlineSongs: Set<string>) {
+function statusForRow(row: SchedulingRow, onlineSongs: Set<string>) {
   const songKey = row.song.trim().toLowerCase();
-  const storedStatus = String(row.platform_status || "").trim().toLowerCase();
-  const status = String(row.status || "").trim();
+  const storedPlatformStatus = String(row.platform_status || "").trim().toLowerCase();
+  const storedStatus = String(row.status || "").trim();
 
   if (
-    storedStatus === "online" ||
-    status === "Online" ||
+    storedStatus === "Online" ||
+    storedPlatformStatus === "online" ||
     (songKey && onlineSongs.has(songKey))
   ) {
     return "Online";
   }
 
-  if (storedStatus === "rejected" || status === "Rejected") {
-    return "Rejected";
-  }
-
-  return "";
+  return storedStatus;
 }
 
 export default function SchedulingPage() {
@@ -290,20 +236,11 @@ export default function SchedulingPage() {
           }
 
           const record = value as Record<string, unknown>;
-          const statusValue = String(
-            record.status || record.platform_status || record.platformStatus || "",
-          ).toLowerCase();
-
-          const isOnline =
-            statusValue.includes("online") ||
-            record.is_online === true ||
-            record.online === true;
-
           const songValue = String(
             record.song || record.track || record.title || record.name || "",
           ).trim();
 
-          if (isOnline && songValue) {
+          if (songValue) {
             next.add(songValue.toLowerCase());
           }
 
@@ -337,7 +274,7 @@ export default function SchedulingPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to load scheduling rows.");
+        throw new Error("Failed to load distribution rows.");
       }
 
       const data = (await response.json()) as SchedulingPayload | SchedulingRow[];
@@ -356,7 +293,7 @@ export default function SchedulingPage() {
         setActiveSheetId((current) => current || latestSheet?.id || null);
       }
     } catch {
-      setError("Failed to load scheduling.");
+      setError("Failed to load distribution.");
     } finally {
       setIsLoading(false);
     }
@@ -521,7 +458,10 @@ export default function SchedulingPage() {
   }, [isUploadOpen]);
 
   const activeRows = useMemo(
-    () => rows.filter((row) => row.sheet_id === activeSheetId),
+    () =>
+      activeSheetId === null
+        ? rows
+        : rows.filter((row) => row.sheet_id === activeSheetId),
     [activeSheetId, rows],
   );
 
@@ -531,13 +471,12 @@ export default function SchedulingPage() {
     const searched = query
       ? activeRows.filter((row) =>
           [
-            row.genre,
-            row.status,
-            row.artist,
-            row.album,
-            row.song,
             row.release_date,
-            platformStatusForRow(row, onlineSongs),
+            row.artist,
+            row.song,
+            row.album,
+            row.genre,
+            statusForRow(row, onlineSongs),
             row.rn_account,
             row.remarks,
           ]
@@ -553,8 +492,8 @@ export default function SchedulingPage() {
         if (!selectedValues || selectedValues.length === 0) return true;
 
         const value =
-          column.field === "platform_status"
-            ? platformStatusForRow(row, onlineSongs)
+          column.field === "status"
+            ? statusForRow(row, onlineSongs)
             : String(row[column.field] || "");
 
         return selectedValues.includes(value || "(Blanks)");
@@ -563,12 +502,12 @@ export default function SchedulingPage() {
 
     return [...filtered].sort((a, b) => {
       const aRaw =
-        sortField === "platform_status"
-          ? platformStatusForRow(a, onlineSongs)
+        sortField === "status"
+          ? statusForRow(a, onlineSongs)
           : String(a[sortField] || "");
       const bRaw =
-        sortField === "platform_status"
-          ? platformStatusForRow(b, onlineSongs)
+        sortField === "status"
+          ? statusForRow(b, onlineSongs)
           : String(b[sortField] || "");
 
       const result = aRaw.toLowerCase().localeCompare(bRaw.toLowerCase(), undefined, {
@@ -655,7 +594,7 @@ export default function SchedulingPage() {
         }
       } catch {
         updateRowLocal(row.id, field, previousValue);
-        setError("Failed to save scheduling row.");
+        setError("Failed to save distribution row.");
       }
     },
     [pushUndo, updateRowLocal],
@@ -767,7 +706,7 @@ export default function SchedulingPage() {
         row: created,
       });
     } catch {
-      setError("Failed to create scheduling row.");
+      setError("Failed to create distribution row.");
     } finally {
       setIsSavingNewRow(false);
     }
@@ -795,7 +734,7 @@ export default function SchedulingPage() {
       setIsCreateSheetOpen(false);
       setSelectedIds([]);
     } catch {
-      setError("Failed to create scheduling sheet.");
+      setError("Failed to create distribution sheet.");
     }
   }, [newSheetName]);
 
@@ -864,7 +803,7 @@ export default function SchedulingPage() {
           sheet.id === activeSheet.id ? { ...sheet, name: previousName } : sheet,
         ),
       );
-      setError("Failed to rename scheduling sheet.");
+      setError("Failed to rename distribution sheet.");
     }
   }, [activeSheet, pushUndo, sheetNameDraft]);
 
@@ -1048,12 +987,11 @@ export default function SchedulingPage() {
   const uniqueValuesForField = useCallback(
     (field: TextField) => {
       const column = COLUMNS.find((item) => item.field === field);
-      const values = activeRows.map((row) => {
-        if (field === "platform_status") {
-          return platformStatusForRow(row, onlineSongs) || "(Blanks)";
-        }
-        return String(row[field] || "") || "(Blanks)";
-      });
+      const values = activeRows.map((row) =>
+        field === "status"
+          ? statusForRow(row, onlineSongs) || "(Blanks)"
+          : String(row[field] || "") || "(Blanks)",
+      );
 
       if (column?.type === "status") {
         const base = STATUS_OPTIONS.filter((status) => values.includes(status));
@@ -1298,7 +1236,7 @@ export default function SchedulingPage() {
         song: findIndex(["song"]),
         release_date: findIndex(["release date", "releasedate", "date"]),
         platform_status: findIndex(["platform status", "platformstatus"]),
-        rn_account: findIndex(["rn account", "rnaccount", "account"]),
+        rn_account: findIndex(["distribution", "rn account", "rnaccount", "account"]),
         remarks: findIndex(["remarks", "remark", "notes"]),
       };
 
@@ -1344,7 +1282,7 @@ export default function SchedulingPage() {
       setUploadFile(null);
       setIsUploadOpen(false);
     } catch {
-      setError("Failed to upload scheduling data.");
+      setError("Failed to upload distribution data.");
     } finally {
       setIsUploading(false);
     }
@@ -1355,8 +1293,8 @@ export default function SchedulingPage() {
     const csvRows = activeRows.map((row) =>
       COLUMNS.map((column) => {
         const value =
-          column.field === "platform_status"
-            ? platformStatusForRow(row, onlineSongs)
+          column.field === "status"
+            ? statusForRow(row, onlineSongs)
             : String(row[column.field] || "");
         return `"${value.replace(/"/g, '""')}"`;
       }).join(","),
@@ -1367,7 +1305,7 @@ export default function SchedulingPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${activeSheet?.name || "schedule"}.csv`;
+    link.download = `${activeSheet?.name || "all-distribution"}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }, [activeRows, activeSheet?.name, onlineSongs]);
@@ -1405,7 +1343,7 @@ export default function SchedulingPage() {
       setSheets(previousSheets);
       setRows(previousRows);
       setActiveSheetId(activeSheet.id);
-      setError("Failed to delete scheduling sheet.");
+      setError("Failed to delete distribution sheet.");
     }
   }, [activeSheet, pushUndo, rows, sheets]);
 
@@ -1444,7 +1382,7 @@ export default function SchedulingPage() {
         }
       `}</style>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <h1 className="text-3xl font-bold tracking-tight">Scheduling</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Distribution</h1>
 
         <div className="flex flex-wrap items-center gap-3">
           {undoStack.length > 0 ? (
@@ -1459,14 +1397,17 @@ export default function SchedulingPage() {
           ) : null}
 
           <select
-            value={activeSheetId || ""}
+            value={activeSheetId === null ? "all" : String(activeSheetId)}
             onChange={(event) => {
-              setActiveSheetId(Number(event.target.value));
+              const value = event.target.value;
+              setActiveSheetId(value === "all" ? null : Number(value));
               setSelectedIds([]);
               setShowNewRow(false);
+              setEditingSheetName(false);
             }}
             className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm font-semibold text-white outline-none focus:border-green-500"
           >
+            <option value="all">All</option>
             {sheets.map((sheet) => (
               <option key={sheet.id} value={sheet.id}>
                 {sheet.name}
@@ -1484,7 +1425,7 @@ export default function SchedulingPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search schedule..."
+            placeholder="Search distribution..."
             className="h-11 w-[240px] rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-green-500"
           />
           <button
@@ -1497,8 +1438,9 @@ export default function SchedulingPage() {
 
           <button
             onClick={() => setIsUploadOpen(true)}
-            className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-200 hover:border-green-500 hover:text-green-400"
-            title="Upload bulk data"
+            disabled={!activeSheet}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-200 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-40"
+            title={activeSheet ? "Upload bulk data" : "Choose one sheet to upload"}
           >
             ↑
           </button>
@@ -1585,7 +1527,7 @@ export default function SchedulingPage() {
             className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl shadow-black"
           >
             <h2 className="text-lg font-bold text-white">Create sheet</h2>
-            <p className="mt-2 text-sm text-zinc-500">Add a new Scheduling table.</p>
+            <p className="mt-2 text-sm text-zinc-500">Add a new Distribution table.</p>
 
             <label className="mt-5 block text-xs font-semibold uppercase tracking-[0.13em] text-zinc-500">
               Sheet name
@@ -1662,7 +1604,7 @@ export default function SchedulingPage() {
             className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl shadow-black"
           >
             <h2 className="text-lg font-bold text-white">Upload data</h2>
-            <p className="mt-2 text-sm text-zinc-500">Add rows in bulk to this Scheduling table.</p>
+            <p className="mt-2 text-sm text-zinc-500">Add rows in bulk to this Distribution table.</p>
 
             <label className="mt-5 block text-xs font-semibold uppercase tracking-[0.13em] text-zinc-500">
               CSV file
@@ -1755,19 +1697,24 @@ export default function SchedulingPage() {
               />
             ) : (
               <h2
-                onDoubleClick={() => setEditingSheetName(true)}
-                className="cursor-text text-lg font-bold"
-                title="Double click to rename sheet"
+                onDoubleClick={() => {
+                  if (activeSheet) setEditingSheetName(true);
+                }}
+                className={`${activeSheet ? "cursor-text" : "cursor-default"} text-lg font-bold`}
+                title={activeSheet ? "Double click to rename sheet" : "All sheets"}
               >
-                {activeSheet?.name || "Schedule"}
+                {activeSheet?.name || "All"}
               </h2>
             )}
           </div>
 
           <button
-            onClick={() => setShowNewRow((value) => !value)}
-            className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-500 text-2xl font-bold text-black hover:bg-green-400"
-            title="Add new entry"
+            onClick={() => {
+              if (activeSheet) setShowNewRow((value) => !value);
+            }}
+            disabled={!activeSheet}
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-500 text-2xl font-bold text-black hover:bg-green-400 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+            title={activeSheet ? "Add new entry" : "Choose one sheet to add an entry"}
           >
             +
           </button>
@@ -1861,8 +1808,6 @@ export default function SchedulingPage() {
                           }
                           className="schedule-date-input h-10 w-full rounded-lg border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500 schedule-date-input [color-scheme:dark]"
                         />
-                      ) : column.type === "platform" ? (
-                        <StatusBadge value={platformStatusForRow(newRow as SchedulingRow, onlineSongs)} />
                       ) : (
                         <input
                           value={newRow[column.field]}
@@ -1901,14 +1846,15 @@ export default function SchedulingPage() {
               {isLoading ? (
                 <tr>
                   <td colSpan={COLUMNS.length + 2} className="px-6 py-12 text-center text-zinc-500">
-                    Loading scheduling...
+                    Loading distribution...
                   </td>
                 </tr>
               ) : null}
 
               {!isLoading &&
                 filteredRows.map((row, index) => {
-                  const statusText = statusTextClass(row.status);
+                  const effectiveStatus = statusForRow(row, onlineSongs);
+                  const statusText = statusTextClass(effectiveStatus);
 
                   return (
                     <tr
@@ -1930,13 +1876,13 @@ export default function SchedulingPage() {
                         <td key={column.field} className="px-4 py-3 align-middle">
                           {column.type === "status" ? (
                             <select
-                              value={row[column.field] || ""}
+                              value={statusForRow(row, onlineSongs) || ""}
                               onChange={(event) =>
                                 saveRowField(row, column.field, event.target.value)
                               }
                               onKeyDown={handleKeyDownBlur}
                               className={`schedule-status-select h-9 w-full rounded-lg border border-transparent bg-black px-2 text-sm font-bold outline-none hover:border-zinc-800 focus:border-green-500 ${statusTextClass(
-                                row[column.field],
+                                statusForRow(row, onlineSongs),
                               )}`}
                             >
                               <option value="">-</option>
@@ -1956,8 +1902,6 @@ export default function SchedulingPage() {
                               onKeyDown={handleKeyDownBlur}
                               className="schedule-date-input h-9 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-white outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black schedule-date-input [color-scheme:dark]"
                             />
-                          ) : column.type === "platform" ? (
-                            <StatusBadge value={platformStatusForRow(row, onlineSongs)} />
                           ) : (
                             <input
                               defaultValue={row[column.field]}
@@ -1981,7 +1925,7 @@ export default function SchedulingPage() {
               {!isLoading && filteredRows.length === 0 ? (
                 <tr>
                   <td colSpan={COLUMNS.length + 2} className="px-6 py-12 text-center text-zinc-500">
-                    No scheduling entries found.
+                    No distribution entries found.
                   </td>
                 </tr>
               ) : null}
