@@ -240,6 +240,7 @@ export default function SchedulingPage() {
   const [search, setSearch] = useState("");
   const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
   const [isDeleteSheetOpen, setIsDeleteSheetOpen] = useState(false);
+  const [isDeleteSelectedOpen, setIsDeleteSelectedOpen] = useState(false);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -259,6 +260,7 @@ export default function SchedulingPage() {
   const [bulkReleaseDate, setBulkReleaseDate] = useState("");
   const createModalRef = useRef<HTMLDivElement | null>(null);
   const deleteModalRef = useRef<HTMLDivElement | null>(null);
+  const deleteSelectedModalRef = useRef<HTMLDivElement | null>(null);
   const uploadModalRef = useRef<HTMLDivElement | null>(null);
 
   const activeSheet = useMemo(
@@ -459,6 +461,35 @@ export default function SchedulingPage() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isDeleteSheetOpen]);
+
+  useEffect(() => {
+    if (!isDeleteSelectedOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (
+        deleteSelectedModalRef.current &&
+        !deleteSelectedModalRef.current.contains(event.target as Node)
+      ) {
+        setIsDeleteSelectedOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsDeleteSelectedOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDeleteSelectedOpen]);
 
   useEffect(() => {
     if (!isUploadOpen) return;
@@ -843,6 +874,7 @@ export default function SchedulingPage() {
     const selected = selectedRows;
     setRows((current) => current.filter((row) => !selectedIds.includes(row.id)));
     setSelectedIds([]);
+    setIsDeleteSelectedOpen(false);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/scheduling/bulk-delete`, {
@@ -1449,15 +1481,6 @@ export default function SchedulingPage() {
             Create
           </button>
 
-          {selectedIds.length > 0 ? (
-            <button
-              onClick={deleteSelected}
-              className="h-11 rounded-xl border border-red-500/70 bg-red-950/40 px-4 text-sm font-bold text-red-200 hover:bg-red-950"
-            >
-              Delete {selectedIds.length}
-            </button>
-          ) : null}
-
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -1537,6 +1560,20 @@ export default function SchedulingPage() {
             className="h-10 rounded-xl border border-zinc-800 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-600"
           >
             Deselect
+          </button>
+
+          <button
+            onClick={() => setIsDeleteSelectedOpen(true)}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-500/70 bg-red-950/40 text-red-200 hover:bg-red-950"
+            title={`Delete ${selectedIds.length} selected entries`}
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M6 6l1 16h10l1-16" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+            </svg>
           </button>
         </div>
       ) : null}
@@ -1653,6 +1690,35 @@ export default function SchedulingPage() {
                 className="h-11 rounded-xl bg-green-500 px-5 text-sm font-bold text-black hover:bg-green-400 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
               >
                 {isUploading ? "Uploading..." : "Upload"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDeleteSelectedOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
+          <div
+            ref={deleteSelectedModalRef}
+            className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl shadow-black"
+          >
+            <h2 className="text-lg font-bold text-white">Delete selected entries</h2>
+            <p className="mt-2 text-sm text-zinc-500">
+              This will delete {selectedIds.length} selected entr{selectedIds.length === 1 ? "y" : "ies"} from this sheet.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setIsDeleteSelectedOpen(false)}
+                className="h-11 rounded-xl border border-zinc-800 px-5 text-sm font-semibold text-zinc-300 hover:border-zinc-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteSelected}
+                className="h-11 rounded-xl bg-red-600 px-5 text-sm font-bold text-white hover:bg-red-500"
+              >
+                Delete
               </button>
             </div>
           </div>
