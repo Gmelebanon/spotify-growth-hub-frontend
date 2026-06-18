@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -147,6 +147,26 @@ function getTrackSummary(track: SelectableTrack) {
 function formatMashupChords(first: SelectableTrack, second: SelectableTrack) {
   return `${getTrackSummary(first)} × ${getTrackSummary(second)}`;
 }
+
+
+function dedupeTracks(tracks: SelectableTrack[]): SelectableTrack[] {
+  const seen = new Set<string>();
+  return tracks.filter((track) => {
+    const key = [
+      track.sourceLabel,
+      track.song,
+      track.chords,
+      track.keySignature,
+    ]
+      .join("||")
+      .toLowerCase();
+
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 
 function apiRowToMashup(row: MashupApiRow): CreatedMashup {
   const firstId = row.first_track_id || 0;
@@ -333,25 +353,25 @@ export default function MashupsPage() {
   const filteredVocalsTracks = useMemo(() => {
     if (!hasSourceChordFilter) return [];
     const query = searchVocals.trim().toLowerCase();
-    if (!query) return chordFilteredVocalsTracks;
-    return chordFilteredVocalsTracks.filter((track) =>
+    if (!query) return dedupeTracks(chordFilteredVocalsTracks);
+    return dedupeTracks(chordFilteredVocalsTracks.filter((track) =>
       [track.song, track.chords, track.keySignature, track.tableName]
         .join(" ")
         .toLowerCase()
         .includes(query),
-    );
+    ));
   }, [chordFilteredVocalsTracks, hasSourceChordFilter, searchVocals]);
 
   const filteredProductionTracks = useMemo(() => {
     if (!hasSourceChordFilter) return [];
     const query = searchProduction.trim().toLowerCase();
-    if (!query) return chordFilteredProductionTracks;
-    return chordFilteredProductionTracks.filter((track) =>
+    if (!query) return dedupeTracks(chordFilteredProductionTracks);
+    return dedupeTracks(chordFilteredProductionTracks.filter((track) =>
       [track.song, track.chords, track.keySignature, track.tableName]
         .join(" ")
         .toLowerCase()
         .includes(query),
-    );
+    ));
   }, [chordFilteredProductionTracks, hasSourceChordFilter, searchProduction]);
 
   const activeMashups = useMemo(
@@ -429,12 +449,14 @@ export default function MashupsPage() {
     setSelectedTracks([]);
   }, []);
 
-  const toggleChordFilter = useCallback((chord: string) => {
-    setSelectedChords((current) =>
-      current.includes(chord)
-        ? current.filter((item) => item !== chord)
-        : [...current, chord],
+  const removeSelectedTrack = useCallback((trackUid: string) => {
+    setSelectedTracks((current) =>
+      current.filter((track) => track.uid !== trackUid),
     );
+  }, []);
+
+  const toggleChordFilter = useCallback((chord: string) => {
+    setSelectedChords((current) => (current[0] === chord ? [] : [chord]));
   }, []);
 
   const toggleAllChordFilters = useCallback(() => {
@@ -448,11 +470,7 @@ export default function MashupsPage() {
   }, []);
 
   const toggleMashupChordFilter = useCallback((chord: string) => {
-    setSelectedMashupChords((current) =>
-      current.includes(chord)
-        ? current.filter((item) => item !== chord)
-        : [...current, chord],
-    );
+    setSelectedMashupChords((current) => (current[0] === chord ? [] : [chord]));
   }, []);
 
   const toggleAllMashupChordFilters = useCallback(() => {
@@ -670,14 +688,15 @@ export default function MashupsPage() {
 
   const ChordFilterDropdown = ({
     className = "",
+    label = "Chord Filter",
     options = chordOptions,
     selected = selectedChords,
     onToggle = toggleChordFilter,
-    onToggleAll = toggleAllChordFilters,
     onClear = clearChordFilters,
     emptyText = "No chords found.",
   }: {
     className?: string;
+    label?: string;
     options?: string[];
     selected?: string[];
     onToggle?: (chord: string) => void;
@@ -687,6 +706,9 @@ export default function MashupsPage() {
   }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [query, setQuery] = useState("");
+    const [highlightedIndex, setHighlightedIndex] = useState(0);
+    const dropdownRef = useRef<HTMLDivElement | null>(null);
+    const listRef = useRef<HTMLDivElement | null>(null);
 
     const filteredChordOptions = useMemo(() => {
       const searchValue = query.trim().toLowerCase();
@@ -696,66 +718,201 @@ export default function MashupsPage() {
       );
     }, [options, query]);
 
+    const selectedChord = selected[0] || "";
+
+    const chooseChord = useCallback(
+      (chord: string) => {
+        onToggle(chord);
+        const nextIndex = filteredChordOptions.findIndex((item) => item === chord);
+        if (nextIndex >= 0) {
+          setHighlightedIndex(nextIndex);
+        }
+      },
+      [filteredChordOptions, onToggle],
+    );
+
+    const scrollHighlightedIntoView = useCallback((index: number) => {
+      const list = listRef.current;
+      if (!list) return;
+
+      const option = list.querySelector<HTMLElement>(
+        `[data-chord-index="${index}"]`,
+      );
+      if (!option) return;
+
+      option.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+    }, []);
+
+    const moveHighlight = useCallback(
+      (direction: 1 | -1) => {
+        setIsOpen(true);
+        setHighlightedIndex((current) => {
+          const maxIndex = Math.max(filteredChordOptions.length - 1, 0);
+          const next =
+            direction === 1
+              ? current >= maxIndex
+                ? 0
+                : current + 1
+              : current <= 0
+                ? maxIndex
+                : current - 1;
+
+          window.requestAnimationFrame(() => scrollHighlightedIntoView(next));
+          return next;
+        });
+      },
+      [filteredChordOptions.length, scrollHighlightedIntoView],
+    );
+
+    const handleKeyDown = useCallback(
+      (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          moveHighlight(1);
+          return;
+        }
+
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          moveHighlight(-1);
+          return;
+        }
+
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!isOpen) {
+            setIsOpen(true);
+            return;
+          }
+
+          const chord = filteredChordOptions[highlightedIndex];
+          if (chord) {
+            chooseChord(chord);
+          }
+          return;
+        }
+
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setIsOpen(false);
+        }
+      },
+      [chooseChord, filteredChordOptions, highlightedIndex, isOpen, moveHighlight],
+    );
+
+    useEffect(() => {
+      const nextIndex = selectedChord
+        ? filteredChordOptions.findIndex((chord) => chord === selectedChord)
+        : 0;
+
+      setHighlightedIndex(nextIndex >= 0 ? nextIndex : 0);
+    }, [filteredChordOptions, selectedChord]);
+
+    useEffect(() => {
+      if (!isOpen) return;
+
+      const selectedIndex = selectedChord
+        ? filteredChordOptions.findIndex((chord) => chord === selectedChord)
+        : highlightedIndex;
+
+      window.requestAnimationFrame(() =>
+        scrollHighlightedIntoView(selectedIndex >= 0 ? selectedIndex : 0),
+      );
+
+      const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+        if (
+          dropdownRef.current &&
+          !dropdownRef.current.contains(event.target as Node)
+        ) {
+          setIsOpen(false);
+        }
+      };
+
+      document.addEventListener("mousedown", handlePointerDown);
+      document.addEventListener("touchstart", handlePointerDown);
+      return () => {
+        document.removeEventListener("mousedown", handlePointerDown);
+        document.removeEventListener("touchstart", handlePointerDown);
+      };
+    }, [
+      filteredChordOptions,
+      highlightedIndex,
+      isOpen,
+      scrollHighlightedIntoView,
+      selectedChord,
+    ]);
+
     return (
-      <div className={`relative ${className}`}>
+      <div
+        ref={dropdownRef}
+        className={`relative ${className}`}
+        onKeyDown={handleKeyDown}
+      >
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
-          className="flex h-11 w-full items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-left text-sm font-semibold text-white outline-none hover:border-green-500"
+          className="flex h-11 w-full items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-left text-sm font-semibold text-white outline-none hover:border-green-500 focus:border-green-500"
         >
-          <span className={selected.length > 0 ? "text-white" : "text-zinc-500"}>
-            {selected.length > 0
-              ? `${selected.length} Cord${selected.length === 1 ? "" : "s"} Selected`
-              : "Cord Filter"}
+          <span className={selectedChord ? "text-white" : "text-zinc-500"}>
+            {selectedChord || label}
           </span>
           <span className="text-green-500">▾</span>
         </button>
 
         {isOpen ? (
           <div
-            className="absolute left-0 top-[calc(100%+8px)] z-50 flex h-[405px] w-[380px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-zinc-700 bg-black shadow-2xl shadow-black/60"
+            className="absolute left-0 top-[calc(100%+8px)] z-50 w-full min-w-[320px] overflow-hidden rounded-xl border border-zinc-700 bg-black shadow-2xl shadow-black/60"
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="shrink-0 p-3 pb-2">
-              <label className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-                <input
-                  type="checkbox"
-                  checked={options.length > 0 && selected.length === options.length}
-                  onChange={onToggleAll}
-                  className="h-4 w-4 rounded border-zinc-700 accent-green-500"
-                />
-                Select All
-              </label>
-
+            <div className="p-3 pb-2">
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search"
                 className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-green-500"
+                autoFocus
               />
             </div>
 
-            <div className="mx-3 min-h-0 flex-1 rounded-lg border border-zinc-900 bg-black">
-              <div className="h-full space-y-1 overflow-y-auto p-2 pr-1 [scrollbar-color:#10b981_#020617] [scrollbar-width:thin]">
-                {filteredChordOptions.map((chord) => (
-                  <label
-                    key={chord}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 text-sm font-semibold text-white hover:bg-zinc-900"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(chord)}
-                      onChange={(event) => {
-                        event.stopPropagation();
-                        onToggle(chord);
-                      }}
-                      onClick={(event) => event.stopPropagation()}
-                      className="h-4 w-4 rounded border-zinc-700 accent-green-500"
-                    />
-                    {chord}
-                  </label>
-                ))}
+            <div className="mx-3 rounded-lg border border-zinc-900 bg-black">
+              <div
+                ref={listRef}
+                className="mashups-chord-scroll space-y-1 overflow-y-scroll p-2 pr-3"
+                style={{
+                  overflowY: "scroll",
+                  scrollbarColor: "#10b981 #020617",
+                  scrollbarWidth: "thin",
+                  maxHeight: "calc(15 * 2rem)",
+                }}
+              >
+                {filteredChordOptions.map((chord, index) => {
+                  const isSelected = selectedChord === chord;
+                  const isHighlighted = highlightedIndex === index;
+
+                  return (
+                    <button
+                      key={chord}
+                      type="button"
+                      data-chord-index={index}
+                      onMouseEnter={() => setHighlightedIndex(index)}
+                      onClick={() => chooseChord(chord)}
+                      className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm font-semibold ${
+                        isSelected
+                          ? "bg-green-500 text-black"
+                          : isHighlighted
+                            ? "bg-zinc-900 text-white"
+                            : "text-white hover:bg-zinc-900"
+                      }`}
+                    >
+                      <span>{chord}</span>
+                      {isSelected ? <span>✓</span> : null}
+                    </button>
+                  );
+                })}
 
                 {filteredChordOptions.length === 0 ? (
                   <div className="py-4 text-center text-sm text-zinc-500">
@@ -765,24 +922,24 @@ export default function MashupsPage() {
               </div>
             </div>
 
-            <div className="mt-3 flex shrink-0 items-center gap-3 border-t border-zinc-800 bg-zinc-950/70 p-2">
+            <div className="mt-2 flex items-center gap-3 border-t border-zinc-800 bg-zinc-950/70 p-2">
               <button
                 type="button"
                 onClick={onClear}
-                disabled={selected.length === 0}
-                className="h-9 rounded-lg border border-red-900/70 bg-red-950/30 px-3 text-xs font-semibold text-red-300 hover:border-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!selectedChord}
+                className="h-8 rounded-lg border border-red-900/70 bg-red-950/30 px-3 text-xs font-semibold text-red-300 hover:border-red-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Delete Selected
+                Clear
               </button>
 
               <span className="ml-auto text-xs text-zinc-500">
-                {selected.length} selected
+                {selectedChord ? "1 selected" : "0 selected"}
               </span>
 
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-600 text-black hover:bg-green-500"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-600 text-black hover:bg-green-500"
                 title="Apply filter"
               >
                 ➜
@@ -790,7 +947,6 @@ export default function MashupsPage() {
             </div>
           </div>
         ) : null}
-
       </div>
     );
   };
@@ -799,15 +955,34 @@ export default function MashupsPage() {
     title,
     subtitle,
     tracks,
+    source,
   }: {
     title: string;
     subtitle: string;
     tracks: SelectableTrack[];
+    source: MashupSource;
   }) => (
     <section className="h-[calc(100vh-245px)] min-h-[420px] rounded-2xl border border-zinc-800 bg-zinc-950/60 shadow-2xl shadow-black/20">
       <div className="border-b border-zinc-800/80 p-5">
-        <h2 className="text-lg font-bold text-white">{title}</h2>
-        <p className="mt-1 text-xs text-zinc-500">{subtitle}</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">{title}</h2>
+            <p className="mt-1 text-xs text-zinc-500">{subtitle}</p>
+          </div>
+
+          {selectedTracks.some((track) => track.source === source) ? (
+            <button
+              onClick={() =>
+                setSelectedTracks((current) =>
+                  current.filter((track) => track.source !== source),
+                )
+              }
+              className="h-9 shrink-0 rounded-xl border border-zinc-800 bg-black px-3 text-xs font-semibold text-zinc-300 hover:border-red-500 hover:text-red-300"
+            >
+              Deselect
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="h-[calc(100%-82px)] overflow-auto">
@@ -932,24 +1107,41 @@ export default function MashupsPage() {
 
   return (
     <main className="min-h-screen bg-black px-6 py-8 text-white lg:px-10">
+      <style jsx global>{`
+        .mashups-chord-scroll {
+          overflow-y: scroll !important;
+          scrollbar-width: thin !important;
+          scrollbar-color: #10b981 #020617 !important;
+        }
+
+        .mashups-chord-scroll::-webkit-scrollbar {
+          width: 10px !important;
+          display: block !important;
+          background: #020617 !important;
+        }
+
+        .mashups-chord-scroll::-webkit-scrollbar-track {
+          background: #020617 !important;
+          border-radius: 999px !important;
+        }
+
+        .mashups-chord-scroll::-webkit-scrollbar-thumb {
+          background: #10b981 !important;
+          border: 2px solid #020617 !important;
+          border-radius: 999px !important;
+        }
+
+        .mashups-chord-scroll::-webkit-scrollbar-thumb:hover {
+          background: #22c55e !important;
+        }
+      `}</style>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-white">Mashups</h1>
           <p className="mt-2 text-sm text-zinc-500">
-            Select tracks in order. Every even pair becomes a mashup: 1 x 2, 3 x 4, and so on.
+            Select tracks in pairs to create mashups. Each pair becomes one mashup: 1 × 2, 3 × 4, and so on.
           </p>
         </div>
-
-        {undoStack.length > 0 ? (
-          <button
-            onClick={handleUndo}
-            disabled={isUndoing}
-            className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-5 text-sm font-semibold text-zinc-200 hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
-            title="Undo, or press Ctrl+Z"
-          >
-            {isUndoing ? "Undoing..." : "Undo"}
-          </button>
-        ) : null}
       </div>
 
       {selectedTracks.length > 0 ? (
@@ -959,18 +1151,28 @@ export default function MashupsPage() {
             {selectedTracks.map((track, index) => (
               <span
                 key={track.uid}
-                className="rounded-full border border-zinc-800 bg-black px-3 py-1 text-xs text-zinc-300"
+                className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-black px-3 py-1 text-xs text-zinc-300"
               >
-                <span className="mr-1 font-bold text-green-400">{index + 1}</span>
-                {track.song}
+                <span>
+                  <span className="mr-1 font-bold text-green-400">{index + 1}</span>
+                  {track.song}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeSelectedTrack(track.uid)}
+                  className="flex h-4 w-4 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-800 hover:text-red-300"
+                  title={`Remove ${track.song}`}
+                >
+                  ×
+                </button>
               </span>
             ))}
 
             <button
               onClick={clearSelection}
-              className="ml-auto h-9 rounded-xl border border-zinc-800 bg-black px-4 text-xs font-semibold text-zinc-300 hover:border-zinc-600"
+              className="ml-auto h-9 rounded-xl border border-zinc-800 bg-black px-4 text-xs font-semibold text-zinc-300 hover:border-red-500 hover:text-red-300"
             >
-              Clear
+              Deselect All
             </button>
           </div>
 
@@ -1007,6 +1209,7 @@ export default function MashupsPage() {
               style={{ gridColumn: "1 / span 2" }}
             >
               <ChordFilterDropdown className="min-w-0 flex-1 max-w-[520px]" />
+
               <button
                 onClick={handleCreateMashups}
                 disabled={!canCreateMashups}
@@ -1017,6 +1220,7 @@ export default function MashupsPage() {
             </div>
 
             <ChordFilterDropdown
+              label="Mashups Filter"
               options={mashupChordOptions}
               selected={selectedMashupChords}
               onToggle={toggleMashupChordFilter}
@@ -1029,12 +1233,14 @@ export default function MashupsPage() {
               title="Vocals"
               subtitle={`${vocalsTracks.length} vocal entries from Production Vocals`}
               tracks={filteredVocalsTracks}
+              source="vocals"
             />
 
             <TrackListCard
               title="Stems & Remakes"
               subtitle={`${productionTracks.length} entries from Production Stems and Production Remakes`}
               tracks={filteredProductionTracks}
+              source="production"
             />
 
             <section className="h-[calc(100vh-245px)] min-h-[420px] rounded-2xl border border-zinc-800 bg-zinc-950/60 shadow-2xl shadow-black/20">
@@ -1042,9 +1248,6 @@ export default function MashupsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-bold text-white">Mashups</h2>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      Created pairs are saved to the database.
-                    </p>
                   </div>
                   <span className="rounded-full border border-zinc-800 bg-black px-3 py-1 text-xs text-zinc-400">
                     {isLoadingMashups ? "Loading..." : `${filteredActiveMashups.length} active`}
@@ -1074,7 +1277,7 @@ export default function MashupsPage() {
               <div>
                 <h2 className="text-lg font-bold text-white">Created</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  Created mashups marked with the tick move here.
+                  Completed mashups will appear here once you mark them as created.
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1093,7 +1296,8 @@ export default function MashupsPage() {
 
                 {filteredDoneMashups.length === 0 ? (
                   <div className="p-8 text-center text-sm text-zinc-500">
-                    No created mashups marked done yet.
+                    No created mashups yet.
+                    Mark a mashup as created to move it here.
                   </div>
                 ) : null}
               </div>
