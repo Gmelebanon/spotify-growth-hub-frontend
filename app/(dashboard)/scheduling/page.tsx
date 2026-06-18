@@ -1698,31 +1698,13 @@ export default function SchedulingPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            {selectedIds.length > 0 ? (
-              <button
-                onClick={deleteSelected}
-                className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-500/70 bg-red-950/40 text-red-200 hover:bg-red-950"
-                title={`Delete ${selectedIds.length} selected entries`}
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4h8v2" />
-                  <path d="M6 6l1 16h10l1-16" />
-                  <path d="M10 11v6" />
-                  <path d="M14 11v6" />
-                </svg>
-              </button>
-            ) : null}
-
-            <button
-              onClick={() => setShowNewRow((value) => !value)}
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-500 text-2xl font-bold text-black hover:bg-green-400"
-              title="Add new entry"
-            >
-              +
-            </button>
-          </div>
+          <button
+            onClick={() => setShowNewRow((value) => !value)}
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-500 text-2xl font-bold text-black hover:bg-green-400"
+            title="Add new entry"
+          >
+            +
+          </button>
         </div>
 
         <div className="overflow-auto">
