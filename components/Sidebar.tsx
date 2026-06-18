@@ -32,8 +32,9 @@ const middleNavItems = [
 ];
 
 const secondaryNavItems = [
+  { label: "Scheduling", href: "/scheduling", icon: "◷" },
   { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
-    { label: "Trades", href: "/trades", icon: "↔" },
+  { label: "Trades", href: "/trades", icon: "↔" },
   { label: "AI", href: "/ai", icon: "✦" },
   { label: "Settings", href: "/settings", icon: "⚙" },
 ];
