@@ -21,6 +21,7 @@ const primaryNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: "▦" },
   { label: "My Artists", href: "/my-artists", icon: "♪" },
   { label: "Daily Growth", href: "/playlists", icon: "≡" },
+  { label: "Trends", href: "/trends", icon: "↗" },
   { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
   { label: "Curation", href: "/curation", icon: "◇" },
 ];
@@ -28,13 +29,12 @@ const primaryNavItems = [
 const middleNavItems = [
   { label: "Playlists", href: "/ads", icon: "◉" },
   { label: "Production", href: "/production", icon: "▷" },
-  { label: "Mashups", href: "/mashups", icon: "×" },
+  { label: "Releases", href: "/scheduling", icon: "◌" },
 ];
 
 const secondaryNavItems = [
-  { label: "Scheduling", href: "/scheduling", icon: "◷" },
   { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
-  { label: "Trades", href: "/trades", icon: "↔" },
+    { label: "Trades", href: "/trades", icon: "↔" },
   { label: "AI", href: "/ai", icon: "✦" },
   { label: "Settings", href: "/settings", icon: "⚙" },
 ];
