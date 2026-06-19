@@ -483,9 +483,6 @@ export default function TrendsPage() {
             <h1 className="text-4xl font-black tracking-tight text-white">
               Trends
             </h1>
-            <p className="mt-2 max-w-3xl text-sm text-zinc-400">
-              Weekly and daily trend cards loaded automatically from Kworb.
-            </p>
           </div>
 
           <div className="flex w-full flex-col gap-3 xl:w-[520px]">
