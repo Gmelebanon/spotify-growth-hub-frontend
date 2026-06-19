@@ -6,7 +6,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
 
-type PlatformKey = "spotify" | "youtube" | "aggregate";
+type PlatformKey = "spotify" | "youtube" | "aggregate" | "tiktok";
 
 type TrendRow = {
   position: number;
@@ -21,6 +21,16 @@ type TrendsPayload = {
   rows: TrendRow[];
 };
 
+type AggregateRow = {
+  country?: string;
+  itunes?: string;
+  spotify?: string;
+  apple_music?: string;
+  youtube?: string;
+  shazam?: string;
+  deezer?: string;
+};
+
 type ChartConfig = {
   id: string;
   title: string;
@@ -32,6 +42,7 @@ type ChartConfig = {
 const MAIN_TABS: { key: PlatformKey; label: string; eyebrow: string }[] = [
   { key: "spotify", label: "Spotify", eyebrow: "Streams" },
   { key: "youtube", label: "YouTube", eyebrow: "Views" },
+  { key: "tiktok", label: "TikTok", eyebrow: "Creations" },
   { key: "aggregate", label: "Aggregate", eyebrow: "All platforms / global" },
 ];
 
@@ -64,6 +75,100 @@ function buildCards(platform: PlatformKey): ChartConfig[] {
         country: "global",
       },
     ];
+  }
+
+  if (platform === "spotify") {
+    return [
+      {
+        id: "spotify-global-weekly",
+        title: "Global Weekly",
+        platform: "spotify",
+        view: "weekly_country",
+        country: "global",
+      },
+      {
+        id: "spotify-global-daily",
+        title: "Global Daily",
+        platform: "spotify",
+        view: "daily_country",
+        country: "global",
+      },
+      ...COUNTRY_LIST.flatMap((country) => [
+        {
+          id: `spotify-${country.key}-weekly`,
+          title: `${country.label} Weekly`,
+          platform: "spotify" as const,
+          view: "weekly_country",
+          country: country.key,
+        },
+        {
+          id: `spotify-${country.key}-daily`,
+          title: `${country.label} Daily`,
+          platform: "spotify" as const,
+          view: "daily_country",
+          country: country.key,
+        },
+      ]),
+    ];
+  }
+
+  if (platform === "youtube") {
+    return [
+      {
+        id: "youtube-global-weekly",
+        title: "Global Weekly",
+        platform: "youtube",
+        view: "weekly_country",
+        country: "global",
+      },
+      {
+        id: "youtube-global-daily",
+        title: "Global Daily",
+        platform: "youtube",
+        view: "daily_country",
+        country: "global",
+      },
+      ...COUNTRY_LIST.flatMap((country) => [
+        {
+          id: `youtube-${country.key}-weekly`,
+          title: `${country.label} Weekly`,
+          platform: "youtube" as const,
+          view: "weekly_country",
+          country: country.key,
+        },
+        {
+          id: `youtube-${country.key}-daily`,
+          title: `${country.label} Daily`,
+          platform: "youtube" as const,
+          view: "daily_country",
+          country: country.key,
+        },
+      ]),
+    ];
+  }
+
+  if (platform === "tiktok") {
+    const tiktokCountries = [
+      { key: "worldwide", label: "Worldwide" },
+      ...COUNTRY_LIST,
+    ];
+
+    return tiktokCountries.flatMap((country) => [
+      {
+        id: `tiktok-${country.key}-weekly`,
+        title: `${country.label} Weekly`,
+        platform: "tiktok",
+        view: "weekly_country",
+        country: country.key,
+      },
+      {
+        id: `tiktok-${country.key}-daily`,
+        title: `${country.label} Daily`,
+        platform: "tiktok",
+        view: "daily_country",
+        country: country.key,
+      },
+    ]);
   }
 
   return COUNTRY_LIST.flatMap((country) => [
@@ -186,8 +291,8 @@ function TrackCard({
             <p className="mt-2 text-xs text-zinc-500">{error}</p>
           </div>
         ) : filteredRows.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm font-bold text-zinc-500">
-            No matching tracks
+          <div className="flex h-full items-center justify-center px-6 text-center text-sm font-bold text-zinc-500">
+            No chart rows available
           </div>
         ) : (
           filteredRows.slice(0, 100).map((row, index) => (
@@ -205,6 +310,138 @@ function TrackCard({
         )}
       </div>
     </article>
+  );
+}
+
+function AggregateTable({
+  searchQuery,
+  refreshKey,
+  onSynced,
+}: {
+  searchQuery: string;
+  refreshKey: number;
+  onSynced: (value: string) => void;
+}) {
+  const [payload, setPayload] = useState<(TrendsPayload & { rows: AggregateRow[] }) | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError("");
+
+      const params = new URLSearchParams({
+        platform: "aggregate",
+        view: "global",
+        country: "global",
+        limit: "250",
+        refresh: refreshKey > 0 ? "true" : "false",
+      });
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/trends/chart?${params.toString()}`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}`);
+      }
+
+      const data = (await response.json()) as TrendsPayload & { rows: AggregateRow[] };
+      setPayload(data);
+
+      if (data.fetched_at) {
+        onSynced(data.fetched_at);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load aggregate table.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [onSynced, refreshKey]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const rows = payload?.rows ?? [];
+  const filteredRows = useMemo(() => {
+    const normalized = searchQuery.trim().toLowerCase();
+
+    if (!normalized) return rows;
+
+    return rows.filter((row) =>
+      [
+        row.country,
+        row.itunes,
+        row.spotify,
+        row.apple_music,
+        row.youtube,
+        row.shazam,
+        row.deezer,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized),
+    );
+  }, [rows, searchQuery]);
+
+  return (
+    <section className="mt-8 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/85 shadow-2xl shadow-black/20">
+      <div className="rounded-t-2xl bg-emerald-500 px-5 py-4">
+        <h2 className="text-base font-black text-black">Aggregate Current Charts</h2>
+      </div>
+
+      <div className="max-h-[620px] overflow-auto trends-green-scrollbar">
+        {isLoading ? (
+          <div className="flex h-[340px] items-center justify-center text-sm font-bold text-zinc-500">
+            Loading...
+          </div>
+        ) : error ? (
+          <div className="flex h-[340px] flex-col items-center justify-center px-4 text-center">
+            <p className="font-black text-red-300">Could not load</p>
+            <p className="mt-2 text-xs text-zinc-500">{error}</p>
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <div className="flex h-[340px] items-center justify-center text-sm font-bold text-zinc-500">
+            No aggregate rows available
+          </div>
+        ) : (
+          <table className="min-w-[1100px] w-full border-collapse text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-zinc-950">
+              <tr className="border-b border-zinc-800 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
+                <th className="px-5 py-4">Country</th>
+                <th className="px-5 py-4">iTunes</th>
+                <th className="px-5 py-4">Spotify</th>
+                <th className="px-5 py-4">Apple Music</th>
+                <th className="px-5 py-4">YouTube</th>
+                <th className="px-5 py-4">Shazam</th>
+                <th className="px-5 py-4">Deezer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((row, index) => (
+                <tr
+                  key={`${row.country}-${index}`}
+                  className="border-b border-zinc-900 transition hover:bg-zinc-900/60"
+                >
+                  <td className="whitespace-nowrap px-5 py-4 font-black text-white">
+                    {row.country || "-"}
+                  </td>
+                  <td className="px-5 py-4 text-zinc-300">{row.itunes || "-"}</td>
+                  <td className="px-5 py-4 text-zinc-300">{row.spotify || "-"}</td>
+                  <td className="px-5 py-4 text-zinc-300">{row.apple_music || "-"}</td>
+                  <td className="px-5 py-4 text-zinc-300">{row.youtube || "-"}</td>
+                  <td className="px-5 py-4 text-zinc-300">{row.shazam || "-"}</td>
+                  <td className="px-5 py-4 text-zinc-300">{row.deezer || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -275,7 +512,7 @@ export default function TrendsPage() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
+        <div className="mt-6 grid gap-3 md:grid-cols-4">
           {MAIN_TABS.map((tab) => {
             const isActive = tab.key === activeTab;
 
@@ -303,20 +540,28 @@ export default function TrendsPage() {
           })}
         </div>
 
-        <div className={`mt-8 ${cardGridClass}`}>
-          {cards.map((card) => (
-            <TrackCard
-              key={`${card.id}-${refreshKey}`}
-              config={card}
-              searchQuery={searchQuery}
-              refreshKey={refreshKey}
-              onSynced={handleSynced}
-            />
-          ))}
-        </div>
+        {activeTab === "aggregate" ? (
+          <AggregateTable
+            searchQuery={searchQuery}
+            refreshKey={refreshKey}
+            onSynced={handleSynced}
+          />
+        ) : (
+          <div className={`mt-8 ${cardGridClass}`}>
+            {cards.map((card) => (
+              <TrackCard
+                key={`${card.id}-${refreshKey}`}
+                config={card}
+                searchQuery={searchQuery}
+                refreshKey={refreshKey}
+                onSynced={handleSynced}
+              />
+            ))}
+          </div>
+        )}
 
         <p className="mt-6 text-xs text-zinc-600">
-          Spotify Global source: https://kworb.net/spotify/country/global_weekly.html
+          Aggregate source: https://kworb.net/charts/
         </p>
       </section>
 
