@@ -322,7 +322,7 @@ function AggregateTable({
   refreshKey: number;
   onSynced: (value: string) => void;
 }) {
-  const [payload, setPayload] = useState<(TrendsPayload & { rows: AggregateRow[] }) | null>(null);
+  const [payload, setPayload] = useState<(Omit<TrendsPayload, "rows"> & { rows: AggregateRow[] }) | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -348,7 +348,7 @@ function AggregateTable({
         throw new Error(`Error ${response.status}`);
       }
 
-      const data = (await response.json()) as TrendsPayload & { rows: AggregateRow[] };
+      const data = (await response.json()) as Omit<TrendsPayload, "rows"> & { rows: AggregateRow[] };
       setPayload(data);
 
       if (data.fetched_at) {
@@ -365,7 +365,7 @@ function AggregateTable({
     load();
   }, [load]);
 
-  const rows = payload?.rows ?? [];
+  const rows = (payload?.rows ?? []) as AggregateRow[];
   const filteredRows = useMemo(() => {
     const normalized = searchQuery.trim().toLowerCase();
 
