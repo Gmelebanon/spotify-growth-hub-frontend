@@ -146,27 +146,36 @@ function buildCards(platform: PlatformKey): ChartConfig[] {
   }
 
   if (platform === "tiktok") {
-    const tiktokCountries = [
-      { key: "worldwide", label: "Worldwide" },
-      ...COUNTRY_LIST,
-    ];
-
-    return tiktokCountries.flatMap((country) => [
+    return [
       {
-        id: `tiktok-${country.key}-weekly`,
-        title: `${country.label} Weekly`,
+        id: "tiktok-global-weekly",
+        title: "Global Weekly",
         platform: "tiktok",
         view: "weekly_country",
-        country: country.key,
+        country: "worldwide",
       },
       {
-        id: `tiktok-${country.key}-daily`,
-        title: `${country.label} Daily`,
+        id: "tiktok-global-daily",
+        title: "Global Daily",
         platform: "tiktok",
         view: "daily_country",
-        country: country.key,
+        country: "worldwide",
       },
-    ]);
+      {
+        id: "tiktok-us-weekly",
+        title: "US Weekly",
+        platform: "tiktok",
+        view: "weekly_country",
+        country: "us",
+      },
+      {
+        id: "tiktok-us-daily",
+        title: "US Daily",
+        platform: "tiktok",
+        view: "daily_country",
+        country: "us",
+      },
+    ];
   }
 
   return COUNTRY_LIST.flatMap((country) => [
@@ -290,7 +299,7 @@ function TrackCard({
           </div>
         ) : filteredRows.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm font-bold text-zinc-500">
-            No chart rows available
+            {config.platform === "tiktok" ? "Waiting for TikTok database sync" : "No chart rows available"}
           </div>
         ) : (
           filteredRows.slice(0, 100).map((row, index) => (
