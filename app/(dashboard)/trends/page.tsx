@@ -387,10 +387,6 @@ function AggregateTable({
 
   return (
     <section className="mt-8 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/85 shadow-2xl shadow-black/20">
-      <div className="rounded-t-2xl bg-emerald-500 px-5 py-4">
-        <h2 className="text-base font-black text-black">Aggregate Current Charts</h2>
-      </div>
-
       <div className="max-h-[620px] overflow-auto trends-green-scrollbar">
         {isLoading ? (
           <div className="flex h-[340px] items-center justify-center text-sm font-bold text-zinc-500">
@@ -407,8 +403,8 @@ function AggregateTable({
           </div>
         ) : (
           <table className="min-w-[980px] w-full border-collapse text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-zinc-950">
-              <tr className="border-b border-zinc-800 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
+            <thead className="sticky top-0 z-10 bg-emerald-500 text-black">
+              <tr className="border-b border-emerald-400 text-[10px] font-black uppercase tracking-[0.22em] text-black">
                 <th className="w-[130px] px-5 py-4">Country</th>
                 <th className="px-5 py-4">iTunes</th>
                 <th className="px-5 py-4">Spotify</th>
@@ -425,7 +421,6 @@ function AggregateTable({
                   className="border-b border-zinc-900 transition hover:bg-zinc-900/60"
                 >
                   <td className="whitespace-nowrap px-5 py-4 font-black text-white">
-                    <span className="text-emerald-300">{index + 1}</span>{" "}
                     {row.country || "-"}
                   </td>
                   <td className="px-5 py-4 text-zinc-300">{row.itunes || "-"}</td>
