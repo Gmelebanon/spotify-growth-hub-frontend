@@ -406,10 +406,10 @@ function AggregateTable({
             No aggregate rows available
           </div>
         ) : (
-          <table className="min-w-[1100px] w-full border-collapse text-left text-sm">
+          <table className="min-w-[980px] w-full border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 bg-zinc-950">
               <tr className="border-b border-zinc-800 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
-                <th className="px-5 py-4">Country</th>
+                <th className="w-[130px] px-5 py-4">Country</th>
                 <th className="px-5 py-4">iTunes</th>
                 <th className="px-5 py-4">Spotify</th>
                 <th className="px-5 py-4">Apple Music</th>
@@ -425,6 +425,7 @@ function AggregateTable({
                   className="border-b border-zinc-900 transition hover:bg-zinc-900/60"
                 >
                   <td className="whitespace-nowrap px-5 py-4 font-black text-white">
+                    <span className="text-emerald-300">{index + 1}</span>{" "}
                     {row.country || "-"}
                   </td>
                   <td className="px-5 py-4 text-zinc-300">{row.itunes || "-"}</td>
