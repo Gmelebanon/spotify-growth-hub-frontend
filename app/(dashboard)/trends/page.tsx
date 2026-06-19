@@ -43,7 +43,7 @@ const MAIN_TABS: { key: PlatformKey; label: string; eyebrow: string }[] = [
   { key: "spotify", label: "Spotify", eyebrow: "Streams" },
   { key: "youtube", label: "YouTube", eyebrow: "Views" },
   { key: "tiktok", label: "TikTok", eyebrow: "Creations" },
-  { key: "aggregate", label: "Aggregate", eyebrow: "All platforms / global" },
+  { key: "aggregate", label: "Aggregate", eyebrow: "All platforms" },
 ];
 
 const COUNTRY_LIST = [
@@ -115,35 +115,33 @@ function buildCards(platform: PlatformKey): ChartConfig[] {
   if (platform === "youtube") {
     return [
       {
-        id: "youtube-global-weekly",
-        title: "Global Weekly",
-        platform: "youtube",
-        view: "weekly_country",
-        country: "global",
-      },
-      {
         id: "youtube-global-daily",
         title: "Global Daily",
         platform: "youtube",
-        view: "daily_country",
+        view: "global_daily",
         country: "global",
       },
-      ...COUNTRY_LIST.flatMap((country) => [
-        {
-          id: `youtube-${country.key}-weekly`,
-          title: `${country.label} Weekly`,
-          platform: "youtube" as const,
-          view: "weekly_country",
-          country: country.key,
-        },
-        {
-          id: `youtube-${country.key}-daily`,
-          title: `${country.label} Daily`,
-          platform: "youtube" as const,
-          view: "daily_country",
-          country: country.key,
-        },
-      ]),
+      {
+        id: "youtube-us-weekly",
+        title: "US Weekly",
+        platform: "youtube",
+        view: "us_weekly",
+        country: "us",
+      },
+      {
+        id: "youtube-global-trending-weekly",
+        title: "Global Trending Weekly",
+        platform: "youtube",
+        view: "global_trending_weekly",
+        country: "global",
+      },
+      {
+        id: "youtube-us-trending-daily",
+        title: "US Trending Daily",
+        platform: "youtube",
+        view: "us_trending_daily",
+        country: "us",
+      },
     ];
   }
 
