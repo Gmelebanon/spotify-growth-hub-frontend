@@ -115,6 +115,13 @@ function buildCards(platform: PlatformKey): ChartConfig[] {
   if (platform === "youtube") {
     return [
       {
+        id: "youtube-global-weekly",
+        title: "Global Weekly",
+        platform: "youtube",
+        view: "global_trending_weekly",
+        country: "global",
+      },
+      {
         id: "youtube-global-daily",
         title: "Global Daily",
         platform: "youtube",
@@ -129,15 +136,8 @@ function buildCards(platform: PlatformKey): ChartConfig[] {
         country: "us",
       },
       {
-        id: "youtube-global-trending-weekly",
-        title: "Global Trending Weekly",
-        platform: "youtube",
-        view: "global_trending_weekly",
-        country: "global",
-      },
-      {
-        id: "youtube-us-trending-daily",
-        title: "US Trending Daily",
+        id: "youtube-us-daily",
+        title: "US Daily",
         platform: "youtube",
         view: "us_trending_daily",
         country: "us",
