@@ -553,10 +553,6 @@ export default function TrendsPage() {
             ))}
           </div>
         )}
-
-        <p className="mt-6 text-xs text-zinc-600">
-          Aggregate source: https://kworb.net/charts/
-        </p>
       </section>
 
       <style jsx global>{`
