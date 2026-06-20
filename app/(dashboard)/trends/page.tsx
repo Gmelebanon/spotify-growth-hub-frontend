@@ -56,7 +56,26 @@ type TrendTodoItem = {
   position: number;
   title: string;
   artist: string;
+  is_done?: boolean;
+  done_at?: string;
   created_at?: string;
+};
+
+type TopSongsBoard = "global" | "us" | "europe";
+
+type ScoredSong = {
+  id: string;
+  title: string;
+  artist: string;
+  score: number;
+  countries: string[];
+  highestRank: number;
+  globalRank: number | null;
+  usRank: number | null;
+  europeRank: number | null;
+  weeklyScore: number;
+  dailyMomentum: number;
+  appearances: number;
 };
 
 const MAIN_TABS: { key: PlatformKey; label: string; eyebrow: string }[] = [
@@ -77,6 +96,110 @@ const COUNTRY_LIST = [
   { key: "es", label: "Spain" },
   { key: "it", label: "Italy" },
 ];
+
+
+const MARKET_WEIGHTS: Record<string, number> = {
+  global: 5,
+  us: 3,
+  gb: 2,
+  de: 2,
+  fr: 1.8,
+  br: 1.8,
+  it: 1.5,
+  au: 1.3,
+  es: 1.3,
+};
+
+const COUNTRY_LABELS: Record<string, string> = {
+  global: "Global",
+  us: "US",
+  gb: "UK",
+  au: "Australia",
+  de: "Germany",
+  fr: "France",
+  br: "Brazil",
+  es: "Spain",
+  it: "Italy",
+};
+
+const EUROPE_COUNTRIES = new Set(["gb", "de", "fr", "es", "it"]);
+
+const RANK_SCORE_ANCHORS = [
+  { rank: 1, score: 100 },
+  { rank: 2, score: 95 },
+  { rank: 3, score: 91 },
+  { rank: 4, score: 88 },
+  { rank: 5, score: 85 },
+  { rank: 10, score: 70 },
+  { rank: 20, score: 45 },
+  { rank: 30, score: 25 },
+  { rank: 40, score: 12 },
+  { rank: 50, score: 5 },
+];
+
+function scoreSongKey(title: string, artist: string) {
+  return `${title.trim().toLowerCase()}---${artist.trim().toLowerCase()}`;
+}
+
+function getRankScore(rank: number) {
+  if (rank <= 1) return 100;
+  if (rank >= 50) return 5;
+
+  for (let index = 0; index < RANK_SCORE_ANCHORS.length - 1; index += 1) {
+    const current = RANK_SCORE_ANCHORS[index];
+    const next = RANK_SCORE_ANCHORS[index + 1];
+
+    if (rank >= current.rank && rank <= next.rank) {
+      const progress = (rank - current.rank) / (next.rank - current.rank);
+      return current.score + (next.score - current.score) * progress;
+    }
+  }
+
+  return Math.max(5, 101 - rank);
+}
+
+function getChartTypeWeight(view: string) {
+  return view.includes("daily") ? 0.5 : 1;
+}
+
+function getMarketWeight(country: string) {
+  return MARKET_WEIGHTS[country] ?? 1;
+}
+
+function getConsistencyMultiplier(countryCount: number) {
+  if (countryCount >= 10) return 1.2;
+  if (countryCount >= 5) return 1.1;
+  if (countryCount >= 3) return 1.05;
+  return 1;
+}
+
+function scoreChartContribution(row: TrendRow, config: ChartConfig) {
+  return getRankScore(row.position) * getChartTypeWeight(config.view) * getMarketWeight(config.country);
+}
+
+function formatScore(value: number) {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function getChartConfigsForBoard(board: TopSongsBoard) {
+  const allSpotifyCards = buildCards("spotify");
+
+  if (board === "us") {
+    return allSpotifyCards.filter(
+      (card) =>
+        card.country === "us" ||
+        (card.country === "global" && card.view === "weekly_country") ||
+        (card.country === "global" && card.view === "daily_country"),
+    );
+  }
+
+  if (board === "europe") {
+    return allSpotifyCards.filter((card) => EUROPE_COUNTRIES.has(card.country));
+  }
+
+  return allSpotifyCards;
+}
+
 
 function buildCards(platform: PlatformKey): ChartConfig[] {
   if (platform === "aggregate") {
@@ -412,6 +535,332 @@ function TrackCard({
 }
 
 
+
+function TopSongsLeaderboard({
+  searchQuery,
+  refreshKey,
+  onSynced,
+  selectedItems,
+  onToggleItem,
+  onRangeSelect,
+  onAddCard,
+}: {
+  searchQuery: string;
+  refreshKey: number;
+  onSynced: (value: string) => void;
+  selectedItems: Record<string, SelectedTrendItem>;
+  onToggleItem: (item: SelectedTrendItem, checked: boolean, index: number) => void;
+  onRangeSelect: (items: SelectedTrendItem[], index: number) => void;
+  onAddCard: (items: SelectedTrendItem[]) => void;
+}) {
+  const [activeBoard, setActiveBoard] = useState<TopSongsBoard>("global");
+  const [songs, setSongs] = useState<ScoredSong[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const boardTitle =
+    activeBoard === "global" ? "Top Global" : activeBoard === "us" ? "Top US" : "Top Europe";
+
+  const loadScores = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError("");
+
+      const configs = getChartConfigsForBoard(activeBoard);
+
+      const responses = await Promise.all(
+        configs.map(async (config) => {
+          const params = new URLSearchParams({
+            platform: config.platform,
+            view: config.view,
+            country: config.country,
+            limit: "50",
+            refresh: refreshKey > 0 ? "true" : "false",
+          });
+
+          const response = await fetch(`${API_BASE_URL}/api/trends/chart?${params.toString()}`, {
+            cache: "no-store",
+          });
+
+          if (!response.ok) {
+            throw new Error(`Error ${response.status}`);
+          }
+
+          const data = (await response.json()) as TrendsPayload;
+
+          if (data.fetched_at) {
+            onSynced(data.fetched_at);
+          }
+
+          return { config, rows: data.rows ?? [] };
+        }),
+      );
+
+      const scored = new Map<
+        string,
+        {
+          title: string;
+          artist: string;
+          baseScore: number;
+          weeklyScore: number;
+          dailyScore: number;
+          countries: Set<string>;
+          highestRank: number;
+          globalRank: number | null;
+          usRank: number | null;
+          europeRank: number | null;
+          weeklyRanks: number[];
+          dailyRanks: number[];
+          appearances: number;
+        }
+      >();
+
+      responses.forEach(({ config, rows }) => {
+        rows.slice(0, 50).forEach((row) => {
+          const title = row.title || "-";
+          const artist = row.artist || "-";
+          const key = scoreSongKey(title, artist);
+          const contribution = scoreChartContribution(row, config);
+          const isDaily = config.view.includes("daily");
+          const isWeekly = config.view.includes("weekly");
+          const existing =
+            scored.get(key) ??
+            {
+              title,
+              artist,
+              baseScore: 0,
+              weeklyScore: 0,
+              dailyScore: 0,
+              countries: new Set<string>(),
+              highestRank: row.position,
+              globalRank: null,
+              usRank: null,
+              europeRank: null,
+              weeklyRanks: [],
+              dailyRanks: [],
+              appearances: 0,
+            };
+
+          existing.baseScore += contribution;
+          existing.appearances += 1;
+          existing.highestRank = Math.min(existing.highestRank, row.position);
+          existing.countries.add(COUNTRY_LABELS[config.country] ?? config.country.toUpperCase());
+
+          if (isWeekly) {
+            existing.weeklyScore += contribution;
+            existing.weeklyRanks.push(row.position);
+          }
+
+          if (isDaily) {
+            existing.dailyScore += contribution;
+            existing.dailyRanks.push(row.position);
+          }
+
+          if (config.country === "global") {
+            existing.globalRank =
+              existing.globalRank === null ? row.position : Math.min(existing.globalRank, row.position);
+          }
+
+          if (config.country === "us") {
+            existing.usRank =
+              existing.usRank === null ? row.position : Math.min(existing.usRank, row.position);
+          }
+
+          if (EUROPE_COUNTRIES.has(config.country)) {
+            existing.europeRank =
+              existing.europeRank === null ? row.position : Math.min(existing.europeRank, row.position);
+          }
+
+          scored.set(key, existing);
+        });
+      });
+
+      const nextSongs = Array.from(scored.values())
+        .map((song) => {
+          const countries = Array.from(song.countries);
+          const bestDailyRank = song.dailyRanks.length ? Math.min(...song.dailyRanks) : null;
+          const bestWeeklyRank = song.weeklyRanks.length ? Math.min(...song.weeklyRanks) : null;
+          let momentumMultiplier = 1;
+
+          if (bestDailyRank !== null && bestWeeklyRank !== null && bestDailyRank < bestWeeklyRank) {
+            momentumMultiplier += 0.05;
+          }
+
+          if (bestDailyRank !== null && bestDailyRank <= 10 && (bestWeeklyRank === null || bestWeeklyRank > 20)) {
+            momentumMultiplier += 0.1;
+          }
+
+          const consistencyMultiplier = getConsistencyMultiplier(countries.length);
+          const finalScore = song.baseScore * consistencyMultiplier * momentumMultiplier;
+
+          return {
+            id: scoreSongKey(song.title, song.artist),
+            title: song.title,
+            artist: song.artist,
+            score: finalScore,
+            countries,
+            highestRank: song.highestRank,
+            globalRank: song.globalRank,
+            usRank: song.usRank,
+            europeRank: song.europeRank,
+            weeklyScore: song.weeklyScore,
+            dailyMomentum: momentumMultiplier > 1 ? Math.round((momentumMultiplier - 1) * 100) : 0,
+            appearances: song.appearances,
+          };
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 50);
+
+      setSongs(nextSongs);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not calculate top songs.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeBoard, onSynced, refreshKey]);
+
+  useEffect(() => {
+    loadScores();
+  }, [loadScores]);
+
+  const filteredSongs = useMemo(() => {
+    const normalized = searchQuery.trim().toLowerCase();
+
+    if (!normalized) return songs;
+
+    return songs.filter((song) => `${song.title} ${song.artist}`.toLowerCase().includes(normalized));
+  }, [songs, searchQuery]);
+
+  const visibleItems = useMemo(
+    () =>
+      filteredSongs.map((song, index) => ({
+        id: `leaderboard-${activeBoard}-${song.id}`,
+        cardId: `leaderboard-${activeBoard}`,
+        cardTitle: boardTitle,
+        platform: "spotify" as PlatformKey,
+        position: index + 1,
+        title: song.title,
+        artist: song.artist,
+      })),
+    [activeBoard, boardTitle, filteredSongs],
+  );
+
+  return (
+    <div>
+      <div className="flex flex-col gap-4 border-b border-zinc-800 bg-emerald-500 px-5 py-4 text-black lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.28em] text-black/70">
+            Weighted ranking
+          </p>
+          <h2 className="mt-1 text-2xl font-black">Top Songs</h2>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {[
+            { key: "global" as TopSongsBoard, label: "Top Global" },
+            { key: "us" as TopSongsBoard, label: "Top US" },
+            { key: "europe" as TopSongsBoard, label: "Top Europe" },
+          ].map((board) => (
+            <button
+              key={board.key}
+              type="button"
+              onClick={() => setActiveBoard(board.key)}
+              className={`rounded-full px-4 py-2 text-xs font-black transition ${
+                activeBoard === board.key
+                  ? "bg-black text-white"
+                  : "border border-black/20 bg-emerald-300 text-black hover:bg-emerald-200"
+              }`}
+            >
+              {board.label}
+            </button>
+          ))}
+
+          <button
+            type="button"
+            onClick={() => onAddCard(visibleItems)}
+            className="rounded-full bg-black px-4 py-2 text-xs font-black text-white transition hover:bg-zinc-900"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-[720px] overflow-y-auto p-4 trends-green-scrollbar">
+        {isLoading ? (
+          <div className="flex h-[320px] items-center justify-center text-sm font-bold text-zinc-500">
+            Calculating scores...
+          </div>
+        ) : error ? (
+          <div className="flex h-[320px] flex-col items-center justify-center px-4 text-center">
+            <p className="font-black text-red-300">Could not calculate</p>
+            <p className="mt-2 text-xs text-zinc-500">{error}</p>
+          </div>
+        ) : filteredSongs.length === 0 ? (
+          <div className="flex h-[320px] items-center justify-center px-6 text-center text-sm font-bold text-zinc-500">
+            No scored songs available
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredSongs.map((song, index) => {
+              const item = visibleItems[index];
+              const isSelected = Boolean(selectedItems[item.id]);
+
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-zinc-800 bg-black/40 p-5 transition hover:border-emerald-500/40"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-400 text-base font-black text-black">
+                      {index + 1}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={buildSpotifySearchUrl(song)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="break-words text-lg font-black leading-snug text-white transition hover:text-emerald-300"
+                      >
+                        {song.title} <span className="font-medium text-zinc-400">- {song.artist}</span>
+                      </a>
+
+                      <div className="mt-4 grid gap-3 text-[14px] font-bold text-zinc-400 md:grid-cols-4">
+                        <span>Score: <b className="text-emerald-300">{formatScore(song.score)}</b></span>
+                        <span>Countries: <b className="text-white">{song.countries.length}</b></span>
+                        <span>Highest: <b className="text-white">#{song.highestRank}</b></span>
+                        <span>Momentum: <b className="text-white">+{song.dailyMomentum}%</b></span>
+                        <span>Global: <b className="text-white">{song.globalRank ? `#${song.globalRank}` : "-"}</b></span>
+                        <span>US: <b className="text-white">{song.usRank ? `#${song.usRank}` : "-"}</b></span>
+                        <span>Europe: <b className="text-white">{song.europeRank ? `#${song.europeRank}` : "-"}</b></span>
+                        <span>Weekly: <b className="text-white">{formatScore(song.weeklyScore)}</b></span>
+                      </div>
+                    </div>
+
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(event) => {
+                        if (event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey) {
+                          onRangeSelect(visibleItems, index);
+                          return;
+                        }
+
+                        onToggleItem(item, event.target.checked, index);
+                      }}
+                      className="mt-2 h-5 w-5 shrink-0 accent-emerald-400"
+                      aria-label={`Select ${song.title}`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AllPlatformsOverview({
   searchQuery,
   refreshKey,
@@ -421,7 +870,14 @@ function AllPlatformsOverview({
   onRangeSelect,
   onAddCard,
   todoItems,
+  showDoneTodos,
+  selectedTodoIds,
+  onToggleShowDone,
+  onToggleTodoSelection,
+  onMarkTodoDone,
   onDeleteTodo,
+  onBulkTodoDone,
+  onBulkTodoDelete,
 }: {
   searchQuery: string;
   refreshKey: number;
@@ -431,44 +887,63 @@ function AllPlatformsOverview({
   onRangeSelect: (items: SelectedTrendItem[], index: number) => void;
   onAddCard: (items: SelectedTrendItem[]) => void;
   todoItems: TrendTodoItem[];
+  showDoneTodos: boolean;
+  selectedTodoIds: Record<number, boolean>;
+  onToggleShowDone: () => void;
+  onToggleTodoSelection: (id: number, checked: boolean) => void;
+  onMarkTodoDone: (id: number) => void;
   onDeleteTodo: (id: number) => void;
+  onBulkTodoDone: () => void;
+  onBulkTodoDelete: () => void;
 }) {
-  const overviewCards = buildCards("allPlatforms");
-
   return (
-    <section className="mt-8 grid gap-5 xl:grid-cols-[3fr_1fr]">
+    <section className="mt-8 grid gap-5 xl:grid-cols-[7fr_3fr]">
       <div className="overflow-hidden rounded-[24px] border border-zinc-800 bg-zinc-950/85 shadow-2xl shadow-black/20">
-        <div className="border-b border-zinc-800 bg-emerald-500 px-5 py-4 text-black">
-          <p className="text-[10px] font-black uppercase tracking-[0.28em] text-black/70">
-            Overview
-          </p>
-          <h2 className="mt-1 text-2xl font-black">Top Songs</h2>
-        </div>
-
-        <div className="grid gap-4 p-4 lg:grid-cols-2">
-          {overviewCards.map((card) => (
-            <TrackCard
-              key={`${card.id}-${refreshKey}`}
-              config={card}
-              searchQuery={searchQuery}
-              refreshKey={refreshKey}
-              onSynced={onSynced}
-              selectedItems={selectedItems}
-              onToggleItem={onToggleItem}
-              onRangeSelect={onRangeSelect}
-              onAddCard={onAddCard}
-            />
-          ))}
-        </div>
+        <TopSongsLeaderboard
+          searchQuery={searchQuery}
+          refreshKey={refreshKey}
+          onSynced={onSynced}
+          selectedItems={selectedItems}
+          onToggleItem={onToggleItem}
+          onRangeSelect={onRangeSelect}
+          onAddCard={onAddCard}
+        />
       </div>
 
       <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/85 p-5 shadow-2xl shadow-black/20">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <h2 className="text-2xl font-black text-white">To do list</h2>
-          <span className="rounded-full border border-zinc-700 px-3 py-1 text-xs font-bold text-zinc-300">
-            {todoItems.length} active
-          </span>
+          <button
+            type="button"
+            onClick={onToggleShowDone}
+            className={`rounded-full border px-3 py-1 text-xs font-black transition ${
+              showDoneTodos
+                ? "border-emerald-400 bg-emerald-400 text-black"
+                : "border-zinc-700 text-zinc-300 hover:border-emerald-400 hover:text-emerald-300"
+            }`}
+          >
+            Done
+          </button>
         </div>
+
+        {Object.keys(selectedTodoIds).length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onBulkTodoDone}
+              className="rounded-xl border border-emerald-500 bg-emerald-500 px-3 py-2 text-xs font-black text-black transition hover:bg-emerald-400"
+            >
+              Mark done
+            </button>
+            <button
+              type="button"
+              onClick={onBulkTodoDelete}
+              className="rounded-xl border border-red-500/60 bg-black px-3 py-2 text-xs font-black text-red-300 transition hover:border-red-400"
+            >
+              Delete selected
+            </button>
+          </div>
+        )}
 
         <div className="mt-5 max-h-[720px] space-y-4 overflow-y-auto pr-2 trends-green-scrollbar">
           {todoItems.length === 0 ? (
@@ -476,35 +951,64 @@ function AllPlatformsOverview({
               Select songs from Spotify, YouTube, or TikTok, then press Add or Send All.
             </div>
           ) : (
-            todoItems.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-2xl border border-zinc-800 bg-black/40 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-black leading-snug text-white">
-                      {item.artist} - {item.title}
-                    </p>
-                    <p className="mt-2 text-xs font-semibold text-zinc-400">
-                      {item.card_title} · #{item.position}
-                    </p>
-                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-                      {item.platform}
-                    </p>
-                  </div>
+            todoItems.map((item) => {
+              const isSelected = Boolean(selectedTodoIds[item.id]);
 
-                  <button
-                    type="button"
-                    onClick={() => onDeleteTodo(item.id)}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 transition hover:border-red-400 hover:text-red-300"
-                    title="Delete"
-                  >
-                    🗑
-                  </button>
+              return (
+                <div
+                  key={item.id}
+                  className={`rounded-2xl border bg-black/40 p-4 ${
+                    item.is_done ? "border-emerald-500/40 opacity-75" : "border-zinc-800"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(event) => onToggleTodoSelection(item.id, event.target.checked)}
+                      className="mt-1 h-4 w-4 shrink-0 accent-emerald-400"
+                      aria-label={`Select ${item.title}`}
+                    />
+
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words text-sm font-black leading-snug text-white">
+                        {item.artist} - {item.title}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-zinc-400">
+                        {item.card_title} · #{item.position} - Source
+                      </p>
+                      {item.is_done && (
+                        <p className="mt-1 text-[11px] font-black uppercase tracking-[0.18em] text-emerald-400">
+                          Done
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {!item.is_done && (
+                        <button
+                          type="button"
+                          onClick={() => onMarkTodoDone(item.id)}
+                          className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 transition hover:border-emerald-400 hover:text-emerald-300"
+                          title="Mark done"
+                        >
+                          ✓
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => onDeleteTodo(item.id)}
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 transition hover:border-red-400 hover:text-red-300"
+                        title="Delete"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
@@ -647,6 +1151,8 @@ export default function TrendsPage() {
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Record<string, SelectedTrendItem>>({});
   const [todoItems, setTodoItems] = useState<TrendTodoItem[]>([]);
+  const [showDoneTodos, setShowDoneTodos] = useState(false);
+  const [selectedTodoIds, setSelectedTodoIds] = useState<Record<number, boolean>>({});
   const [history, setHistory] = useState<Record<string, SelectedTrendItem>[]>([]);
   const [lastSelectedIndexByCard, setLastSelectedIndexByCard] = useState<Record<string, number>>({});
 
@@ -674,7 +1180,11 @@ export default function TrendsPage() {
 
   const loadTodoItems = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/trends/todo`, {
+      const params = new URLSearchParams({
+        include_done: showDoneTodos ? "true" : "false",
+      });
+
+      const response = await fetch(`${API_BASE_URL}/api/trends/todo?${params.toString()}`, {
         cache: "no-store",
       });
 
@@ -684,10 +1194,11 @@ export default function TrendsPage() {
 
       const data = (await response.json()) as { items: TrendTodoItem[] };
       setTodoItems(data.items ?? []);
+      setSelectedTodoIds({});
     } catch {
       setTodoItems([]);
     }
-  }, []);
+  }, [showDoneTodos]);
 
   useEffect(() => {
     loadTodoItems();
@@ -711,6 +1222,7 @@ export default function TrendsPage() {
 
       const data = (await response.json()) as { items: TrendTodoItem[] };
       setTodoItems(data.items ?? []);
+      setSelectedTodoIds({});
 
       setSelectedItems((current) => {
         const next = { ...current };
@@ -831,6 +1343,73 @@ export default function TrendsPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleUndo]);
 
+  const handleMarkTodoDone = useCallback(
+    async (id: number) => {
+      const response = await fetch(`${API_BASE_URL}/api/trends/todo/${id}/done`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      await loadTodoItems();
+    },
+    [loadTodoItems],
+  );
+
+  const handleToggleTodoSelection = useCallback((id: number, checked: boolean) => {
+    setSelectedTodoIds((current) => {
+      const next = { ...current };
+
+      if (checked) {
+        next[id] = true;
+      } else {
+        delete next[id];
+      }
+
+      return next;
+    });
+  }, []);
+
+  const handleBulkDeleteTodos = useCallback(async () => {
+    const ids = Object.keys(selectedTodoIds).map(Number);
+
+    if (ids.length === 0) return;
+
+    const response = await fetch(`${API_BASE_URL}/api/trends/todo/bulk-delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids }),
+    });
+
+    if (!response.ok) return;
+
+    await loadTodoItems();
+  }, [loadTodoItems, selectedTodoIds]);
+
+  const handleBulkDoneTodos = useCallback(async () => {
+    const ids = Object.keys(selectedTodoIds).map(Number);
+
+    if (ids.length === 0) return;
+
+    const response = await fetch(`${API_BASE_URL}/api/trends/todo/bulk-done`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids }),
+    });
+
+    if (!response.ok) return;
+
+    await loadTodoItems();
+  }, [loadTodoItems, selectedTodoIds]);
+
+
+
   const selectedCount = Object.keys(selectedItems).length;
 
   const handleSendSelected = useCallback(async () => {
@@ -941,7 +1520,14 @@ export default function TrendsPage() {
             onRangeSelect={handleRangeSelect}
             onAddCard={handleAddCard}
             todoItems={todoItems}
+            showDoneTodos={showDoneTodos}
+            selectedTodoIds={selectedTodoIds}
+            onToggleShowDone={() => setShowDoneTodos((value) => !value)}
+            onToggleTodoSelection={handleToggleTodoSelection}
+            onMarkTodoDone={handleMarkTodoDone}
             onDeleteTodo={handleDeleteTodo}
+            onBulkTodoDone={handleBulkDoneTodos}
+            onBulkTodoDelete={handleBulkDeleteTodos}
           />
         ) : activeTab === "aggregate" ? (
           <AggregateTable
