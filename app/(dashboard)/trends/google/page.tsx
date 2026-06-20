@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-const DEFAULT_QUERY = "afro";
+const DEFAULT_QUERY = "";
 
 const GEO_OPTIONS = [
   { label: "Worldwide", value: "" },
@@ -32,7 +32,7 @@ function normalizeKeywords(query: string) {
     .filter(Boolean)
     .slice(0, 5);
 
-  return keywords.length ? keywords : [DEFAULT_QUERY];
+  return keywords.length ? keywords : ["afro"];
 }
 
 function buildWidgetUrl(type: WidgetType, query: string, geo: string, time: string) {
@@ -77,19 +77,19 @@ function WidgetCard({
   );
 
   return (
-    <div className="overflow-hidden rounded-[28px] border border-zinc-800 bg-zinc-950 shadow-[0_0_40px_rgba(0,0,0,0.35)]">
+    <div className="overflow-hidden rounded-t-[28px] border border-zinc-800 bg-zinc-950 shadow-[0_0_40px_rgba(0,0,0,0.35)]">
       <div className="rounded-t-[28px] border-b border-zinc-800 bg-zinc-950 px-5 py-4">
         <p className="text-[10px] font-black uppercase tracking-[0.35em] text-emerald-400">
           {title}
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-b-[28px] bg-white">
+      <div className="overflow-hidden bg-white">
         <iframe
           key={src}
           title={title}
           src={src}
-          className="block w-full rounded-b-[28px] border-0"
+          className="block w-full border-0"
           style={{ height }}
           loading="lazy"
         />
@@ -128,7 +128,7 @@ export default function GoogleTrendsPage() {
 
             <label className="block">
               <span className="mb-2 block text-xs font-bold uppercase tracking-[0.25em] text-zinc-500">
-                Market
+                Trending In
               </span>
               <select
                 value={geo}
