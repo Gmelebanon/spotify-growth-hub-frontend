@@ -70,9 +70,13 @@ type ScoredSong = {
   score: number;
   countries: string[];
   highestRank: number;
-  globalRank: number | null;
-  usRank: number | null;
-  europeRank: number | null;
+  spotifyUsRank: number | null;
+  spotifyEuropeRank: number | null;
+  spotifyGlobalRank: number | null;
+  youtubeRank: number | null;
+  tiktokUsRank: number | null;
+  tiktokGlobalRank: number | null;
+  aggregateCount: number;
   weeklyScore: number;
   dailyMomentum: number;
   appearances: number;
@@ -98,16 +102,11 @@ const COUNTRY_LIST = [
 ];
 
 
-const MARKET_WEIGHTS: Record<string, number> = {
-  global: 5,
-  us: 3,
-  gb: 2,
-  de: 2,
-  fr: 1.8,
-  br: 1.8,
-  it: 1.5,
-  au: 1.3,
-  es: 1.3,
+const AGGREGATE_COUNTRY_WEIGHTS: Record<string, number> = {
+  us: 1,
+  gb: 0.8,
+  de: 0.6,
+  fr: 0.6,
 };
 
 const COUNTRY_LABELS: Record<string, string> = {
@@ -158,12 +157,31 @@ function getRankScore(rank: number) {
   return Math.max(5, 101 - rank);
 }
 
-function getChartTypeWeight(view: string) {
-  return view.includes("daily") ? 0.5 : 1;
+function getChartTypeWeight(view: string, platform?: PlatformKey) {
+  const normalizedView = view.toLowerCase();
+
+  if (platform === "youtube") {
+    return normalizedView.includes("daily") ? 0.45 : 1;
+  }
+
+  if (platform === "tiktok") {
+    if (normalizedView.includes("viral")) return 1.2;
+    return normalizedView.includes("daily") ? 0.7 : 1;
+  }
+
+  return normalizedView.includes("daily") ? 0.5 : 1;
 }
 
-function getMarketWeight(country: string) {
-  return MARKET_WEIGHTS[country] ?? 1;
+function getAggregateCountryWeight(country: string) {
+  if (country === "worldwide" || country === "global") return 1;
+  return AGGREGATE_COUNTRY_WEIGHTS[country] ?? 0.4;
+}
+
+function getPlatformWeight(platform: PlatformKey) {
+  if (platform === "spotify") return 1;
+  if (platform === "youtube") return 0.7;
+  if (platform === "tiktok") return 0.08;
+  return 0.4;
 }
 
 function getConsistencyMultiplier(countryCount: number) {
@@ -174,7 +192,12 @@ function getConsistencyMultiplier(countryCount: number) {
 }
 
 function scoreChartContribution(row: TrendRow, config: ChartConfig) {
-  return getRankScore(row.position) * getChartTypeWeight(config.view) * getMarketWeight(config.country);
+  return (
+    getRankScore(row.position) *
+    getChartTypeWeight(config.view, config.platform) *
+    getAggregateCountryWeight(config.country) *
+    getPlatformWeight(config.platform)
+  );
 }
 
 function formatScore(value: number) {
@@ -182,22 +205,26 @@ function formatScore(value: number) {
 }
 
 function getChartConfigsForBoard(board: TopSongsBoard) {
-  const allSpotifyCards = buildCards("spotify");
+  const allCards = [
+    ...buildCards("spotify"),
+    ...buildCards("youtube"),
+    ...buildCards("tiktok"),
+  ];
 
   if (board === "us") {
-    return allSpotifyCards.filter(
+    return allCards.filter(
       (card) =>
         card.country === "us" ||
-        (card.country === "global" && card.view === "weekly_country") ||
-        (card.country === "global" && card.view === "daily_country"),
+        card.country === "global" ||
+        card.country === "worldwide",
     );
   }
 
   if (board === "europe") {
-    return allSpotifyCards.filter((card) => EUROPE_COUNTRIES.has(card.country));
+    return allCards.filter((card) => EUROPE_COUNTRIES.has(card.country));
   }
 
-  return allSpotifyCards;
+  return allCards;
 }
 
 
@@ -605,9 +632,13 @@ function TopSongsLeaderboard({
           dailyScore: number;
           countries: Set<string>;
           highestRank: number;
-          globalRank: number | null;
-          usRank: number | null;
-          europeRank: number | null;
+          spotifyUsRank: number | null;
+          spotifyEuropeRank: number | null;
+          spotifyGlobalRank: number | null;
+          youtubeRank: number | null;
+          tiktokUsRank: number | null;
+          tiktokGlobalRank: number | null;
+          aggregateCount: number;
           weeklyRanks: number[];
           dailyRanks: number[];
           appearances: number;
@@ -632,9 +663,13 @@ function TopSongsLeaderboard({
               dailyScore: 0,
               countries: new Set<string>(),
               highestRank: row.position,
-              globalRank: null,
-              usRank: null,
-              europeRank: null,
+              spotifyUsRank: null,
+              spotifyEuropeRank: null,
+              spotifyGlobalRank: null,
+              youtubeRank: null,
+              tiktokUsRank: null,
+              tiktokGlobalRank: null,
+              aggregateCount: 0,
               weeklyRanks: [],
               dailyRanks: [],
               appearances: 0,
@@ -655,20 +690,43 @@ function TopSongsLeaderboard({
             existing.dailyRanks.push(row.position);
           }
 
-          if (config.country === "global") {
-            existing.globalRank =
-              existing.globalRank === null ? row.position : Math.min(existing.globalRank, row.position);
+          if (config.platform === "spotify" && config.country === "global") {
+            existing.spotifyGlobalRank =
+              existing.spotifyGlobalRank === null
+                ? row.position
+                : Math.min(existing.spotifyGlobalRank, row.position);
           }
 
-          if (config.country === "us") {
-            existing.usRank =
-              existing.usRank === null ? row.position : Math.min(existing.usRank, row.position);
+          if (config.platform === "spotify" && config.country === "us") {
+            existing.spotifyUsRank =
+              existing.spotifyUsRank === null ? row.position : Math.min(existing.spotifyUsRank, row.position);
           }
 
-          if (EUROPE_COUNTRIES.has(config.country)) {
-            existing.europeRank =
-              existing.europeRank === null ? row.position : Math.min(existing.europeRank, row.position);
+          if (config.platform === "spotify" && EUROPE_COUNTRIES.has(config.country)) {
+            existing.spotifyEuropeRank =
+              existing.spotifyEuropeRank === null
+                ? row.position
+                : Math.min(existing.spotifyEuropeRank, row.position);
           }
+
+          if (config.platform === "youtube") {
+            existing.youtubeRank =
+              existing.youtubeRank === null ? row.position : Math.min(existing.youtubeRank, row.position);
+          }
+
+          if (config.platform === "tiktok" && config.country === "us") {
+            existing.tiktokUsRank =
+              existing.tiktokUsRank === null ? row.position : Math.min(existing.tiktokUsRank, row.position);
+          }
+
+          if (config.platform === "tiktok" && (config.country === "worldwide" || config.country === "global")) {
+            existing.tiktokGlobalRank =
+              existing.tiktokGlobalRank === null
+                ? row.position
+                : Math.min(existing.tiktokGlobalRank, row.position);
+          }
+
+          existing.aggregateCount += 1;
 
           scored.set(key, existing);
         });
@@ -699,9 +757,13 @@ function TopSongsLeaderboard({
             score: finalScore,
             countries,
             highestRank: song.highestRank,
-            globalRank: song.globalRank,
-            usRank: song.usRank,
-            europeRank: song.europeRank,
+            spotifyUsRank: song.spotifyUsRank,
+            spotifyEuropeRank: song.spotifyEuropeRank,
+            spotifyGlobalRank: song.spotifyGlobalRank,
+            youtubeRank: song.youtubeRank,
+            tiktokUsRank: song.tiktokUsRank,
+            tiktokGlobalRank: song.tiktokGlobalRank,
+            aggregateCount: song.aggregateCount,
             weeklyScore: song.weeklyScore,
             dailyMomentum: momentumMultiplier > 1 ? Math.round((momentumMultiplier - 1) * 100) : 0,
             appearances: song.appearances,
@@ -746,45 +808,7 @@ function TopSongsLeaderboard({
 
   return (
     <div>
-      <div className="flex flex-col gap-4 border-b border-zinc-800 bg-emerald-500 px-5 py-4 text-black lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.28em] text-black/70">
-            Weighted ranking
-          </p>
-          <h2 className="mt-1 text-2xl font-black">Top Songs</h2>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {[
-            { key: "global" as TopSongsBoard, label: "Top Global" },
-            { key: "us" as TopSongsBoard, label: "Top US" },
-            { key: "europe" as TopSongsBoard, label: "Top Europe" },
-          ].map((board) => (
-            <button
-              key={board.key}
-              type="button"
-              onClick={() => setActiveBoard(board.key)}
-              className={`rounded-full px-4 py-2 text-xs font-black transition ${
-                activeBoard === board.key
-                  ? "bg-black text-white"
-                  : "border border-black/20 bg-emerald-300 text-black hover:bg-emerald-200"
-              }`}
-            >
-              {board.label}
-            </button>
-          ))}
-
-          <button
-            type="button"
-            onClick={() => onAddCard(visibleItems)}
-            className="rounded-full bg-black px-4 py-2 text-xs font-black text-white transition hover:bg-zinc-900"
-          >
-            Add
-          </button>
-        </div>
-      </div>
-
-      <div className="max-h-[720px] overflow-y-auto p-4 trends-green-scrollbar">
+      <div className="max-h-[720px] overflow-y-auto trends-green-scrollbar">
         {isLoading ? (
           <div className="flex h-[320px] items-center justify-center text-sm font-bold text-zinc-500">
             Calculating scores...
@@ -799,61 +823,80 @@ function TopSongsLeaderboard({
             No scored songs available
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredSongs.map((song, index) => {
-              const item = visibleItems[index];
-              const isSelected = Boolean(selectedItems[item.id]);
+          <div className="overflow-x-auto rounded-2xl border border-zinc-800">
+            <table className="min-w-[1120px] w-full border-collapse text-left">
+              <thead className="bg-emerald-500 text-black">
+                <tr className="text-[10px] font-black uppercase tracking-[0.14em]">
+                  <th className="w-[46px] px-2.5 py-3">
+                    <input type="checkbox" disabled className="h-3.5 w-3.5 accent-black" aria-label="Select rows" />
+                  </th>
+                  <th className="px-2.5 py-3">Song</th>
+                  <th className="px-2.5 py-3">Artist</th>
+                  <th className="px-2.5 py-3 leading-tight">Spotify<br />US</th>
+                  <th className="px-2.5 py-3 leading-tight">Spotify<br />Europe</th>
+                  <th className="px-2.5 py-3 leading-tight">Spotify<br />Global</th>
+                  <th className="px-2.5 py-3 leading-tight">YouTube</th>
+                  <th className="px-2.5 py-3 leading-tight">TikTok<br />US</th>
+                  <th className="px-2.5 py-3 leading-tight">TikTok<br />Global</th>
+                  <th className="px-2.5 py-3">Aggregate</th>
+                </tr>
+              </thead>
 
-              return (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-zinc-800 bg-black/40 p-5 transition hover:border-emerald-500/40"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-400 text-base font-black text-black">
-                      {index + 1}
-                    </div>
+              <tbody>
+                {filteredSongs.map((song, index) => {
+                  const item = visibleItems[index];
+                  const isSelected = Boolean(selectedItems[item.id]);
 
-                    <div className="min-w-0 flex-1">
-                      <a
-                        href={buildSpotifySearchUrl({ position: index + 1, title: song.title, artist: song.artist })}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="break-words text-lg font-black leading-snug text-white transition hover:text-emerald-300"
-                      >
-                        {song.title} <span className="font-medium text-zinc-400">- {song.artist}</span>
-                      </a>
+                  return (
+                    <tr
+                      key={item.id}
+                      className="border-b border-zinc-900 bg-black/40 text-[12px] font-bold text-zinc-300 transition hover:bg-zinc-900/70"
+                    >
+                      <td className="px-2.5 py-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(event) => {
+                            if (event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey) {
+                              onRangeSelect(visibleItems, index);
+                              return;
+                            }
 
-                      <div className="mt-4 grid gap-3 text-[14px] font-bold text-zinc-400 md:grid-cols-4">
-                        <span>Score: <b className="text-emerald-300">{formatScore(song.score)}</b></span>
-                        <span>Countries: <b className="text-white">{song.countries.length}</b></span>
-                        <span>Highest: <b className="text-white">#{song.highestRank}</b></span>
-                        <span>Momentum: <b className="text-white">+{song.dailyMomentum}%</b></span>
-                        <span>Global: <b className="text-white">{song.globalRank ? `#${song.globalRank}` : "-"}</b></span>
-                        <span>US: <b className="text-white">{song.usRank ? `#${song.usRank}` : "-"}</b></span>
-                        <span>Europe: <b className="text-white">{song.europeRank ? `#${song.europeRank}` : "-"}</b></span>
-                        <span>Weekly: <b className="text-white">{formatScore(song.weeklyScore)}</b></span>
-                      </div>
-                    </div>
+                            onToggleItem(item, event.target.checked, index);
+                          }}
+                          className="h-3.5 w-3.5 accent-emerald-400"
+                          aria-label={`Select ${song.title}`}
+                        />
+                      </td>
 
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={(event) => {
-                        if (event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey) {
-                          onRangeSelect(visibleItems, index);
-                          return;
-                        }
+                      <td className="max-w-[220px] px-2.5 py-3">
+                        <a
+                          href={buildSpotifySearchUrl({
+                            position: index + 1,
+                            title: song.title,
+                            artist: song.artist,
+                          })}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[12px] font-black text-white transition hover:text-emerald-300"
+                        >
+                          {song.title}
+                        </a>
+                      </td>
 
-                        onToggleItem(item, event.target.checked, index);
-                      }}
-                      className="mt-2 h-5 w-5 shrink-0 accent-emerald-400"
-                      aria-label={`Select ${song.title}`}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                      <td className="max-w-[160px] px-2.5 py-3 text-zinc-400">{song.artist}</td>
+                      <td className="px-2.5 py-3">{song.spotifyUsRank ? `#${song.spotifyUsRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.spotifyEuropeRank ? `#${song.spotifyEuropeRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.spotifyGlobalRank ? `#${song.spotifyGlobalRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.youtubeRank ? `#${song.youtubeRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.tiktokUsRank ? `#${song.tiktokUsRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.tiktokGlobalRank ? `#${song.tiktokGlobalRank}` : "-"}</td>
+                      <td className="px-2.5 py-3">{song.aggregateCount} charts</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
