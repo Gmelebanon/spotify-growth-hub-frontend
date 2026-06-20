@@ -816,7 +816,7 @@ function TopSongsLeaderboard({
 
                     <div className="min-w-0 flex-1">
                       <a
-                        href={buildSpotifySearchUrl(song)}
+                        href={buildSpotifySearchUrl({ position: index + 1, title: song.title, artist: song.artist })}
                         target="_blank"
                         rel="noreferrer"
                         className="break-words text-lg font-black leading-snug text-white transition hover:text-emerald-300"
