@@ -6,7 +6,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
 
-type PlatformKey = "spotify" | "youtube" | "aggregate" | "tiktok";
+type PlatformKey = "allPlatforms" | "spotify" | "youtube" | "aggregate" | "tiktok";
 
 type TrendRow = {
   position: number;
@@ -40,10 +40,11 @@ type ChartConfig = {
 };
 
 const MAIN_TABS: { key: PlatformKey; label: string; eyebrow: string }[] = [
+  { key: "allPlatforms", label: "All Platforms", eyebrow: "Overview" },
   { key: "spotify", label: "Spotify", eyebrow: "Streams" },
   { key: "youtube", label: "YouTube", eyebrow: "Views" },
   { key: "tiktok", label: "TikTok", eyebrow: "Creations" },
-  { key: "aggregate", label: "Aggregate", eyebrow: "All platforms" },
+  { key: "aggregate", label: "Aggregate", eyebrow: "Global" },
 ];
 
 const COUNTRY_LIST = [
@@ -200,15 +201,6 @@ function rowKey(row: TrendRow, index: number) {
   return `${row.position}-${row.artist}-${row.title}-${index}`;
 }
 
-function buildSpotifySearchUrl(row: TrendRow) {
-  const query = [row.title, row.artist]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-
-  return `https://open.spotify.com/search/${encodeURIComponent(query || row.title || "")}`;
-}
-
 function formatLastSync(value: string | null) {
   if (!value) return "Not synced yet";
 
@@ -312,20 +304,16 @@ function TrackCard({
           </div>
         ) : (
           filteredRows.slice(0, 100).map((row, index) => (
-            <a
+            <div
               key={rowKey(row, index)}
-              href={buildSpotifySearchUrl(row)}
-              target="_blank"
-              rel="noreferrer"
-              className="flex min-h-[46px] items-center border-b border-zinc-900 py-[9px] transition hover:bg-zinc-900/60 hover:text-emerald-300"
-              title={`Open ${row.title || "song"} on Spotify`}
+              className="flex min-h-[46px] items-center border-b border-zinc-900 py-[9px] transition hover:bg-zinc-900/60"
             >
-              <p className="text-left text-[13px] font-black leading-[1.35] text-white transition hover:text-emerald-300">
+              <p className="text-left text-[13px] font-black leading-[1.35] text-white">
                 <span className="text-emerald-300">{row.position}</span>{" "}
                 {row.title || "-"}{" "}
                 <span className="font-medium text-zinc-400">- {row.artist || "-"}</span>
               </p>
-            </a>
+            </div>
           ))
         )}
       </div>
@@ -462,17 +450,18 @@ function AggregateTable({
 }
 
 export default function TrendsPage() {
-  const [activeTab, setActiveTab] = useState<PlatformKey>("spotify");
+  const [activeTab, setActiveTab] = useState<PlatformKey>("allPlatforms");
   const [searchQuery, setSearchQuery] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [lastSync, setLastSync] = useState<string | null>(null);
 
   const cards = useMemo(() => buildCards(activeTab), [activeTab]);
 
-  const cardGridClass =
-    activeTab === "aggregate"
-      ? "grid gap-4 sm:grid-cols-2"
-      : "grid gap-4 sm:grid-cols-2 xl:grid-cols-4";
+  const isOverviewTab = activeTab === "allPlatforms" || activeTab === "aggregate";
+
+  const cardGridClass = isOverviewTab
+    ? "grid gap-4 sm:grid-cols-2"
+    : "grid gap-4 sm:grid-cols-2 xl:grid-cols-4";
 
   const handleSynced = useCallback((value: string) => {
     setLastSync((current) => {
@@ -494,7 +483,7 @@ export default function TrendsPage() {
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h1 className="text-4xl font-black tracking-tight text-white">
-              Trends
+              Social Trends
             </h1>
           </div>
 
@@ -525,7 +514,7 @@ export default function TrendsPage() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-4">
+        <div className="mt-6 grid gap-3 md:grid-cols-5">
           {MAIN_TABS.map((tab) => {
             const isActive = tab.key === activeTab;
 
@@ -553,7 +542,7 @@ export default function TrendsPage() {
           })}
         </div>
 
-        {activeTab === "aggregate" ? (
+        {isOverviewTab ? (
           <AggregateTable
             searchQuery={searchQuery}
             refreshKey={refreshKey}
