@@ -948,7 +948,7 @@ function AllPlatformsOverview({
         <div className="mt-5 max-h-[720px] space-y-4 overflow-y-auto pr-2 trends-green-scrollbar">
           {todoItems.length === 0 ? (
             <div className="rounded-2xl border border-zinc-800 bg-black/40 p-4 text-sm font-semibold text-zinc-500">
-              Select songs from Spotify, YouTube, or TikTok, then press Add or Send All.
+              Select songs from Spotify, YouTube, or TikTok, then press Add or Add All.
             </div>
           ) : (
             todoItems.map((item) => {
@@ -1450,7 +1450,7 @@ export default function TrendsPage() {
                     onClick={handleSendSelected}
                     className="h-[48px] min-h-[48px] whitespace-nowrap rounded-[14px] border border-emerald-500 bg-emerald-500 px-4 text-[14px] font-black text-black transition hover:bg-emerald-400"
                   >
-                    Send All
+                    Add All
                   </button>
 
                   <button
