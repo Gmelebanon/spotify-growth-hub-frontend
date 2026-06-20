@@ -1189,7 +1189,9 @@ export default function TrendsPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Error ${response.status}`);
+        const message = await response.text();
+        window.alert(`Could not add to To do list. ${message || `Error ${response.status}`}`);
+        return;
       }
 
       const data = (await response.json()) as { items: TrendTodoItem[] };
@@ -1217,7 +1219,9 @@ export default function TrendsPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Error ${response.status}`);
+        const message = await response.text();
+        window.alert(`Could not add to To do list. ${message || `Error ${response.status}`}`);
+        return;
       }
 
       const data = (await response.json()) as { items: TrendTodoItem[] };
