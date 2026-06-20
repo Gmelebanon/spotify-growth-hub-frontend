@@ -481,7 +481,7 @@ export default function TrendsPage() {
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h1 className="text-4xl font-black tracking-tight text-white">
-              Trends
+              Social Trends
             </h1>
           </div>
 

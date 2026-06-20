@@ -67,7 +67,9 @@ function WidgetCard({
   geo,
   time,
   height,
+  iframeHeight,
   retryKey,
+  scrollable = false,
 }: {
   title: string;
   type: WidgetType;
@@ -75,7 +77,9 @@ function WidgetCard({
   geo: string;
   time: string;
   height: number;
+  iframeHeight?: number;
   retryKey: number;
+  scrollable?: boolean;
 }) {
   const src = useMemo(
     () => buildWidgetUrl(type, query, geo, time, retryKey),
@@ -90,13 +94,20 @@ function WidgetCard({
         </p>
       </div>
 
-      <div className="overflow-hidden bg-white">
+      <div
+        className={`bg-white ${
+          scrollable
+            ? "google-trends-green-scrollbar overflow-y-auto"
+            : "overflow-hidden"
+        }`}
+        style={{ height }}
+      >
         <iframe
           key={`${type}-${src}`}
           title={title}
           src={src}
           className="block w-full border-0"
-          style={{ height }}
+          style={{ height: iframeHeight ?? height }}
           loading="eager"
           referrerPolicy="no-referrer-when-downgrade"
         />
@@ -134,6 +145,26 @@ export default function GoogleTrendsPage() {
 
   return (
     <main className="min-h-screen bg-black px-5 py-8 text-white sm:px-8">
+      <style jsx global>{`
+        .google-trends-green-scrollbar::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .google-trends-green-scrollbar::-webkit-scrollbar-track {
+          background: #e4e4e7;
+        }
+
+        .google-trends-green-scrollbar::-webkit-scrollbar-thumb {
+          background: #34d399;
+          border-radius: 999px;
+        }
+
+        .google-trends-green-scrollbar {
+          scrollbar-color: #34d399 #e4e4e7;
+          scrollbar-width: thin;
+        }
+      `}</style>
+
       <section className="mx-auto flex max-w-7xl flex-col gap-6">
         <div className="rounded-[28px] bg-zinc-950/90 p-6 shadow-[0_0_40px_rgba(0,0,0,0.35)]">
           <div>
@@ -210,7 +241,9 @@ export default function GoogleTrendsPage() {
               geo={geo}
               time={time}
               height={430}
+              iframeHeight={900}
               retryKey={retryKey}
+              scrollable
             />
 
             <WidgetCard
