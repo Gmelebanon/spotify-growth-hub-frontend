@@ -73,7 +73,8 @@ type ScoredSong = {
   spotifyUsRank: number | null;
   spotifyEuropeRank: number | null;
   spotifyGlobalRank: number | null;
-  youtubeRank: number | null;
+  youtubeUsRank: number | null;
+  youtubeGlobalRank: number | null;
   tiktokUsRank: number | null;
   tiktokGlobalRank: number | null;
   aggregateCount: number;
@@ -181,7 +182,7 @@ function getPlatformWeight(platform: PlatformKey) {
   if (platform === "spotify") return 1;
   if (platform === "youtube") return 0.7;
   if (platform === "tiktok") return 0.08;
-  return 0.4;
+  return 0.04;
 }
 
 function getConsistencyMultiplier(countryCount: number) {
@@ -192,6 +193,9 @@ function getConsistencyMultiplier(countryCount: number) {
 }
 
 function scoreChartContribution(row: TrendRow, config: ChartConfig) {
+  // Official model:
+  // Rank Score × Chart Type Weight × Country Aggregate Weight × Platform Weight.
+  // Platform weights: Spotify 1.00, YouTube 0.70, TikTok 0.08, Other combined 0.04.
   return (
     getRankScore(row.position) *
     getChartTypeWeight(config.view, config.platform) *
@@ -407,6 +411,7 @@ function TrackCard({
   onSynced,
   selectedItems,
   onToggleItem,
+  onToggleItems,
   onRangeSelect,
   onAddCard,
 }: {
@@ -416,6 +421,7 @@ function TrackCard({
   onSynced: (value: string) => void;
   selectedItems: Record<string, SelectedTrendItem>;
   onToggleItem: (item: SelectedTrendItem, checked: boolean, index: number) => void;
+  onToggleItems: (items: SelectedTrendItem[], checked: boolean) => void;
   onRangeSelect: (items: SelectedTrendItem[], index: number) => void;
   onAddCard: (items: SelectedTrendItem[]) => void;
 }) {
@@ -569,6 +575,7 @@ function TopSongsLeaderboard({
   onSynced,
   selectedItems,
   onToggleItem,
+  onToggleItems,
   onRangeSelect,
   onAddCard,
 }: {
@@ -577,6 +584,7 @@ function TopSongsLeaderboard({
   onSynced: (value: string) => void;
   selectedItems: Record<string, SelectedTrendItem>;
   onToggleItem: (item: SelectedTrendItem, checked: boolean, index: number) => void;
+  onToggleItems: (items: SelectedTrendItem[], checked: boolean) => void;
   onRangeSelect: (items: SelectedTrendItem[], index: number) => void;
   onAddCard: (items: SelectedTrendItem[]) => void;
 }) {
@@ -635,7 +643,8 @@ function TopSongsLeaderboard({
           spotifyUsRank: number | null;
           spotifyEuropeRank: number | null;
           spotifyGlobalRank: number | null;
-          youtubeRank: number | null;
+          youtubeUsRank: number | null;
+          youtubeGlobalRank: number | null;
           tiktokUsRank: number | null;
           tiktokGlobalRank: number | null;
           aggregateCount: number;
@@ -666,7 +675,8 @@ function TopSongsLeaderboard({
               spotifyUsRank: null,
               spotifyEuropeRank: null,
               spotifyGlobalRank: null,
-              youtubeRank: null,
+              youtubeUsRank: null,
+              youtubeGlobalRank: null,
               tiktokUsRank: null,
               tiktokGlobalRank: null,
               aggregateCount: 0,
@@ -709,9 +719,16 @@ function TopSongsLeaderboard({
                 : Math.min(existing.spotifyEuropeRank, row.position);
           }
 
-          if (config.platform === "youtube") {
-            existing.youtubeRank =
-              existing.youtubeRank === null ? row.position : Math.min(existing.youtubeRank, row.position);
+          if (config.platform === "youtube" && config.country === "us") {
+            existing.youtubeUsRank =
+              existing.youtubeUsRank === null ? row.position : Math.min(existing.youtubeUsRank, row.position);
+          }
+
+          if (config.platform === "youtube" && (config.country === "global" || config.country === "worldwide")) {
+            existing.youtubeGlobalRank =
+              existing.youtubeGlobalRank === null
+                ? row.position
+                : Math.min(existing.youtubeGlobalRank, row.position);
           }
 
           if (config.platform === "tiktok" && config.country === "us") {
@@ -760,7 +777,8 @@ function TopSongsLeaderboard({
             spotifyUsRank: song.spotifyUsRank,
             spotifyEuropeRank: song.spotifyEuropeRank,
             spotifyGlobalRank: song.spotifyGlobalRank,
-            youtubeRank: song.youtubeRank,
+            youtubeUsRank: song.youtubeUsRank,
+            youtubeGlobalRank: song.youtubeGlobalRank,
             tiktokUsRank: song.tiktokUsRank,
             tiktokGlobalRank: song.tiktokGlobalRank,
             aggregateCount: song.aggregateCount,
@@ -806,6 +824,9 @@ function TopSongsLeaderboard({
     [activeBoard, boardTitle, filteredSongs],
   );
 
+  const allVisibleSelected =
+    visibleItems.length > 0 && visibleItems.every((item) => Boolean(selectedItems[item.id]));
+
   return (
     <div>
       <div className="max-h-[720px] overflow-y-auto trends-green-scrollbar">
@@ -824,21 +845,27 @@ function TopSongsLeaderboard({
           </div>
         ) : (
           <div className="overflow-x-auto rounded-2xl border border-zinc-800">
-            <table className="min-w-[1120px] w-full border-collapse text-left">
+            <table className="min-w-[1080px] w-full border-collapse text-left">
               <thead className="bg-emerald-500 text-black">
                 <tr className="text-[10px] font-black uppercase tracking-[0.14em]">
-                  <th className="w-[46px] px-2.5 py-3">
-                    <input type="checkbox" disabled className="h-3.5 w-3.5 accent-black" aria-label="Select rows" />
+                  <th className="w-[38px] px-2 py-3">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={(event) => onToggleItems(visibleItems, event.target.checked)}
+                      className="h-3 w-3 accent-black"
+                      aria-label="Select all rows"
+                    />
                   </th>
-                  <th className="px-2.5 py-3">Song</th>
-                  <th className="px-2.5 py-3">Artist</th>
-                  <th className="px-2.5 py-3 leading-tight">Spotify<br />US</th>
-                  <th className="px-2.5 py-3 leading-tight">Spotify<br />Europe</th>
-                  <th className="px-2.5 py-3 leading-tight">Spotify<br />Global</th>
-                  <th className="px-2.5 py-3 leading-tight">YouTube</th>
-                  <th className="px-2.5 py-3 leading-tight">TikTok<br />US</th>
-                  <th className="px-2.5 py-3 leading-tight">TikTok<br />Global</th>
-                  <th className="px-2.5 py-3">Aggregate</th>
+                  <th className="px-2 py-3">Song</th>
+                  <th className="px-2 py-3">Artist</th>
+                  <th className="px-2 py-3 leading-tight">Spotify<br />US</th>
+                  <th className="px-2 py-3 leading-tight">Spotify<br />Europe</th>
+                  <th className="px-2 py-3 leading-tight">Spotify<br />Global</th>
+                  <th className="px-2 py-3 leading-tight">YouTube<br />US</th>
+                  <th className="px-2 py-3 leading-tight">YouTube<br />Global</th>
+                  <th className="px-2 py-3 leading-tight">TikTok<br />US</th>
+                  <th className="px-2 py-3 leading-tight">TikTok<br />Global</th>
                 </tr>
               </thead>
 
@@ -852,7 +879,7 @@ function TopSongsLeaderboard({
                       key={item.id}
                       className="border-b border-zinc-900 bg-black/40 text-[12px] font-bold text-zinc-300 transition hover:bg-zinc-900/70"
                     >
-                      <td className="px-2.5 py-3">
+                      <td className="px-2 py-3">
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -864,7 +891,7 @@ function TopSongsLeaderboard({
 
                             onToggleItem(item, event.target.checked, index);
                           }}
-                          className="h-3.5 w-3.5 accent-emerald-400"
+                          className="h-3 w-3 accent-emerald-400"
                           aria-label={`Select ${song.title}`}
                         />
                       </td>
@@ -885,13 +912,13 @@ function TopSongsLeaderboard({
                       </td>
 
                       <td className="max-w-[160px] px-2.5 py-3 text-zinc-400">{song.artist}</td>
-                      <td className="px-2.5 py-3">{song.spotifyUsRank ? `#${song.spotifyUsRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.spotifyEuropeRank ? `#${song.spotifyEuropeRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.spotifyGlobalRank ? `#${song.spotifyGlobalRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.youtubeRank ? `#${song.youtubeRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.tiktokUsRank ? `#${song.tiktokUsRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.tiktokGlobalRank ? `#${song.tiktokGlobalRank}` : "-"}</td>
-                      <td className="px-2.5 py-3">{song.aggregateCount} charts</td>
+                      <td className="px-2 py-3">{song.spotifyUsRank ? `#${song.spotifyUsRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.spotifyEuropeRank ? `#${song.spotifyEuropeRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.spotifyGlobalRank ? `#${song.spotifyGlobalRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.youtubeUsRank ? `#${song.youtubeUsRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.youtubeGlobalRank ? `#${song.youtubeGlobalRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.tiktokUsRank ? `#${song.tiktokUsRank}` : "-"}</td>
+                      <td className="px-2 py-3">{song.tiktokGlobalRank ? `#${song.tiktokGlobalRank}` : "-"}</td>
                     </tr>
                   );
                 })}
@@ -910,6 +937,7 @@ function AllPlatformsOverview({
   onSynced,
   selectedItems,
   onToggleItem,
+  onToggleItems,
   onRangeSelect,
   onAddCard,
   todoItems,
@@ -927,6 +955,7 @@ function AllPlatformsOverview({
   onSynced: (value: string) => void;
   selectedItems: Record<string, SelectedTrendItem>;
   onToggleItem: (item: SelectedTrendItem, checked: boolean, index: number) => void;
+  onToggleItems: (items: SelectedTrendItem[], checked: boolean) => void;
   onRangeSelect: (items: SelectedTrendItem[], index: number) => void;
   onAddCard: (items: SelectedTrendItem[]) => void;
   todoItems: TrendTodoItem[];
@@ -948,6 +977,7 @@ function AllPlatformsOverview({
           onSynced={onSynced}
           selectedItems={selectedItems}
           onToggleItem={onToggleItem}
+          onToggleItems={onToggleItems}
           onRangeSelect={onRangeSelect}
           onAddCard={onAddCard}
         />
@@ -1004,35 +1034,31 @@ function AllPlatformsOverview({
                     item.is_done ? "border-emerald-500/40 opacity-75" : "border-zinc-800"
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={(event) => onToggleTodoSelection(item.id, event.target.checked)}
-                      className="mt-1 h-4 w-4 shrink-0 accent-emerald-400"
+                      className="h-3.5 w-3.5 shrink-0 accent-emerald-400"
                       aria-label={`Select ${item.title}`}
                     />
 
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-black leading-snug text-white">
-                        {item.artist} - {item.title}
-                      </p>
-                      <p className="mt-2 text-xs font-semibold text-zinc-400">
-                        {item.card_title} · #{item.position} - Source
-                      </p>
-                      {item.is_done && (
-                        <p className="mt-1 text-[11px] font-black uppercase tracking-[0.18em] text-emerald-400">
-                          Done
-                        </p>
-                      )}
-                    </div>
+                    <p className="min-w-0 flex-1 truncate whitespace-nowrap text-sm font-black leading-none text-white">
+                      {item.artist} - {item.title}
+                    </p>
+
+                    {item.is_done && (
+                      <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-400">
+                        Done
+                      </span>
+                    )}
 
                     <div className="flex shrink-0 items-center gap-2">
                       {!item.is_done && (
                         <button
                           type="button"
                           onClick={() => onMarkTodoDone(item.id)}
-                          className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 transition hover:border-emerald-400 hover:text-emerald-300"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 text-xs text-zinc-300 transition hover:border-emerald-400 hover:text-emerald-300"
                           title="Mark done"
                         >
                           ✓
@@ -1042,7 +1068,7 @@ function AllPlatformsOverview({
                       <button
                         type="button"
                         onClick={() => onDeleteTodo(item.id)}
-                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 transition hover:border-red-400 hover:text-red-300"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 text-xs text-zinc-300 transition hover:border-red-400 hover:text-red-300"
                         title="Delete"
                       >
                         🗑
@@ -1322,6 +1348,27 @@ export default function TrendsPage() {
     [pushSelectionHistory],
   );
 
+  const handleToggleItems = useCallback(
+    (items: SelectedTrendItem[], checked: boolean) => {
+      pushSelectionHistory();
+
+      setSelectedItems((current) => {
+        const next = { ...current };
+
+        items.forEach((item) => {
+          if (checked) {
+            next[item.id] = item;
+          } else {
+            delete next[item.id];
+          }
+        });
+
+        return next;
+      });
+    },
+    [pushSelectionHistory],
+  );
+
   const handleRangeSelect = useCallback(
     (items: SelectedTrendItem[], index: number) => {
       const selectedItem = items[index];
@@ -1564,6 +1611,7 @@ export default function TrendsPage() {
             onSynced={handleSynced}
             selectedItems={selectedItems}
             onToggleItem={handleToggleItem}
+            onToggleItems={handleToggleItems}
             onRangeSelect={handleRangeSelect}
             onAddCard={handleAddCard}
             todoItems={todoItems}
