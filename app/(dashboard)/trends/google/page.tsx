@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+const FALLBACK_QUERY = "afro";
 const DEFAULT_QUERY = "";
 
 const GEO_OPTIONS = [
@@ -32,10 +33,10 @@ function normalizeKeywords(query: string) {
     .filter(Boolean)
     .slice(0, 5);
 
-  return keywords.length ? keywords : ["afro"];
+  return keywords.length ? keywords : [FALLBACK_QUERY];
 }
 
-function buildWidgetUrl(type: WidgetType, query: string, geo: string, time: string) {
+function buildWidgetUrl(type: WidgetType, query: string, geo: string, time: string, retryKey: number) {
   const comparisonItem = normalizeKeywords(query).map((keyword) => ({
     keyword,
     geo,
@@ -51,6 +52,9 @@ function buildWidgetUrl(type: WidgetType, query: string, geo: string, time: stri
   const params = new URLSearchParams({
     req: JSON.stringify(req),
     tz: "-180",
+    hl: "en-US",
+    // Cache-buster so Chrome does not keep a failed Google Trends iframe.
+    _: String(retryKey),
   });
 
   return `https://trends.google.com/trends/embed/explore/${type}?${params.toString()}`;
@@ -63,6 +67,7 @@ function WidgetCard({
   geo,
   time,
   height,
+  retryKey,
 }: {
   title: string;
   type: WidgetType;
@@ -70,10 +75,11 @@ function WidgetCard({
   geo: string;
   time: string;
   height: number;
+  retryKey: number;
 }) {
   const src = useMemo(
-    () => buildWidgetUrl(type, query, geo, time),
-    [geo, query, time, type],
+    () => buildWidgetUrl(type, query, geo, time, retryKey),
+    [geo, query, retryKey, time, type],
   );
 
   return (
@@ -86,12 +92,13 @@ function WidgetCard({
 
       <div className="overflow-hidden bg-white">
         <iframe
-          key={src}
+          key={`${type}-${src}`}
           title={title}
           src={src}
           className="block w-full border-0"
           style={{ height }}
-          loading="lazy"
+          loading="eager"
+          referrerPolicy="no-referrer-when-downgrade"
         />
       </div>
     </div>
@@ -102,6 +109,28 @@ export default function GoogleTrendsPage() {
   const [query, setQuery] = useState(DEFAULT_QUERY);
   const [geo, setGeo] = useState("");
   const [time, setTime] = useState("now 7-d");
+  const [retryKey, setRetryKey] = useState(0);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  useEffect(() => {
+    setRetryKey((value) => value + 1);
+  }, [query, geo, time]);
+
+  // Google Trends iframe occasionally returns a broken frame on first load.
+  // Auto-reload a few times so the user does not need to refresh the page manually.
+  useEffect(() => {
+    if (!isReady || retryKey > 4) return;
+
+    const timeout = window.setTimeout(() => {
+      setRetryKey((value) => value + 1);
+    }, 1800);
+
+    return () => window.clearTimeout(timeout);
+  }, [isReady, retryKey]);
 
   return (
     <main className="min-h-screen bg-black px-5 py-8 text-white sm:px-8">
@@ -162,43 +191,49 @@ export default function GoogleTrendsPage() {
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
-          <WidgetCard
-            title="Interest over time"
-            type="TIMESERIES"
-            query={query}
-            geo={geo}
-            time={time}
-            height={430}
-          />
+        {isReady && (
+          <div className="grid gap-6 xl:grid-cols-2">
+            <WidgetCard
+              title="Interest over time"
+              type="TIMESERIES"
+              query={query}
+              geo={geo}
+              time={time}
+              height={430}
+              retryKey={retryKey}
+            />
 
-          <WidgetCard
-            title="Interest by region"
-            type="GEO_MAP"
-            query={query}
-            geo={geo}
-            time={time}
-            height={430}
-          />
+            <WidgetCard
+              title="Interest by region"
+              type="GEO_MAP"
+              query={query}
+              geo={geo}
+              time={time}
+              height={430}
+              retryKey={retryKey}
+            />
 
-          <WidgetCard
-            title="Related queries"
-            type="RELATED_QUERIES"
-            query={query}
-            geo={geo}
-            time={time}
-            height={540}
-          />
+            <WidgetCard
+              title="Related queries"
+              type="RELATED_QUERIES"
+              query={query}
+              geo={geo}
+              time={time}
+              height={540}
+              retryKey={retryKey}
+            />
 
-          <WidgetCard
-            title="Related topics"
-            type="RELATED_TOPICS"
-            query={query}
-            geo={geo}
-            time={time}
-            height={540}
-          />
-        </div>
+            <WidgetCard
+              title="Related topics"
+              type="RELATED_TOPICS"
+              query={query}
+              geo={geo}
+              time={time}
+              height={540}
+              retryKey={retryKey}
+            />
+          </div>
+        )}
       </section>
     </main>
   );

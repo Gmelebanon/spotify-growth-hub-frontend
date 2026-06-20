@@ -21,7 +21,8 @@ const primaryNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: "▦" },
   { label: "My Artists", href: "/my-artists", icon: "♪" },
   { label: "Daily Growth", href: "/playlists", icon: "≡" },
-  { label: "Trends", href: "/trends", icon: "↗" },
+  { label: "Social Trends", href: "/trends", icon: "↗" },
+  { label: "Google Trends", href: "/trends/google", icon: "⌕" },
   { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
   { label: "Curation", href: "/curation", icon: "◇" },
 ];
@@ -51,7 +52,9 @@ function NavLink({
   collapsed: boolean;
 }) {
   const pathname = usePathname();
-  const isActive = pathname === href || pathname.startsWith(`${href}/`);
+  const isActive =
+    pathname === href ||
+    (href !== "/trends" && pathname.startsWith(`${href}/`));
 
   return (
     <Link
