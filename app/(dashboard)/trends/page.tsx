@@ -200,6 +200,15 @@ function rowKey(row: TrendRow, index: number) {
   return `${row.position}-${row.artist}-${row.title}-${index}`;
 }
 
+function buildSpotifySearchUrl(row: TrendRow) {
+  const query = [row.title, row.artist]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return `https://open.spotify.com/search/${encodeURIComponent(query || row.title || "")}`;
+}
+
 function formatLastSync(value: string | null) {
   if (!value) return "Not synced yet";
 
@@ -303,16 +312,20 @@ function TrackCard({
           </div>
         ) : (
           filteredRows.slice(0, 100).map((row, index) => (
-            <div
+            <a
               key={rowKey(row, index)}
-              className="flex min-h-[46px] items-center border-b border-zinc-900 py-[9px] transition hover:bg-zinc-900/60"
+              href={buildSpotifySearchUrl(row)}
+              target="_blank"
+              rel="noreferrer"
+              className="flex min-h-[46px] items-center border-b border-zinc-900 py-[9px] transition hover:bg-zinc-900/60 hover:text-emerald-300"
+              title={`Open ${row.title || "song"} on Spotify`}
             >
-              <p className="text-left text-[13px] font-black leading-[1.35] text-white">
+              <p className="text-left text-[13px] font-black leading-[1.35] text-white transition hover:text-emerald-300">
                 <span className="text-emerald-300">{row.position}</span>{" "}
                 {row.title || "-"}{" "}
                 <span className="font-medium text-zinc-400">- {row.artist || "-"}</span>
               </p>
-            </div>
+            </a>
           ))
         )}
       </div>
@@ -481,7 +494,7 @@ export default function TrendsPage() {
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h1 className="text-4xl font-black tracking-tight text-white">
-              Social Trends
+              Trends
             </h1>
           </div>
 
