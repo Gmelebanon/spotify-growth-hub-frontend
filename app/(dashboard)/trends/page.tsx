@@ -514,7 +514,7 @@ export default function TrendsPage() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-5">
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {MAIN_TABS.map((tab) => {
             const isActive = tab.key === activeTab;
 
@@ -523,7 +523,7 @@ export default function TrendsPage() {
                 key={tab.key}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
-                className={`rounded-2xl border p-4 text-left transition ${
+                className={`rounded-2xl border px-4 py-4 text-left transition ${
                   isActive
                     ? "border-emerald-400 bg-emerald-500 text-black shadow-lg shadow-emerald-950/40"
                     : "border-zinc-800 bg-zinc-950/80 text-white hover:border-emerald-500/50"
