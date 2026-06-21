@@ -1641,6 +1641,7 @@ export default function TrendsPage() {
                 onSynced={handleSynced}
                 selectedItems={selectedItems}
                 onToggleItem={handleToggleItem}
+                onToggleItems={handleToggleItems}
                 onRangeSelect={handleRangeSelect}
                 onAddCard={handleAddCard}
               />
