@@ -17,28 +17,34 @@ function SpotifyIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
-const primaryNavItems = [
-  { label: "Dashboard", href: "/dashboard", icon: "▦" },
-  { label: "My Artists", href: "/my-artists", icon: "♪" },
-  { label: "Daily Growth", href: "/playlists", icon: "≡" },
-  { label: "Social Trends", href: "/trends", icon: "↗" },
-  { label: "Google Trends", href: "/trends/google", icon: "⌕" },
-  { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
-  { label: "Curation", href: "/curation", icon: "◇" },
-];
-
-const middleNavItems = [
-  { label: "Playlists", href: "/ads", icon: "◉" },
-  { label: "Production", href: "/production", icon: "▷" },
-  { label: "Mashups", href: "/mashups", icon: "◫" },
-  { label: "Releases", href: "/scheduling", icon: "◌" },
-];
-
-const secondaryNavItems = [
-  { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
+const navSections = [
+  [{ label: "Dashboard", href: "/dashboard", icon: "▦" }],
+  [
+    { label: "Playlists", href: "/ads", icon: "◉" },
+    { label: "Playlists Daily", href: "/playlists", icon: "≡" },
+  ],
+  [
+    { label: "Releases", href: "/scheduling", icon: "◌" },
+    { label: "My Artists", href: "/my-artists", icon: "♪" },
+  ],
+  [
+    { label: "Curation", href: "/curation", icon: "◇" },
+    { label: "Playlist Manager", href: "/playlist-manager", icon: "▤" },
+  ],
+  [
+    { label: "Production", href: "/production", icon: "▷" },
+    { label: "Mashups", href: "/mashups", icon: "◫" },
+  ],
+  [
+    { label: "Song Trends", href: "/trends", icon: "↗" },
+    { label: "Keyword Trends", href: "/trends/google", icon: "⌕" },
+  ],
+  [
+    { label: "AI", href: "/ai", icon: "✦" },
     { label: "Trades", href: "/trades", icon: "↔" },
-  { label: "AI", href: "/ai", icon: "✦" },
-  { label: "Settings", href: "/settings", icon: "⚙" },
+    { label: "Song Metrics", href: "/song-metrics", icon: "⌁" },
+  ],
+  [{ label: "Settings", href: "/settings", icon: "⚙" }],
 ];
 
 function NavLink({
@@ -115,47 +121,23 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex flex-col">
-        <div className="flex flex-col gap-2">
-          {primaryNavItems.map((item) => (
-            <NavLink
-              key={item.href}
-              href={item.href}
-              label={item.label}
-              icon={item.icon}
-              collapsed={collapsed}
-            />
-          ))}
-        </div>
+        {navSections.map((section, sectionIndex) => (
+          <div key={sectionIndex}>
+            {sectionIndex > 0 && <Divider />}
 
-        <Divider />
-
-        <div className="flex flex-col gap-2">
-          {middleNavItems.map((item) => (
-            <NavLink
-              key={item.href}
-              href={item.href}
-              label={item.label}
-              icon={item.icon}
-              collapsed={collapsed}
-            />
-          ))}
-        </div>
-
-        <Divider />
-
-        <div className="flex flex-col gap-2">
-          {secondaryNavItems.map((item) => (
-            <div key={item.href}>
-              {item.label === "Settings" && <Divider />}
-              <NavLink
-                href={item.href}
-                label={item.label}
-                icon={item.icon}
-                collapsed={collapsed}
-              />
+            <div className="flex flex-col gap-2">
+              {section.map((item) => (
+                <NavLink
+                  key={item.href}
+                  href={item.href}
+                  label={item.label}
+                  icon={item.icon}
+                  collapsed={collapsed}
+                />
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </nav>
     </aside>
   );
