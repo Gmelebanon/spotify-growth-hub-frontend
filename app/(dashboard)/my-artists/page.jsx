@@ -53,12 +53,47 @@ function TrashIcon() {
     </svg>
   );
 }
+function DownloadIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M12 21V9" />
+      <path d="m7 14 5-5 5 5" />
+      <path d="M5 3h14" />
+    </svg>
+  );
+}
+
+
 
 function SortArrow({ active, direction }) {
-  if (!active) return <span className="ml-1 text-zinc-700">↕</span>;
+  if (!active) return <span className="ml-1 text-black/60">↕</span>;
 
   return (
-    <span className="ml-1 text-green-400">
+    <span className="ml-1 text-black">
       {direction === "asc" ? "↑" : "↓"}
     </span>
   );
@@ -69,6 +104,28 @@ function formatDaysAgo(daysAgo) {
   if (daysAgo === 0) return "Today";
   if (daysAgo === 1) return "1 day ago";
   return `${daysAgo} days ago`;
+}
+
+function formatManualUpdateAge(value) {
+  if (!value) return "Last Updated on —";
+
+  const updatedAt = new Date(value);
+
+  if (Number.isNaN(updatedAt.getTime())) {
+    return "Last Updated on uploaded date";
+  }
+
+  const dateText = updatedAt.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const now = new Date();
+  const diffMs = now.getTime() - updatedAt.getTime();
+  const days = Math.max(0, Math.floor(diffMs / 86400000));
+  const ageText = days === 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`;
+
+  return `Last Updated on ${dateText} - ${ageText}`;
 }
 
 function formatNumber(value) {
@@ -91,6 +148,34 @@ function formatDelta(value) {
   if (number < 0) return `-${formatNumber(Math.abs(number))}`;
 
   return "0";
+}
+
+function formatOptionalNumber(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) return "—";
+
+  return number.toLocaleString();
+}
+
+function formatOptionalPercent(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) return "—";
+
+  return `${number.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
+function formatCardPercent(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) return "0%";
+
+  return `${number.toLocaleString(undefined, {
+    maximumFractionDigits: 1,
+  })}%`;
 }
 
 function toNumber(value, fallback = 0) {
@@ -222,6 +307,35 @@ function getFollowers7DaysValue(artist) {
 
 function normalizeArtist(artist) {
   const artistId = artist.id || artist.artistId;
+  const streams = toNumber(artist.streams ?? artist.totalStreams ?? artist.total_streams, 0);
+  const totalTracks = toNumber(artist.totalTracks ?? artist.tracks ?? artist.total_tracks, 0);
+  const explicitStreamsPerTrack = toNumber(
+    artist.streamsPerTrack ??
+      artist.streams_per_track ??
+      artist.averageStreamsPerTrack ??
+      artist.average_streams_per_track,
+    null
+  );
+  const streamsPerTrack =
+    explicitStreamsPerTrack !== null
+      ? explicitStreamsPerTrack
+      : totalTracks > 0
+      ? Math.round(streams / totalTracks)
+      : null;
+  const radioDiscover = toNumber(
+    artist.radioDiscover ??
+      artist.radio_discover ??
+      artist.radioAndDiscover ??
+      artist.radio_and_discover ??
+      artist.radioDiscoverStreams ??
+      artist.radio_discover_streams ??
+      artist.discoverStreams ??
+      artist.discover_streams ??
+      artist.radio ??
+      artist.radioStreams ??
+      artist.radio_streams,
+    null
+  );
 
   return {
     id: artistId,
@@ -236,10 +350,31 @@ function normalizeArtist(artist) {
       artist.spotify_url ||
       artist.external_urls?.spotify ||
       `https://open.spotify.com/artist/${artistId}`,
-    streams: artist.streams || 0,
+    streams,
+    streamsPerTrack,
+    streamsPercent:
+      streams > 0 && streamsPerTrack !== null
+        ? (streamsPerTrack / streams) * 100
+        : null,
+    radioDiscover,
+    radioPercent:
+      streams > 0 && radioDiscover !== null
+        ? (radioDiscover / streams) * 100
+        : null,
+    manualGenre:
+      artist.manualGenre ||
+      artist.manual_genre ||
+      artist.genre ||
+      null,
+    manualDataUpdatedAt:
+      artist.manualDataUpdatedAt ||
+      artist.manual_data_updated_at ||
+      artist.manualUpdatedAt ||
+      artist.manual_updated_at ||
+      null,
     growthPercent: artist.growthPercent || artist.growth_percent || 0,
     totalReleases: artist.totalReleases || artist.releases || 0,
-    totalTracks: artist.totalTracks || artist.tracks || 0,
+    totalTracks,
     latestRelease: artist.latestRelease || null,
     recentReleases:
       artist.recentReleases || artist.recent_releases || artist.releases || [],
@@ -335,6 +470,209 @@ function getBackendBaseUrl() {
     "https://spotify-growth-hub-backend.onrender.com"
   );
 }
+function cleanSpotifyArtistId(value) {
+  if (!value) return "";
+
+  const trimmedValue = String(value).trim();
+
+  if (trimmedValue.includes("open.spotify.com/artist/")) {
+    return trimmedValue
+      .split("open.spotify.com/artist/")[1]
+      .split("?")[0]
+      .split("/")[0]
+      .trim();
+  }
+
+  if (trimmedValue.includes("spotify:artist:")) {
+    return trimmedValue
+      .split("spotify:artist:")[1]
+      .split("?")[0]
+      .split("/")[0]
+      .trim();
+  }
+
+  return trimmedValue.split("?")[0].split("/")[0].trim();
+}
+
+function isValidSpotifyArtistId(value) {
+  return /^[A-Za-z0-9]{22}$/.test(value);
+}
+
+function csvEscape(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function parseCsvText(text) {
+  const rows = [];
+  let current = "";
+  let row = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const nextCharacter = text[index + 1];
+
+    if (character === '"' && inQuotes && nextCharacter === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === "," && !inQuotes) {
+      row.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && nextCharacter === "\n") {
+        index += 1;
+      }
+
+      row.push(current.trim());
+      current = "";
+
+      if (row.some((cell) => cell !== "")) {
+        rows.push(row);
+      }
+
+      row = [];
+      continue;
+    }
+
+    current += character;
+  }
+
+  row.push(current.trim());
+
+  if (row.some((cell) => cell !== "")) {
+    rows.push(row);
+  }
+
+  if (rows.length === 0) return [];
+
+  const headers = rows[0].map((header) =>
+    String(header || "")
+      .replace(/^\ufeff/, "")
+      .replace(/\u00a0/g, " ")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+  );
+
+  return rows.slice(1).map((cells) => {
+    const record = {};
+
+    headers.forEach((header, index) => {
+      record[header] = cells[index] || "";
+    });
+
+    return record;
+  });
+}
+
+function normalizeManualNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const cleaned = String(value)
+    .replace(/%/g, "")
+    .replace(/,/g, "")
+    .trim();
+
+  const number = Number(cleaned);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeManualHeaderKey(value) {
+  return String(value || "")
+    .replace(/^\ufeff/, "")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function manualValue(row, keys) {
+  const entries = Object.entries(row).map(([key, value]) => [
+    normalizeManualHeaderKey(key),
+    value,
+  ]);
+
+  for (const key of keys) {
+    const normalizedKey = normalizeManualHeaderKey(key);
+    const exactMatch = entries.find(
+      ([entryKey, value]) => entryKey === normalizedKey && value !== ""
+    );
+
+    if (exactMatch) return exactMatch[1];
+  }
+
+  for (const key of keys) {
+    const normalizedKey = normalizeManualHeaderKey(key);
+    const fuzzyMatch = entries.find(([entryKey, value]) => {
+      if (value === "") return false;
+
+      return (
+        entryKey === normalizedKey ||
+        entryKey.startsWith(normalizedKey) ||
+        normalizedKey.startsWith(entryKey)
+      );
+    });
+
+    if (fuzzyMatch) return fuzzyMatch[1];
+  }
+
+  return "";
+}
+
+function normalizeArtistNameKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+// manual_data_fields_persisted: these fields are sent to /api/artist-library so the backend database can save them.
+function buildArtistDatabasePayload(artist) {
+  const normalizedArtist = normalizeArtist(artist);
+
+  return {
+    artistId: normalizedArtist.id,
+    name: normalizedArtist.name,
+    spotifyUrl: normalizedArtist.spotifyUrl,
+    image: normalizedArtist.image,
+    genres: normalizedArtist.genres || [],
+    streams: normalizedArtist.streams || 0,
+    streamsPerTrack: normalizedArtist.streamsPerTrack || 0,
+    streamsPercent: normalizedArtist.streamsPercent || 0,
+    genre: normalizedArtist.manualGenre || "",
+    streamsPerTrack: normalizedArtist.streamsPerTrack || 0,
+    radioDiscover: normalizedArtist.radioDiscover || 0,
+    manualDataUpdatedAt: normalizedArtist.manualDataUpdatedAt || null,
+    radioPercent: normalizedArtist.radioPercent || 0,
+    growthPercent: normalizedArtist.growthPercent || 0,
+    followers: normalizedArtist.followers || 0,
+    popularity: normalizedArtist.popularity || 0,
+    totalReleases: normalizedArtist.totalReleases || 0,
+    totalTracks: normalizedArtist.totalTracks || 0,
+    latestRelease: normalizedArtist.latestRelease || null,
+    recentReleases: normalizedArtist.recentReleases || [],
+  };
+}
+
+
 
 function ReleaseTracksModal({ release, onClose }) {
   useEffect(() => {
@@ -430,7 +768,7 @@ function ReleaseTracksModal({ release, onClose }) {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-start gap-3">
                   {track.duration ? (
                     <p className="text-xs text-zinc-500">{track.duration}</p>
                   ) : null}
@@ -836,7 +1174,7 @@ function SortableHeader({ label, sortKey, activeSortKey, sortDirection, onSort }
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        className="flex items-center gap-1 uppercase tracking-[0.16em] text-zinc-500 transition hover:text-green-400"
+        className="flex items-center gap-1 uppercase tracking-[0.16em] text-black transition hover:text-zinc-900"
       >
         {label}
         <SortArrow active={activeSortKey === sortKey} direction={sortDirection} />
@@ -860,9 +1198,9 @@ function ArtistsTable({
         {Array.from({ length: 8 }).map((_, index) => (
           <div
             key={index}
-            className="grid grid-cols-[70px_1.4fr_110px_100px_120px_100px_110px_120px_90px_90px_130px_80px] gap-4 border-b border-zinc-900 px-4 py-4 last:border-b-0"
+            className="grid grid-cols-[70px_1.4fr_120px_100px_110px_120px_110px_130px_100px_100px_90px_130px_80px] gap-4 border-b border-zinc-900 px-4 py-4 last:border-b-0"
           >
-            {Array.from({ length: 12 }).map((__, cellIndex) => (
+            {Array.from({ length: 13 }).map((__, cellIndex) => (
               <div
                 key={cellIndex}
                 className="h-5 animate-pulse rounded bg-zinc-900"
@@ -885,21 +1223,22 @@ function ArtistsTable({
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-zinc-900 bg-black [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-      <table className="min-w-[1320px] w-full border-collapse text-left text-sm">
-        <thead className="border-b border-zinc-900 bg-zinc-950 text-[11px]">
+      <table className="min-w-[1680px] w-full border-collapse text-left text-sm">
+        <thead className="border-b border-emerald-400 bg-green-400 text-[11px] text-black">
           <tr>
             <SortableHeader label="URL" sortKey="url" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Artist" sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Streams" sortKey="streams" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Growth" sortKey="growth" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Followers" sortKey="followers" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="7 Days" sortKey="followers7Days" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Popularity" sortKey="popularity" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Genre" sortKey="genre" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Releases" sortKey="releases" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Popularity" sortKey="popularity" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Streams" sortKey="streams" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Streams/Track" sortKey="streamsPerTrack" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Streams %" sortKey="streamsPercent" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Radio/Discover" sortKey="radioDiscover" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Radio %" sortKey="radioPercent" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="7 Days" sortKey="followers7Days" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Tracks" sortKey="tracks" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Latest" sortKey="latest" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <th className="px-4 py-4 font-semibold uppercase tracking-[0.16em] text-zinc-500">
+            <th className="px-4 py-4 font-semibold uppercase tracking-[0.16em] text-black">
               Actions
             </th>
           </tr>
@@ -909,10 +1248,7 @@ function ArtistsTable({
           {artists.map((artist) => {
             const growthNumber = Number(artist.growthPercent || 0);
             const followers7DaysNumber = Number(artist.followers7Days || 0);
-            const genre =
-              artist.genres && artist.genres.length > 0
-                ? artist.genres[0]
-                : "Spotify Artist";
+            const genre = artist.manualGenre || "—";
 
             return (
               <tr
@@ -974,24 +1310,50 @@ function ArtistsTable({
                   </Link>
                 </td>
 
+                <td className="px-4 py-4">
+                  <span className="rounded-lg border border-zinc-800 bg-black px-2 py-1 text-xs font-semibold text-zinc-300">
+                    {genre}
+                  </span>
+                </td>
+
+                <td className="px-4 py-4 font-semibold text-white">
+                  {artist.popularity}/100
+                </td>
+
                 <td className="px-4 py-4 font-semibold text-white">
                   {formatNumber(artist.streams)}
                 </td>
 
+                <td className="px-4 py-4 font-semibold text-white">
+                  {formatOptionalNumber(artist.streamsPerTrack)}
+                </td>
+
                 <td
                   className={`px-4 py-4 font-semibold ${
-                    growthNumber > 0
+                    Number(artist.streamsPercent || 0) > 0
                       ? "text-green-400"
-                      : growthNumber < 0
+                      : Number(artist.streamsPercent || 0) < 0
                       ? "text-red-400"
                       : "text-zinc-500"
                   }`}
                 >
-                  {formatGrowth(artist.growthPercent)}
+                  {formatOptionalPercent(artist.streamsPercent)}
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
-                  {formatNumber(artist.followers)}
+                  {formatOptionalNumber(artist.radioDiscover)}
+                </td>
+
+                <td
+                  className={`px-4 py-4 font-semibold ${
+                    Number(artist.radioPercent || 0) > 0
+                      ? "text-green-400"
+                      : Number(artist.radioPercent || 0) < 0
+                      ? "text-red-400"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {formatOptionalPercent(artist.radioPercent)}
                 </td>
 
                 <td
@@ -1004,20 +1366,6 @@ function ArtistsTable({
                   }`}
                 >
                   {formatDelta(artist.followers7Days)}
-                </td>
-
-                <td className="px-4 py-4 font-semibold text-white">
-                  {artist.popularity}/100
-                </td>
-
-                <td className="px-4 py-4">
-                  <span className="rounded-lg border border-zinc-800 bg-black px-2 py-1 text-xs font-semibold text-zinc-300">
-                    {genre}
-                  </span>
-                </td>
-
-                <td className="px-4 py-4 font-semibold text-white">
-                  {formatNumber(artist.totalReleases)}
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
@@ -1056,13 +1404,15 @@ export default function MyArtistsPage() {
   const [removedArtistIds, setRemovedArtistIds] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
   const [selectedRelease, setSelectedRelease] = useState(null);
-  const [sortKey, setSortKey] = useState("followers");
+  const [sortKey, setSortKey] = useState("streams");
   const [sortDirection, setSortDirection] = useState("desc");
   const [isAddArtistOpen, setIsAddArtistOpen] = useState(false);
+  const [isUploadingManualData, setIsUploadingManualData] = useState(false);
+  const [manualDataUpdatedAt, setManualDataUpdatedAt] = useState(null);
   const [toastMessage, setToastMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isNewReleasesOpen, setIsNewReleasesOpen] = useState(true);
+  const [isNewReleasesOpen, setIsNewReleasesOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   async function loadDatabaseArtists() {
@@ -1081,6 +1431,76 @@ export default function MyArtistsPage() {
     }
 
     return (data.artists || []).map(normalizeArtist);
+  }
+
+  async function loadManualArtistData() {
+    const backendBaseUrl = getBackendBaseUrl();
+
+    const response = await fetch(`${backendBaseUrl}/api/artist-library/manual-data`, {
+      cache: "no-store",
+    });
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+
+    return data.items || data.artists || [];
+  }
+
+  function applyManualDataToArtists(artistsToMerge, manualRows) {
+    const manualById = new Map();
+    const manualByName = new Map();
+
+    manualRows.forEach((row) => {
+      const normalizedRow = normalizeArtist({
+        id: row.artistId || row.artist_id || row.id,
+        artistId: row.artistId || row.artist_id || row.id,
+        name: row.name,
+        genre: row.genre,
+        popularity: row.popularity,
+        streams: row.streams,
+        streamsPerTrack: row.streamsPerTrack ?? row.streams_per_track,
+        radioDiscover: row.radioDiscover ?? row.radio_discover,
+        manualDataUpdatedAt:
+          row.manualDataUpdatedAt ||
+          row.manual_data_updated_at ||
+          row.updatedAt ||
+          row.updated_at,
+      });
+
+      if (normalizedRow.id) manualById.set(normalizedRow.id, normalizedRow);
+      if (normalizedRow.name) {
+        manualByName.set(normalizeArtistNameKey(normalizedRow.name), normalizedRow);
+      }
+    });
+
+    return artistsToMerge.map((artist) => {
+      const manual =
+        manualById.get(artist.id) ||
+        manualByName.get(normalizeArtistNameKey(artist.name));
+
+      if (!manual) return artist;
+
+      return normalizeArtist({
+        ...artist,
+        manualGenre: manual.manualGenre || artist.manualGenre || "",
+        popularity: manual.popularity || artist.popularity || 0,
+        streams: manual.streams || artist.streams || 0,
+        streamsPerTrack: manual.streamsPerTrack ?? artist.streamsPerTrack ?? null,
+        radioDiscover: manual.radioDiscover ?? artist.radioDiscover ?? null,
+        manualDataUpdatedAt: manual.manualDataUpdatedAt || artist.manualDataUpdatedAt || null,
+      });
+    });
+  }
+
+  function getLatestManualDataUpdate(artistsToCheck) {
+    const latest = artistsToCheck
+      .map((artist) => artist.manualDataUpdatedAt)
+      .filter(Boolean)
+      .sort()
+      .at(-1);
+
+    return latest || null;
   }
 
   async function syncFollowerSnapshots(artistsToSync) {
@@ -1122,21 +1542,7 @@ export default function MyArtistsPage() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        artistId: normalizedArtist.id,
-        name: normalizedArtist.name,
-        spotifyUrl: normalizedArtist.spotifyUrl,
-        image: normalizedArtist.image,
-        genres: normalizedArtist.genres || [],
-        streams: normalizedArtist.streams || 0,
-        growthPercent: normalizedArtist.growthPercent || 0,
-        followers: normalizedArtist.followers || 0,
-        popularity: normalizedArtist.popularity || 0,
-        totalReleases: normalizedArtist.totalReleases || 0,
-        totalTracks: normalizedArtist.totalTracks || 0,
-        latestRelease: normalizedArtist.latestRelease || null,
-        recentReleases: normalizedArtist.recentReleases || [],
-      }),
+      body: JSON.stringify(buildArtistDatabasePayload(normalizedArtist)),
     });
 
     const data = await response.json();
@@ -1241,9 +1647,12 @@ export default function MyArtistsPage() {
       }
 
       const nextDatabaseArtists = await loadDatabaseArtists();
+      const manualRows = await loadManualArtistData();
+      const mergedDatabaseArtists = applyManualDataToArtists(nextDatabaseArtists, manualRows);
 
-      setDatabaseArtists(nextDatabaseArtists);
-      setNewReleases(buildNewReleasesFromArtists(nextDatabaseArtists));
+      setDatabaseArtists(mergedDatabaseArtists);
+      setManualDataUpdatedAt(getLatestManualDataUpdate(mergedDatabaseArtists));
+      setNewReleases(buildNewReleasesFromArtists(mergedDatabaseArtists));
 
       const failedText =
         failed.length > 0
@@ -1304,11 +1713,15 @@ export default function MyArtistsPage() {
         setBaseArtists(nextBaseArtists);
 
         const nextDatabaseArtists = await loadDatabaseArtists();
-        setDatabaseArtists(nextDatabaseArtists);
+        const manualRows = await loadManualArtistData();
+        const mergedDatabaseArtists = applyManualDataToArtists(nextDatabaseArtists, manualRows);
+
+        setDatabaseArtists(mergedDatabaseArtists);
+        setManualDataUpdatedAt(getLatestManualDataUpdate(mergedDatabaseArtists));
         setNewReleases(
           mergeNewReleases(
             spotifyData.newReleases || [],
-            buildNewReleasesFromArtists(nextDatabaseArtists)
+            buildNewReleasesFromArtists(mergedDatabaseArtists)
           )
         );
 
@@ -1395,6 +1808,14 @@ export default function MyArtistsPage() {
     return {
       ...artist,
       streams: databaseArtist.streams || artist.streams || 0,
+      streamsPerTrack:
+        databaseArtist.streamsPerTrack || artist.streamsPerTrack || null,
+      streamsPercent:
+        databaseArtist.streamsPercent || artist.streamsPercent || null,
+      radioDiscover:
+        databaseArtist.radioDiscover || artist.radioDiscover || null,
+      radioPercent:
+        databaseArtist.radioPercent || artist.radioPercent || null,
       growthPercent:
         databaseArtist.growthPercent || artist.growthPercent || 0,
       followers: databaseArtist.followers || artist.followers || 0,
@@ -1403,10 +1824,10 @@ export default function MyArtistsPage() {
           ? databaseArtist.followers7Days
           : artist.followers7Days || 0,
       popularity: databaseArtist.popularity || artist.popularity || 0,
-      genres:
-        databaseArtist.genres && databaseArtist.genres.length > 0
-          ? databaseArtist.genres
-          : artist.genres || [],
+      genres: artist.genres || [],
+      manualGenre: databaseArtist.manualGenre || artist.manualGenre || null,
+      manualDataUpdatedAt:
+        databaseArtist.manualDataUpdatedAt || artist.manualDataUpdatedAt || null,
       totalReleases:
         databaseArtist.totalReleases || artist.totalReleases || 0,
       totalTracks:
@@ -1431,6 +1852,40 @@ export default function MyArtistsPage() {
     ...activeAddedArtists,
   ];
 
+  const genreSummaryCards = useMemo(() => {
+    const grouped = new Map();
+
+    artists.forEach((artist) => {
+      const genre = artist.manualGenre || null;
+
+      if (!genre) return;
+
+      const current =
+        grouped.get(genre) ||
+        {
+          genre,
+          tracks: 0,
+          streams: 0,
+          radioDiscover: 0,
+        };
+
+      current.tracks += Number(artist.totalTracks || 0);
+      current.streams += Number(artist.streams || 0);
+      current.radioDiscover += Number(artist.radioDiscover || 0);
+
+      grouped.set(genre, current);
+    });
+
+    return Array.from(grouped.values())
+      .map((item) => ({
+        ...item,
+        radioPercent: item.streams > 0 ? (item.radioDiscover / item.streams) * 100 : 0,
+        radioPerTrack: item.tracks > 0 ? item.radioDiscover / item.tracks : 0,
+      }))
+      .sort((a, b) => b.radioPercent - a.radioPercent)
+      .slice(0, 5);
+  }, [artists]);
+
   const sortedArtists = useMemo(() => {
     const nextArtists = [...artists];
 
@@ -1447,12 +1902,18 @@ export default function MyArtistsPage() {
       } else if (sortKey === "streams") {
         aValue = Number(a.streams || 0);
         bValue = Number(b.streams || 0);
-      } else if (sortKey === "growth") {
-        aValue = Number(a.growthPercent || 0);
-        bValue = Number(b.growthPercent || 0);
-      } else if (sortKey === "followers") {
-        aValue = Number(a.followers || 0);
-        bValue = Number(b.followers || 0);
+      } else if (sortKey === "streamsPerTrack") {
+        aValue = Number(a.streamsPerTrack || 0);
+        bValue = Number(b.streamsPerTrack || 0);
+      } else if (sortKey === "streamsPercent") {
+        aValue = Number(a.streamsPercent || 0);
+        bValue = Number(b.streamsPercent || 0);
+      } else if (sortKey === "radioDiscover") {
+        aValue = Number(a.radioDiscover || 0);
+        bValue = Number(b.radioDiscover || 0);
+      } else if (sortKey === "radioPercent") {
+        aValue = Number(a.radioPercent || 0);
+        bValue = Number(b.radioPercent || 0);
       } else if (sortKey === "followers7Days") {
         aValue = Number(a.followers7Days || 0);
         bValue = Number(b.followers7Days || 0);
@@ -1505,6 +1966,169 @@ export default function MyArtistsPage() {
     }
   }
 
+  function handleDownloadArtistsTable() {
+    const columns = [
+      "URL",
+      "Artist",
+      "Genre",
+      "Popularity",
+      "Streams",
+      "Streams/Track",
+      "Streams %",
+      "Radio/Discover",
+      "Radio %",
+      "7 Days",
+      "Tracks",
+      "Latest",
+    ];
+
+    const rows = sortedArtists.map((artist) => [
+      artist.spotifyUrl,
+      artist.name,
+      artist.manualGenre || "",
+      artist.popularity || 0,
+      artist.streams || 0,
+      artist.streamsPerTrack ?? "",
+      artist.streamsPercent ?? "",
+      artist.radioDiscover ?? "",
+      artist.radioPercent ?? "",
+      artist.followers7Days || 0,
+      artist.totalTracks || 0,
+      artist.latestRelease?.name || "",
+    ]);
+
+    const csv = [columns, ...rows]
+      .map((row) => row.map(csvEscape).join(","))
+      .join("\n");
+
+    const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "artist-table.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setToastMessage("Artist table downloaded.");
+  }
+
+  function findArtistForManualRow(row) {
+    const artistName = manualValue(row, ["artist", "artist name", "name", "spotify artist"]);
+    const url = manualValue(row, ["url", "spotify url", "spotify", "spotify artist url"]);
+    const artistIdFromUrl = cleanSpotifyArtistId(url);
+
+    if (artistIdFromUrl && isValidSpotifyArtistId(artistIdFromUrl)) {
+      const matchById = artists.find((artist) => artist.id === artistIdFromUrl);
+      if (matchById) return matchById;
+    }
+
+    const normalizedName = normalizeArtistNameKey(artistName);
+
+    if (!normalizedName) return null;
+
+    return (
+      artists.find((artist) => normalizeArtistNameKey(artist.name) === normalizedName) ||
+      artists.find((artist) => normalizeArtistNameKey(artist.name).includes(normalizedName)) ||
+      null
+    );
+  }
+
+  function buildManualArtistUpdate(artist, row) {
+    const genre = manualValue(row, [
+      "genre",
+      "manual genre",
+      "uploaded genre",
+      "primary genre",
+      "artist genre",
+      "genres",
+    ]);
+    const popularity = normalizeManualNumber(manualValue(row, ["popularity"]));
+    const streams = normalizeManualNumber(manualValue(row, ["streams"]));
+    const streamsPerTrack = normalizeManualNumber(
+      manualValue(row, ["streams/track", "streams per track", "streams track"])
+    );
+    const radioDiscover = normalizeManualNumber(
+      manualValue(row, ["radio/discover", "radio discover", "radio"])
+    );
+
+    return normalizeArtist({
+      ...artist,
+      manualGenre: genre || artist.manualGenre || "",
+      popularity: popularity ?? artist.popularity ?? 0,
+      streams: streams ?? artist.streams ?? 0,
+      streamsPerTrack: streamsPerTrack ?? artist.streamsPerTrack ?? null,
+      radioDiscover: radioDiscover ?? artist.radioDiscover ?? null,
+      manualDataUpdatedAt: new Date().toISOString(),
+    });
+  }
+
+  async function handleManualDataUpload(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    try {
+      setIsUploadingManualData(true);
+      setToastMessage("Uploading manual artist data...");
+
+      const text = await file.text();
+      const rows = parseCsvText(text);
+
+      if (rows.length === 0) {
+        throw new Error("The uploaded CSV is empty.");
+      }
+
+      const updates = rows
+        .map((row) => {
+          const artist = findArtistForManualRow(row);
+
+          if (!artist) return null;
+
+          return buildManualArtistUpdate(artist, row);
+        })
+        .filter(Boolean);
+
+      if (updates.length === 0) {
+        throw new Error("No matching artists found. Include Artist or URL in the CSV.");
+      }
+
+      const backendBaseUrl = getBackendBaseUrl();
+
+      const response = await fetch(`${backendBaseUrl}/api/artist-library/manual-data`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          artists: updates.map(buildArtistDatabasePayload),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "Could not save manual artist data.");
+      }
+
+      const nextDatabaseArtists = await loadDatabaseArtists();
+      const manualRows = await loadManualArtistData();
+      const mergedDatabaseArtists = applyManualDataToArtists(nextDatabaseArtists, manualRows);
+
+      setDatabaseArtists(mergedDatabaseArtists);
+      setManualDataUpdatedAt(getLatestManualDataUpdate(mergedDatabaseArtists));
+      setNewReleases(buildNewReleasesFromArtists(mergedDatabaseArtists));
+      setToastMessage(`Saved manual data for ${updates.length} artist${updates.length === 1 ? "" : "s"} to database.`);
+    } catch (error) {
+      setToastMessage(`Manual upload failed: ${error.message}`);
+    } finally {
+      setIsUploadingManualData(false);
+      event.target.value = "";
+    }
+  }
+
   async function handleAddArtist(artist) {
     const backendBaseUrl = getBackendBaseUrl();
 
@@ -1514,20 +2138,7 @@ export default function MyArtistsPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          artistId: artist.id,
-          name: artist.name,
-          spotifyUrl: artist.spotifyUrl,
-          image: artist.image,
-          genres: artist.genres || [],
-          streams: artist.streams || 0,
-          growthPercent: artist.growthPercent || 0,
-          followers: artist.followers || 0,
-          popularity: artist.popularity || 0,
-          totalReleases: artist.totalReleases || 0,
-          totalTracks: artist.totalTracks || 0,
-          latestRelease: artist.latestRelease || null,
-        }),
+        body: JSON.stringify(buildArtistDatabasePayload(artist)),
       });
 
       const data = await response.json();
@@ -1617,7 +2228,7 @@ export default function MyArtistsPage() {
       ) : null}
 
       <div className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-        <div>
+        <div className="w-full">
           <h1 className="text-3xl font-semibold tracking-tight">
             My Artists{" "}
             <span className="text-zinc-500">
@@ -1626,12 +2237,48 @@ export default function MyArtistsPage() {
           </h1>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Manage artists, track new releases, view release tracks, search
-            Spotify, and build a follower database.
+            {formatManualUpdateAge(manualDataUpdatedAt)}
           </p>
+
+          {genreSummaryCards.length > 0 ? (
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              {genreSummaryCards.map((card) => (
+                <div
+                  key={card.genre}
+                  className="min-h-[168px] rounded-2xl border border-zinc-800 bg-zinc-950/80 p-5 shadow-xl shadow-black/20"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="truncate text-base font-black text-white">{card.genre}</h3>
+                    <span className="shrink-0 rounded-full bg-green-400 px-3 py-1 text-xs font-black text-black">
+                      {formatCardPercent(card.radioPercent)}
+                    </span>
+                  </div>
+
+                  <div className="mt-5 space-y-2 text-sm font-semibold text-zinc-400">
+                    <div className="flex justify-between gap-3">
+                      <span>Tracks</span>
+                      <span className="text-white">{formatNumber(card.tracks)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Streams</span>
+                      <span className="text-white">{formatNumber(card.streams)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Radio/Discover</span>
+                      <span className="text-white">{formatNumber(card.radioDiscover)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Radio/Track</span>
+                      <span className="text-white">{formatNumber(Math.round(card.radioPerTrack))}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <button
             type="button"
             onClick={handleRefreshArtists}
@@ -1657,11 +2304,42 @@ export default function MyArtistsPage() {
 
           <button
             type="button"
-            onClick={() => setIsAddArtistOpen(true)}
-            className="w-fit rounded-xl bg-green-400 px-5 py-3 text-sm font-semibold text-black transition hover:bg-green-300"
+            onClick={handleDownloadArtistsTable}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-white transition hover:border-green-400/60 hover:text-green-400"
+            title="Download artist table"
+            aria-label="Download artist table"
           >
-            Add Artist
+            <DownloadIcon />
           </button>
+
+          <input
+            id="manual-artist-data-upload"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={handleManualDataUpload}
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            onClick={() => document.getElementById("manual-artist-data-upload")?.click()}
+            disabled={isUploadingManualData}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-white transition hover:border-green-400/60 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
+            title="Upload manual artist data"
+            aria-label="Upload manual artist data"
+          >
+            <UploadIcon />
+          </button>
+
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              onClick={() => setIsAddArtistOpen(true)}
+              className="flex h-11 min-w-[104px] items-center justify-center whitespace-nowrap rounded-xl bg-green-400 px-4 text-sm font-semibold text-black transition hover:bg-green-300"
+            >
+              Add Artist
+            </button>
+          </div>
         </div>
       </div>
 
