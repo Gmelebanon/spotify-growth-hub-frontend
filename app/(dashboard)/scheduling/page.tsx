@@ -157,16 +157,61 @@ function formatDateForInput(value: string) {
   return `${year}-${month}-${day}`;
 }
 
-function statusForRow(row: SchedulingRow, onlineSongs: Set<string>) {
-  const songKey = row.song.trim().toLowerCase();
+function normalizeMatchKey(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function artistSongMatchKey(artist: string, song: string) {
+  const artistKey = normalizeMatchKey(artist);
+  const songKey = normalizeMatchKey(song);
+
+  if (!artistKey || !songKey) return "";
+
+  return `${artistKey}|||${songKey}`;
+}
+
+function artistValueFromRecord(record: Record<string, unknown>) {
+  const directArtist = String(
+    record.artist ||
+      record.artistName ||
+      record.artist_name ||
+      record.primaryArtist ||
+      record.primary_artist ||
+      "",
+  ).trim();
+
+  if (directArtist) return directArtist;
+
+  if (Array.isArray(record.artists) && record.artists.length > 0) {
+    const firstArtist = record.artists[0];
+
+    if (typeof firstArtist === "string") return firstArtist;
+
+    if (firstArtist && typeof firstArtist === "object") {
+      const artistRecord = firstArtist as Record<string, unknown>;
+      return String(artistRecord.name || artistRecord.artist || "").trim();
+    }
+  }
+
+  return "";
+}
+
+function statusForRow(row: SchedulingRow, onlineSongKeys: Set<string>) {
   const storedPlatformStatus = String(row.platform_status || "").trim().toLowerCase();
   const storedStatus = String(row.status || "").trim();
+  const matchKey = artistSongMatchKey(row.artist, row.song);
 
-  if (
-    storedStatus === "Online" ||
-    storedPlatformStatus === "online" ||
-    (songKey && onlineSongs.has(songKey))
-  ) {
+  if (storedStatus === "Online" || storedPlatformStatus === "online") {
+    return "Online";
+  }
+
+  // Auto-online only when BOTH artist and song match an existing online reference.
+  // This prevents new songs with the same title but a different artist from being
+  // incorrectly marked Online.
+  if (!storedStatus && matchKey && onlineSongKeys.has(matchKey)) {
     return "Online";
   }
 
@@ -196,7 +241,7 @@ export default function SchedulingPage() {
   const [openFilterField, setOpenFilterField] = useState<TextField | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Partial<Record<TextField, HeaderFilterDraft>>>({});
   const [activeFilters, setActiveFilters] = useState<Partial<Record<TextField, string[]>>>({});
-  const [onlineSongs, setOnlineSongs] = useState<Set<string>>(new Set());
+  const [onlineSongKeys, setOnlineSongKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingNewRow, setIsSavingNewRow] = useState(false);
@@ -239,9 +284,11 @@ export default function SchedulingPage() {
           const songValue = String(
             record.song || record.track || record.title || record.name || "",
           ).trim();
+          const artistValue = artistValueFromRecord(record);
+          const matchKey = artistSongMatchKey(artistValue, songValue);
 
-          if (songValue) {
-            next.add(songValue.toLowerCase());
+          if (matchKey) {
+            next.add(matchKey);
           }
 
           Object.values(record).forEach((child) => {
@@ -261,7 +308,7 @@ export default function SchedulingPage() {
       tryRead(`${API_BASE_URL}/api/my-artists`),
     ]);
 
-    setOnlineSongs(next);
+    setOnlineSongKeys(next);
   }, []);
 
   const loadRows = useCallback(async () => {
@@ -476,7 +523,7 @@ export default function SchedulingPage() {
             row.song,
             row.album,
             row.genre,
-            statusForRow(row, onlineSongs),
+            statusForRow(row, onlineSongKeys),
             row.rn_account,
             row.remarks,
           ]
@@ -493,7 +540,7 @@ export default function SchedulingPage() {
 
         const value =
           column.field === "status"
-            ? statusForRow(row, onlineSongs)
+            ? statusForRow(row, onlineSongKeys)
             : String(row[column.field] || "");
 
         return selectedValues.includes(value || "(Blanks)");
@@ -503,11 +550,11 @@ export default function SchedulingPage() {
     return [...filtered].sort((a, b) => {
       const aRaw =
         sortField === "status"
-          ? statusForRow(a, onlineSongs)
+          ? statusForRow(a, onlineSongKeys)
           : String(a[sortField] || "");
       const bRaw =
         sortField === "status"
-          ? statusForRow(b, onlineSongs)
+          ? statusForRow(b, onlineSongKeys)
           : String(b[sortField] || "");
 
       const result = aRaw.toLowerCase().localeCompare(bRaw.toLowerCase(), undefined, {
@@ -517,7 +564,7 @@ export default function SchedulingPage() {
 
       return sortDirection === "asc" ? result : -result;
     });
-  }, [activeFilters, activeRows, onlineSongs, search, sortDirection, sortField]);
+  }, [activeFilters, activeRows, onlineSongKeys, search, sortDirection, sortField]);
 
   const selectedRows = useMemo(() => {
     const selected = new Set(selectedIds);
@@ -989,7 +1036,7 @@ export default function SchedulingPage() {
       const column = COLUMNS.find((item) => item.field === field);
       const values = activeRows.map((row) =>
         field === "status"
-          ? statusForRow(row, onlineSongs) || "(Blanks)"
+          ? statusForRow(row, onlineSongKeys) || "(Blanks)"
           : String(row[field] || "") || "(Blanks)",
       );
 
@@ -1007,7 +1054,7 @@ export default function SchedulingPage() {
         a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
       );
     },
-    [activeRows, onlineSongs],
+    [activeRows, onlineSongKeys],
   );
 
   const openHeaderFilter = useCallback(
@@ -1294,7 +1341,7 @@ export default function SchedulingPage() {
       COLUMNS.map((column) => {
         const value =
           column.field === "status"
-            ? statusForRow(row, onlineSongs)
+            ? statusForRow(row, onlineSongKeys)
             : String(row[column.field] || "");
         return `"${value.replace(/"/g, '""')}"`;
       }).join(","),
@@ -1308,7 +1355,7 @@ export default function SchedulingPage() {
     link.download = `${activeSheet?.name || "all-distribution"}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  }, [activeRows, activeSheet?.name, onlineSongs]);
+  }, [activeRows, activeSheet?.name, onlineSongKeys]);
 
   const deleteCurrentSheet = useCallback(async () => {
     if (!activeSheet) return;
@@ -1853,7 +1900,7 @@ export default function SchedulingPage() {
 
               {!isLoading &&
                 filteredRows.map((row, index) => {
-                  const effectiveStatus = statusForRow(row, onlineSongs);
+                  const effectiveStatus = statusForRow(row, onlineSongKeys);
                   const statusText = statusTextClass(effectiveStatus);
 
                   return (
@@ -1876,13 +1923,13 @@ export default function SchedulingPage() {
                         <td key={column.field} className="px-4 py-3 align-middle">
                           {column.type === "status" ? (
                             <select
-                              value={statusForRow(row, onlineSongs) || ""}
+                              value={statusForRow(row, onlineSongKeys) || ""}
                               onChange={(event) =>
                                 saveRowField(row, column.field, event.target.value)
                               }
                               onKeyDown={handleKeyDownBlur}
                               className={`schedule-status-select h-9 w-full rounded-lg border border-transparent bg-black px-2 text-sm font-bold outline-none hover:border-zinc-800 focus:border-green-500 ${statusTextClass(
-                                statusForRow(row, onlineSongs),
+                                statusForRow(row, onlineSongKeys),
                               )}`}
                             >
                               <option value="">-</option>
