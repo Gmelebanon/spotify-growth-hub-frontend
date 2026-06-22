@@ -217,6 +217,41 @@ function statusForRow(row: SchedulingRow, onlineSongKeys: Set<string>) {
 
   return storedStatus;
 }
+async function patchSchedulingRow(
+  rowId: number,
+  field: TextField | "is_selected",
+  value: string | boolean,
+) {
+  const payload = JSON.stringify({ field, value });
+  const requests = [
+    `${API_BASE_URL}/api/scheduling/rows/${rowId}`,
+    `${API_BASE_URL}/api/scheduling/${rowId}`,
+  ];
+
+  let lastError = "Failed to save row.";
+
+  for (const url of requests) {
+    try {
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      });
+
+      if (response.ok) {
+        return (await response.json()) as SchedulingRow;
+      }
+
+      const text = await response.text();
+      lastError = text || `Error ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : lastError;
+    }
+  }
+
+  throw new Error(lastError);
+}
+
 
 export default function SchedulingPage() {
   const [sheets, setSheets] = useState<SchedulingSheet[]>([]);
@@ -321,7 +356,7 @@ export default function SchedulingPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to load distribution rows.");
+        throw new Error("Failed to load release rows.");
       }
 
       const data = (await response.json()) as SchedulingPayload | SchedulingRow[];
@@ -340,7 +375,7 @@ export default function SchedulingPage() {
         setActiveSheetId((current) => current || latestSheet?.id || null);
       }
     } catch {
-      setError("Failed to load distribution.");
+      setError("Failed to load releases.");
     } finally {
       setIsLoading(false);
     }
@@ -612,20 +647,7 @@ export default function SchedulingPage() {
       updateRowLocal(row.id, field, nextValue);
 
       try {
-        const response = await fetch(`${API_BASE_URL}/api/scheduling/rows/${row.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            field,
-            value: nextValue,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to save row.");
-        }
-
-        const saved = (await response.json()) as SchedulingRow;
+        const saved = await patchSchedulingRow(row.id, field, nextValue);
         setRows((current) =>
           current.map((item) => (item.id === saved.id ? saved : item)),
         );
@@ -641,7 +663,7 @@ export default function SchedulingPage() {
         }
       } catch {
         updateRowLocal(row.id, field, previousValue);
-        setError("Failed to save distribution row.");
+        setError("Failed to save release row.");
       }
     },
     [pushUndo, updateRowLocal],
@@ -980,6 +1002,7 @@ export default function SchedulingPage() {
     async (field: "status" | "release_date", value: string) => {
       if (!value || selectedRows.length === 0) return;
 
+      const nextValue = normalizeValue(value) as string;
       const previousRows = selectedRows.map((row) => ({ ...row }));
 
       setRows((current) =>
@@ -987,41 +1010,53 @@ export default function SchedulingPage() {
           selectedIds.includes(row.id)
             ? {
                 ...row,
-                [field]: value,
+                [field]: nextValue,
               }
             : row,
         ),
       );
 
       try {
-        await Promise.all(
-          selectedRows.map((row) =>
-            fetch(`${API_BASE_URL}/api/scheduling/rows/${row.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                field,
-                value,
-              }),
-            }),
-          ),
+        const savedRows: SchedulingRow[] = [];
+
+        for (const row of selectedRows) {
+          const saved = await patchSchedulingRow(row.id, field, nextValue);
+          savedRows.push(saved);
+        }
+
+        setRows((current) =>
+          current.map((row) => {
+            const saved = savedRows.find((item) => item.id === row.id);
+            return saved || row;
+          }),
         );
 
-        pushUndo({
-          type: "delete",
-          rows: previousRows,
+        previousRows.forEach((previousRow) => {
+          pushUndo({
+            type: "edit",
+            rowId: previousRow.id,
+            field,
+            previousValue: previousRow[field],
+            nextValue,
+          });
         });
 
+        setError(null);
         setBulkStatus("");
         setBulkReleaseDate("");
-      } catch {
+      } catch (error) {
         setRows((current) =>
           current.map((row) => {
             const previous = previousRows.find((item) => item.id === row.id);
             return previous || row;
           }),
         );
-        setError("Failed to update selected rows.");
+
+        setError(
+          error instanceof Error
+            ? `Failed to update selected rows: ${error.message}`
+            : "Failed to update selected rows.",
+        );
       }
     },
     [pushUndo, selectedIds, selectedRows],
