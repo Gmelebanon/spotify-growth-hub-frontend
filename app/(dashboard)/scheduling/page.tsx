@@ -1382,7 +1382,7 @@ export default function SchedulingPage() {
         }
       `}</style>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <h1 className="text-3xl font-bold tracking-tight">Distribution</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Releases</h1>
 
         <div className="flex flex-wrap items-center gap-3">
           {undoStack.length > 0 ? (
