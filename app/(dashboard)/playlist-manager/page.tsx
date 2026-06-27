@@ -152,7 +152,10 @@ function normalizeState(
       ? raw.masterCurationBoxes
       : [],
     syncedPlaylists: Array.isArray(raw.syncedPlaylists)
-      ? raw.syncedPlaylists
+      ? raw.syncedPlaylists.map((playlist) => ({
+          ...playlist,
+          checked: true,
+        }))
       : [],
     masterPlaylistSyncHistory: Array.isArray(raw.masterPlaylistSyncHistory)
       ? raw.masterPlaylistSyncHistory
@@ -1118,7 +1121,7 @@ export default function PlaylistManagerPage() {
                 selected.spotify_id ||
                 selected.spotify_playlist_id ||
                 extractSpotifyPlaylistId(selected.spotify_url || ""),
-              checked: false,
+              checked: true,
               lastSyncedAt: null,
             },
           ],
@@ -1314,7 +1317,7 @@ export default function PlaylistManagerPage() {
               syncedPlaylist.spotify_id ||
               syncedPlaylist.spotify_playlist_id ||
               extractSpotifyPlaylistId(syncedPlaylist.spotify_url || syncedValue),
-            checked: false,
+            checked: true,
             lastSyncedAt: null,
           });
           importedSynced += 1;
@@ -1669,7 +1672,7 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
           ...state,
           syncedPlaylists: state.syncedPlaylists.map((playlist) =>
             playlist.id === localSyncedId
-              ? { ...playlist, lastSyncedAt: now, checked: false }
+              ? { ...playlist, lastSyncedAt: now, checked: true }
               : playlist,
           ),
         });
@@ -1755,7 +1758,7 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
           updatedSynced[updatedIndex] = {
             ...updatedSynced[updatedIndex],
             lastSyncedAt: now,
-            checked: false,
+            checked: true,
           };
         }
       } catch {
