@@ -600,6 +600,43 @@ function reorderItems<T>(items: T[], fromIndex: number, toIndex: number): T[] {
   return output;
 }
 
+function reorderSelectedItems<T>(
+  items: T[],
+  selectedIndexes: number[],
+  draggedIndex: number,
+  targetIndex: number,
+): T[] {
+  const uniqueSelectedIndexes = Array.from(new Set(selectedIndexes)).sort((a, b) => a - b);
+
+  if (
+    draggedIndex < 0 ||
+    targetIndex < 0 ||
+    draggedIndex >= items.length ||
+    targetIndex >= items.length ||
+    uniqueSelectedIndexes.length === 0
+  ) {
+    return items;
+  }
+
+  if (uniqueSelectedIndexes.length === 1) {
+    return reorderItems(items, draggedIndex, targetIndex);
+  }
+
+  const selectedSet = new Set(uniqueSelectedIndexes);
+  const selectedItems = uniqueSelectedIndexes.map((index) => items[index]);
+  const remainingItems = items.filter((_, index) => !selectedSet.has(index));
+  const selectedBeforeTarget = uniqueSelectedIndexes.filter((index) => index < targetIndex).length;
+  const insertionIndex = Math.max(
+    0,
+    Math.min(targetIndex - selectedBeforeTarget, remainingItems.length),
+  );
+
+  const next = [...remainingItems];
+  next.splice(insertionIndex, 0, ...selectedItems);
+
+  return next;
+}
+
 function weightedShuffle<T>(items: T[]): T[] {
   const output = [...items];
   for (let index = output.length - 1; index > 0; index -= 1) {
@@ -1747,21 +1784,47 @@ function SideSection({
   };
 
   const reorderVisibleTrack = (targetIndex: number) => {
-    if (draggedTrackIndex === null || draggedTrackIndex === targetIndex) {
+    if (draggedTrackIndex === null) return;
+
+    const draggedTrackId = visibleTrackIds[draggedTrackIndex];
+    const selectedIndexes = tracks
+      .map((track, index) => ({
+        index,
+        id: getVisibleTrackId(track, index),
+      }))
+      .filter((item) => selectedTrackIds.includes(item.id))
+      .map((item) => item.index);
+    const indexesToMove = selectedTrackIds.includes(draggedTrackId)
+      ? selectedIndexes
+      : [draggedTrackIndex];
+
+    if (indexesToMove.length === 1 && draggedTrackIndex === targetIndex) {
       setDraggedTrackIndex(null);
       return;
     }
 
-    setImportedLinks((prev) => {
-      if ((prev ?? []).length === 0) return prev;
-      const reordered = reorderItems(tracks, draggedTrackIndex, targetIndex);
-      return (prev ?? []).map((item, index) =>
-        index === 0
-          ? { ...item, mergedTracks: reordered }
-          : { ...item, mergedTracks: [] },
-      );
-    });
+    const movedTracks = indexesToMove.map((index) => tracks[index]);
+    const reordered = reorderSelectedItems(
+      tracks,
+      indexesToMove,
+      draggedTrackIndex,
+      targetIndex,
+    );
 
+    setTrackUndoStack((current) => [...current, [...tracks]]);
+    replaceVisibleTracks(reordered);
+
+    const movedTrackSet = new Set(movedTracks);
+    setSelectedTrackIds(
+      reordered
+        .map((track, index) => ({
+          id: getVisibleTrackId(track, index),
+          track,
+        }))
+        .filter((item) => movedTrackSet.has(item.track))
+        .map((item) => item.id),
+    );
+    setLastSelectedTrackIndex(null);
     setDraggedTrackIndex(null);
   };
 
@@ -2141,11 +2204,17 @@ function SideSection({
                 <div
                   key={`${track.id}-${trackKey(track)}-${index}`}
                   draggable
-                  onDragStart={() => setDraggedTrackIndex(index)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    setDraggedTrackIndex(index);
+                  }}
                   onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => reorderVisibleTrack(index)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    reorderVisibleTrack(index);
+                  }}
                   onClick={(event) => handleVisibleTrackSelect(index, event.shiftKey)}
-                  className={`flex cursor-move items-center justify-between gap-3 rounded-xl border bg-zinc-950 px-4 py-3 ${selected ? "border-green-500" : "border-zinc-800"}`}
+                  className={`flex cursor-move touch-none select-none items-center justify-between gap-3 rounded-xl border bg-zinc-950 px-4 py-3 ${selected ? "border-green-500" : "border-zinc-800"}`}
                 >
                   <div className="flex min-w-0 items-center">
                     <button
