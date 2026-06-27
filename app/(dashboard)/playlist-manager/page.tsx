@@ -62,6 +62,8 @@ type SyncedPlaylistItem = {
   accountId: number;
   name: string;
   imageUrl: string | null;
+  spotifyUrl?: string | null;
+  spotifyId?: string | null;
   checked: boolean;
   lastSyncedAt: string | null;
 };
@@ -413,6 +415,40 @@ function findPlaylistByLink(playlists: FlatPlaylistItem[], value: string) {
       normalizeTextForMatch(playlist.name) === normalizedClean
     );
   });
+}
+
+function buildSpotifyPlaylistUrlFromId(value: string | null | undefined) {
+  const playlistId = value ? extractSpotifyPlaylistId(value) || String(value).trim() : "";
+
+  if (!playlistId) return null;
+
+  return `https://open.spotify.com/playlist/${playlistId}`;
+}
+
+function getSyncedPlaylistSpotifyUrl(
+  playlist: SyncedPlaylistItem,
+  allPlaylists: FlatPlaylistItem[],
+) {
+  const storedUrl = playlist.spotifyUrl || "";
+  const storedId = playlist.spotifyId || extractSpotifyPlaylistId(storedUrl);
+
+  if (storedUrl) return storedUrl;
+  if (storedId) return buildSpotifyPlaylistUrlFromId(storedId);
+
+  const matched = allPlaylists.find((item) => {
+    return (
+      Number(item.id) === Number(playlist.playlistId) &&
+      Number(item.accountId) === Number(playlist.accountId)
+    );
+  });
+
+  const matchedUrl = matched?.spotify_url || "";
+  const matchedId =
+    matched?.spotify_id ||
+    matched?.spotify_playlist_id ||
+    extractSpotifyPlaylistId(matchedUrl);
+
+  return matchedUrl || buildSpotifyPlaylistUrlFromId(matchedId);
 }
 
 function normalizeCsvHeader(value: string) {
@@ -1005,6 +1041,11 @@ export default function PlaylistManagerPage() {
               accountId: selected.accountId,
               name: selected.name,
               imageUrl: selected.image_url ?? null,
+              spotifyUrl: selected.spotify_url ?? null,
+              spotifyId:
+                selected.spotify_id ||
+                selected.spotify_playlist_id ||
+                extractSpotifyPlaylistId(selected.spotify_url || ""),
               checked: false,
               lastSyncedAt: null,
             },
@@ -1196,6 +1237,11 @@ export default function PlaylistManagerPage() {
             accountId: syncedPlaylist.accountId,
             name: syncedPlaylist.name,
             imageUrl: syncedPlaylist.image_url ?? null,
+            spotifyUrl: syncedPlaylist.spotify_url ?? null,
+            spotifyId:
+              syncedPlaylist.spotify_id ||
+              syncedPlaylist.spotify_playlist_id ||
+              extractSpotifyPlaylistId(syncedPlaylist.spotify_url || syncedValue),
             checked: false,
             lastSyncedAt: null,
           });
@@ -2107,7 +2153,18 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
                         }
                       />
 
-                      <div className="h-12 w-12 overflow-hidden rounded-lg bg-zinc-800">
+                      <a
+                        href={getSyncedPlaylistSpotifyUrl(playlist, allPlaylists) || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(event) => {
+                          if (!getSyncedPlaylistSpotifyUrl(playlist, allPlaylists)) {
+                            event.preventDefault();
+                          }
+                        }}
+                        className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-zinc-800 transition hover:ring-2 hover:ring-green-500"
+                        title="Open playlist on Spotify"
+                      >
                         {playlist.imageUrl ? (
                           <img
                             src={playlist.imageUrl}
@@ -2115,12 +2172,23 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
                             className="h-full w-full object-cover"
                           />
                         ) : null}
-                      </div>
+                      </a>
 
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-white">
+                        <a
+                          href={getSyncedPlaylistSpotifyUrl(playlist, allPlaylists) || "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(event) => {
+                            if (!getSyncedPlaylistSpotifyUrl(playlist, allPlaylists)) {
+                              event.preventDefault();
+                            }
+                          }}
+                          className="block truncate text-sm font-semibold text-white transition hover:text-green-400"
+                          title="Open playlist on Spotify"
+                        >
                           {playlist.name}
-                        </div>
+                        </a>
                         <div className="mt-1 text-xs text-zinc-500">
                           Last synced: {formatDateTime(playlist.lastSyncedAt)}
                         </div>
