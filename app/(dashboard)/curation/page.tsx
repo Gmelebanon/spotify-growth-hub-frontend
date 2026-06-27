@@ -2451,19 +2451,13 @@ function DuplicateGroupCard({
 
       <div className="space-y-2">
         {group.tracks.map((track, slotIndex) => {
-          // Find the Nth occurrence of this identity in displayedTracks so that
-          // each duplicate slot maps to its own position in the result list.
-          const identity = trackIdentity(track);
-          let occurrenceCount = 0;
-          const calculatedIndex = displayedTracks.findIndex((t) => {
-            if (trackIdentity(t) === identity) {
-              if (occurrenceCount === slotIndex) return true;
-              occurrenceCount += 1;
-            }
-            return false;
-          });
+          const originalIndex = group.originalIndexes?.[slotIndex];
+          const calculatedIndex =
+            typeof originalIndex === "number"
+              ? originalIndex
+              : displayedTracks.findIndex((displayedTrack) => displayedTrack === track);
           const displayNumber =
-            calculatedIndex >= 0 ? calculatedIndex + 1 : "?";
+            calculatedIndex >= 0 ? calculatedIndex + 1 : slotIndex + 1;
 
           return (
             <div
@@ -2472,8 +2466,11 @@ function DuplicateGroupCard({
             >
               <div className="flex min-w-0 items-center text-sm text-zinc-200">
                 <span className="mr-3 h-2.5 w-2.5 shrink-0 rounded-full bg-green-400" />
-                <span className="truncate">
-                  #{displayNumber} {formatTrackLine(track)}
+                <span className="mr-2 shrink-0 font-black text-green-300">
+                  #{displayNumber}
+                </span>
+                <span className="min-w-0 truncate">
+                  {formatTrackLine(track)}
                 </span>
               </div>
 
