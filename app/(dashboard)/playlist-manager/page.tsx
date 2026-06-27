@@ -395,6 +395,37 @@ function normalizeTextForMatch(value: string) {
     .replace(/[\u200B-\u200D\uFEFF]/g, "");
 }
 
+function smartPlaylistSortKey(value: string) {
+  return normalizeTextForMatch(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "")
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, "")
+    .replace(/[|•·–—_()[\]{}.,:;'"`~!?]+/g, " ")
+    .replace(/\b(the|a|an)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const playlistNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+  ignorePunctuation: true,
+});
+
+function smartPlaylistCompare(
+  first: SavedMasterPlaylistOption,
+  second: SavedMasterPlaylistOption,
+) {
+  const firstKey = smartPlaylistSortKey(first.name);
+  const secondKey = smartPlaylistSortKey(second.name);
+  const primary = playlistNameCollator.compare(firstKey, secondKey);
+
+  if (primary !== 0) return primary;
+
+  return playlistNameCollator.compare(first.name, second.name);
+}
+
 function findPlaylistByLink(playlists: FlatPlaylistItem[], value: string) {
   const clean = value.trim();
   const spotifyPlaylistId = extractSpotifyPlaylistId(clean);
@@ -865,9 +896,7 @@ export default function PlaylistManagerPage() {
   const importedSyncedCount = visibleSyncedPlaylists.length;
 
   const sortedSavedMasterPlaylists = useMemo(() => {
-    return [...state.savedMasterPlaylists].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    );
+    return [...state.savedMasterPlaylists].sort(smartPlaylistCompare);
   }, [state.savedMasterPlaylists]);
 
   const selectedTrackCount = useMemo(() => {
@@ -1832,22 +1861,10 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
 
           <div className="mt-6 rounded-2xl border border-zinc-800 bg-black p-5">
             <div className="flex items-start justify-between gap-5">
-              <div className="flex gap-5">
-                <div className="h-[150px] w-[150px] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
-                  {state.masterPlaylistImageUrl ? (
-                    <img
-                      src={state.masterPlaylistImageUrl}
-                      alt={state.masterPlaylistName}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : null}
-                </div>
-
-                <div>
-                  <h2 className="text-2xl font-semibold text-white">
-                    {state.masterPlaylistName || "No master playlist imported"}
-                  </h2>
-                </div>
+              <div className="min-w-0">
+                <h2 className="truncate text-2xl font-semibold text-white">
+                  {state.masterPlaylistName || "No master playlist imported"}
+                </h2>
               </div>
 
               <div className="text-right">
