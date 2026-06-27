@@ -355,6 +355,43 @@ function reorderTracks<T>(items: T[], fromIndex: number, toIndex: number): T[] {
   return next;
 }
 
+function reorderSelectedTracks<T>(
+  items: T[],
+  selectedIndexes: number[],
+  draggedIndex: number,
+  targetIndex: number,
+): T[] {
+  const uniqueSelectedIndexes = Array.from(new Set(selectedIndexes)).sort((a, b) => a - b);
+
+  if (
+    draggedIndex < 0 ||
+    targetIndex < 0 ||
+    draggedIndex >= items.length ||
+    targetIndex >= items.length ||
+    uniqueSelectedIndexes.length === 0
+  ) {
+    return items;
+  }
+
+  if (uniqueSelectedIndexes.length === 1) {
+    return reorderTracks(items, draggedIndex, targetIndex);
+  }
+
+  const selectedSet = new Set(uniqueSelectedIndexes);
+  const selectedItems = uniqueSelectedIndexes.map((index) => items[index]);
+  const remainingItems = items.filter((_, index) => !selectedSet.has(index));
+  const selectedBeforeTarget = uniqueSelectedIndexes.filter((index) => index < targetIndex).length;
+  const insertionIndex = Math.max(
+    0,
+    Math.min(targetIndex - selectedBeforeTarget, remainingItems.length),
+  );
+
+  const next = [...remainingItems];
+  next.splice(insertionIndex, 0, ...selectedItems);
+
+  return next;
+}
+
 function normalizeDraftTrack(track: Record<string, unknown>) {
   const source = track as Record<string, unknown>;
 
@@ -935,10 +972,16 @@ export default function PlaylistManagerPage() {
 
           if (existingSameDraft) return current;
 
+          const targetMasterName =
+            draft.target_master_playlist_name ||
+            current.savedMasterPlaylists.find((playlist) => playlist.id === targetMasterId)?.name ||
+            draft.curation_name ||
+            "Curation Draft";
+
           const nextBox: MasterCurationBox = {
             id: makeId("curation-box"),
             masterPlaylistId: targetMasterId,
-            curationName: draft.curation_name || "Curation Draft",
+            curationName: targetMasterName,
             createdAt: draft.created_at || new Date().toISOString(),
             tracks,
           };
@@ -1408,14 +1451,48 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
 
   const handleDropTrack = (targetIndex: number) => {
     if (!selectedCurationBox || trackDragIndex === null) return;
-    if (trackDragIndex === targetIndex) {
+
+    const tracks = selectedCurationBox.tracks;
+    const draggedKey = makeCurationTrackKey(tracks[trackDragIndex], trackDragIndex);
+    const selectedIndexes = tracks
+      .map((track, index) => ({
+        index,
+        key: makeCurationTrackKey(track, index),
+      }))
+      .filter((item) => selectedTrackKeys.has(item.key))
+      .map((item) => item.index);
+    const indexesToMove = selectedTrackKeys.has(draggedKey)
+      ? selectedIndexes
+      : [trackDragIndex];
+
+    if (indexesToMove.length === 1 && trackDragIndex === targetIndex) {
       setTrackDragIndex(null);
       return;
     }
 
-    updateSelectedCurationTracks(
-      reorderTracks(selectedCurationBox.tracks, trackDragIndex, targetIndex),
+    const nextTracks = reorderSelectedTracks(
+      tracks,
+      indexesToMove,
+      trackDragIndex,
+      targetIndex,
     );
+
+    setTrackUndoStack((current) => [...current, tracks]);
+    updateSelectedCurationTracks(nextTracks);
+
+    const movedTrackIds = new Set(indexesToMove.map((index) => tracks[index]?.id));
+    setSelectedTrackKeys(
+      new Set(
+        nextTracks
+          .map((track, index) => ({
+            key: makeCurationTrackKey(track, index),
+            isMoved: movedTrackIds.has(track.id),
+          }))
+          .filter((item) => item.isMoved)
+          .map((item) => item.key),
+      ),
+    );
+    setLastSelectedTrackIndex(null);
     setTrackDragIndex(null);
   };
 
@@ -1924,7 +2001,9 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-semibold text-white">
-                    {selectedCurationBox?.curationName || "Manual Curation"}
+                    {selectedMaster?.name ||
+                      selectedCurationBox?.curationName ||
+                      "Manual Curation"}
                   </h3>
                   <div className="mt-1 text-xs text-zinc-500">
                     {formatDateTime(selectedCurationBox?.createdAt)}
@@ -2010,9 +2089,15 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
                         key={trackKey}
                         draggable
                         onClick={(event) => handleToggleCurationTrack(index, event.shiftKey)}
-                        onDragStart={() => setTrackDragIndex(index)}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          setTrackDragIndex(index);
+                        }}
                         onDragOver={(event) => event.preventDefault()}
-                        onDrop={() => handleDropTrack(index)}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          handleDropTrack(index);
+                        }}
                         className={`cursor-grab rounded-xl border px-4 py-3 transition active:cursor-grabbing ${
                           isSelected
                             ? "border-green-500 bg-green-500/10 shadow-[0_0_0_1px_rgba(34,197,94,0.25)]"
