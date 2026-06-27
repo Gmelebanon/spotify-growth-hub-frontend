@@ -170,7 +170,44 @@ function artistSongMatchKey(artist: string, song: string) {
 
   if (!artistKey || !songKey) return "";
 
-  return `${artistKey}|||${songKey}`;
+  return `song|||${artistKey}|||${songKey}`;
+}
+
+function artistAlbumMatchKey(artist: string, album: string) {
+  const artistKey = normalizeMatchKey(artist);
+  const albumKey = normalizeMatchKey(album);
+
+  if (!artistKey || !albumKey) return "";
+
+  return `album|||${artistKey}|||${albumKey}`;
+}
+
+function isReleaseDateDue(value: string) {
+  if (!value) return false;
+
+  const inputValue = formatDateForInput(value);
+  const parsed = new Date(`${inputValue}T00:00:00`);
+
+  if (Number.isNaN(parsed.getTime())) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return parsed.getTime() <= today.getTime();
+}
+
+function isReleaseDateFuture(value: string) {
+  if (!value) return false;
+
+  const inputValue = formatDateForInput(value);
+  const parsed = new Date(`${inputValue}T00:00:00`);
+
+  if (Number.isNaN(parsed.getTime())) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return parsed.getTime() > today.getTime();
 }
 
 function artistValueFromRecord(record: Record<string, unknown>) {
@@ -199,20 +236,81 @@ function artistValueFromRecord(record: Record<string, unknown>) {
   return "";
 }
 
-function statusForRow(row: SchedulingRow, onlineSongKeys: Set<string>) {
+function releaseTitleFromRecord(record: Record<string, unknown>) {
+  return String(
+    record.album ||
+      record.albumName ||
+      record.album_name ||
+      record.release ||
+      record.releaseName ||
+      record.release_name ||
+      record.latestReleaseName ||
+      record.latest_release_name ||
+      record.name ||
+      record.title ||
+      "",
+  ).trim();
+}
+
+function addReleaseReferenceKeys(
+  next: Set<string>,
+  artist: string,
+  releaseValue: unknown,
+) {
+  if (!artist || !releaseValue || typeof releaseValue !== "object") return;
+
+  if (Array.isArray(releaseValue)) {
+    releaseValue.forEach((item) => addReleaseReferenceKeys(next, artist, item));
+    return;
+  }
+
+  const releaseRecord = releaseValue as Record<string, unknown>;
+  const releaseTitle = releaseTitleFromRecord(releaseRecord);
+  const albumKey = artistAlbumMatchKey(artist, releaseTitle);
+
+  if (albumKey) {
+    next.add(albumKey);
+  }
+
+  const tracks = releaseRecord.tracks || releaseRecord.songs || releaseRecord.items;
+  if (Array.isArray(tracks)) {
+    tracks.forEach((track) => {
+      if (!track || typeof track !== "object") return;
+      const trackRecord = track as Record<string, unknown>;
+      const trackTitle = String(
+        trackRecord.song || trackRecord.track || trackRecord.title || trackRecord.name || "",
+      ).trim();
+      const songKey = artistSongMatchKey(artist, trackTitle);
+
+      if (songKey) next.add(songKey);
+    });
+  }
+}
+
+function statusForRow(row: SchedulingRow, onlineReferenceKeys: Set<string>) {
   const storedPlatformStatus = String(row.platform_status || "").trim().toLowerCase();
   const storedStatus = String(row.status || "").trim();
-  const matchKey = artistSongMatchKey(row.artist, row.song);
 
-  if (storedStatus === "Online" || storedPlatformStatus === "online") {
+  if (storedStatus === "Rejected" || storedStatus === "No Artist") {
+    return storedStatus;
+  }
+
+  const songMatchKey = artistSongMatchKey(row.artist, row.song);
+  const albumMatchKey = artistAlbumMatchKey(row.artist, row.album);
+  const hasOnlineMatch =
+    (songMatchKey && onlineReferenceKeys.has(songMatchKey)) ||
+    (albumMatchKey && onlineReferenceKeys.has(albumMatchKey));
+
+  if (
+    storedStatus === "Online" ||
+    storedPlatformStatus === "online" ||
+    (hasOnlineMatch && isReleaseDateDue(row.release_date))
+  ) {
     return "Online";
   }
 
-  // Auto-online only when BOTH artist and song match an existing online reference.
-  // This prevents new songs with the same title but a different artist from being
-  // incorrectly marked Online.
-  if (!storedStatus && matchKey && onlineSongKeys.has(matchKey)) {
-    return "Online";
+  if (!storedStatus && isReleaseDateFuture(row.release_date)) {
+    return "Scheduled";
   }
 
   return storedStatus;
@@ -276,7 +374,7 @@ export default function SchedulingPage() {
   const [openFilterField, setOpenFilterField] = useState<TextField | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Partial<Record<TextField, HeaderFilterDraft>>>({});
   const [activeFilters, setActiveFilters] = useState<Partial<Record<TextField, string[]>>>({});
-  const [onlineSongKeys, setOnlineSongKeys] = useState<Set<string>>(new Set());
+  const [onlineReferenceKeys, setOnlineReferenceKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingNewRow, setIsSavingNewRow] = useState(false);
@@ -316,15 +414,24 @@ export default function SchedulingPage() {
           }
 
           const record = value as Record<string, unknown>;
-          const songValue = String(
-            record.song || record.track || record.title || record.name || "",
-          ).trim();
           const artistValue = artistValueFromRecord(record);
-          const matchKey = artistSongMatchKey(artistValue, songValue);
+          const songValue = String(
+            record.song || record.track || record.title || "",
+          ).trim();
+          const songKey = artistSongMatchKey(artistValue, songValue);
 
-          if (matchKey) {
-            next.add(matchKey);
+          if (songKey) {
+            next.add(songKey);
           }
+
+          const parentArtistValue =
+            artistValue || String(record.artistName || record.artist_name || record.name || "").trim();
+
+          addReleaseReferenceKeys(next, parentArtistValue, record.latestRelease);
+          addReleaseReferenceKeys(next, parentArtistValue, record.latest_release);
+          addReleaseReferenceKeys(next, parentArtistValue, record.recentReleases);
+          addReleaseReferenceKeys(next, parentArtistValue, record.recent_releases);
+          addReleaseReferenceKeys(next, parentArtistValue, record.releases);
 
           Object.values(record).forEach((child) => {
             if (typeof child === "object") visit(child);
@@ -343,7 +450,7 @@ export default function SchedulingPage() {
       tryRead(`${API_BASE_URL}/api/my-artists`),
     ]);
 
-    setOnlineSongKeys(next);
+    setOnlineReferenceKeys(next);
   }, []);
 
   const loadRows = useCallback(async () => {
@@ -558,7 +665,7 @@ export default function SchedulingPage() {
             row.song,
             row.album,
             row.genre,
-            statusForRow(row, onlineSongKeys),
+            statusForRow(row, onlineReferenceKeys),
             row.rn_account,
             row.remarks,
           ]
@@ -575,7 +682,7 @@ export default function SchedulingPage() {
 
         const value =
           column.field === "status"
-            ? statusForRow(row, onlineSongKeys)
+            ? statusForRow(row, onlineReferenceKeys)
             : String(row[column.field] || "");
 
         return selectedValues.includes(value || "(Blanks)");
@@ -585,11 +692,11 @@ export default function SchedulingPage() {
     return [...filtered].sort((a, b) => {
       const aRaw =
         sortField === "status"
-          ? statusForRow(a, onlineSongKeys)
+          ? statusForRow(a, onlineReferenceKeys)
           : String(a[sortField] || "");
       const bRaw =
         sortField === "status"
-          ? statusForRow(b, onlineSongKeys)
+          ? statusForRow(b, onlineReferenceKeys)
           : String(b[sortField] || "");
 
       const result = aRaw.toLowerCase().localeCompare(bRaw.toLowerCase(), undefined, {
@@ -599,7 +706,7 @@ export default function SchedulingPage() {
 
       return sortDirection === "asc" ? result : -result;
     });
-  }, [activeFilters, activeRows, onlineSongKeys, search, sortDirection, sortField]);
+  }, [activeFilters, activeRows, onlineReferenceKeys, search, sortDirection, sortField]);
 
   const selectedRows = useMemo(() => {
     const selected = new Set(selectedIds);
@@ -1042,8 +1149,7 @@ export default function SchedulingPage() {
         });
 
         setError(null);
-        setBulkStatus("");
-        setBulkReleaseDate("");
+        // Keep bulk controls visible after save so users can confirm the chosen value.
       } catch (error) {
         setRows((current) =>
           current.map((row) => {
@@ -1071,7 +1177,7 @@ export default function SchedulingPage() {
       const column = COLUMNS.find((item) => item.field === field);
       const values = activeRows.map((row) =>
         field === "status"
-          ? statusForRow(row, onlineSongKeys) || "(Blanks)"
+          ? statusForRow(row, onlineReferenceKeys) || "(Blanks)"
           : String(row[field] || "") || "(Blanks)",
       );
 
@@ -1089,7 +1195,7 @@ export default function SchedulingPage() {
         a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
       );
     },
-    [activeRows, onlineSongKeys],
+    [activeRows, onlineReferenceKeys],
   );
 
   const openHeaderFilter = useCallback(
@@ -1376,7 +1482,7 @@ export default function SchedulingPage() {
       COLUMNS.map((column) => {
         const value =
           column.field === "status"
-            ? statusForRow(row, onlineSongKeys)
+            ? statusForRow(row, onlineReferenceKeys)
             : String(row[column.field] || "");
         return `"${value.replace(/"/g, '""')}"`;
       }).join(","),
@@ -1390,7 +1496,7 @@ export default function SchedulingPage() {
     link.download = `${activeSheet?.name || "all-distribution"}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  }, [activeRows, activeSheet?.name, onlineSongKeys]);
+  }, [activeRows, activeSheet?.name, onlineReferenceKeys]);
 
   const deleteCurrentSheet = useCallback(async () => {
     if (!activeSheet) return;
@@ -1545,7 +1651,7 @@ export default function SchedulingPage() {
       </div>
 
       {selectedIds.length > 0 ? (
-        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-3">
+        <div className="sticky top-3 z-40 mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl shadow-black/40 backdrop-blur">
           <span className="text-sm font-semibold text-white">
             {selectedIds.length} selected
           </span>
@@ -1935,7 +2041,7 @@ export default function SchedulingPage() {
 
               {!isLoading &&
                 filteredRows.map((row, index) => {
-                  const effectiveStatus = statusForRow(row, onlineSongKeys);
+                  const effectiveStatus = statusForRow(row, onlineReferenceKeys);
                   const statusText = statusTextClass(effectiveStatus);
 
                   return (
@@ -1958,13 +2064,13 @@ export default function SchedulingPage() {
                         <td key={column.field} className="px-4 py-3 align-middle">
                           {column.type === "status" ? (
                             <select
-                              value={statusForRow(row, onlineSongKeys) || ""}
+                              value={statusForRow(row, onlineReferenceKeys) || ""}
                               onChange={(event) =>
                                 saveRowField(row, column.field, event.target.value)
                               }
                               onKeyDown={handleKeyDownBlur}
                               className={`schedule-status-select h-9 w-full rounded-lg border border-transparent bg-black px-2 text-sm font-bold outline-none hover:border-zinc-800 focus:border-green-500 ${statusTextClass(
-                                statusForRow(row, onlineSongKeys),
+                                statusForRow(row, onlineReferenceKeys),
                               )}`}
                             >
                               <option value="">-</option>
@@ -1977,12 +2083,12 @@ export default function SchedulingPage() {
                           ) : column.type === "date" ? (
                             <input
                               type="date"
-                              defaultValue={formatDateForInput(row[column.field])}
-                              onBlur={(event) =>
-                                handleTextBlur(row, column.field, event.target.value)
+                              value={formatDateForInput(row[column.field])}
+                              onChange={(event) =>
+                                saveRowField(row, column.field, event.target.value)
                               }
                               onKeyDown={handleKeyDownBlur}
-                              className="schedule-date-input h-9 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm text-white outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black schedule-date-input [color-scheme:dark]"
+                              className="schedule-date-input h-9 min-w-[132px] rounded-lg border border-transparent bg-transparent px-2 text-sm text-white outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black schedule-date-input [color-scheme:dark]"
                             />
                           ) : (
                             <input
