@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -830,6 +831,56 @@ function mergeCsvPlaylistOptions(
   return merged;
 }
 
+function smartCurationDropdownSortKey(value: string) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "")
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, "")
+    .replace(/[|•·–—_()[\]{}.,:;'"`~!?]+/g, " ")
+    .replace(/\b(the|a|an)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+const curationDropdownCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+  ignorePunctuation: true,
+});
+
+function smartCsvPlaylistCompare(first: CsvPlaylistOption, second: CsvPlaylistOption) {
+  const firstKey = smartCurationDropdownSortKey(first.label || first.playlistId);
+  const secondKey = smartCurationDropdownSortKey(second.label || second.playlistId);
+  const primary = curationDropdownCollator.compare(firstKey, secondKey);
+
+  if (primary !== 0) return primary;
+
+  return curationDropdownCollator.compare(first.label, second.label);
+}
+
+function historyItemsToCsvPlaylistOptions(
+  side: "source" | "my",
+  items: ImportHistoryItem[],
+): CsvPlaylistOption[] {
+  return items
+    .map((item) => {
+      const playlistId = extractSpotifyPlaylistId(item.link) || item.link.trim();
+
+      if (!playlistId) return null;
+
+      return {
+        id: `${side}-history-${playlistId}`,
+        playlistId,
+        label: item.display_name || playlistId,
+        side,
+        createdAt: new Date().toISOString(),
+      } satisfies CsvPlaylistOption;
+    })
+    .filter(Boolean) as CsvPlaylistOption[];
+}
+
 function ensureImportedLinkIds(
   items: ImportedLinkWithId[],
 ): ImportedLinkWithId[] {
@@ -1522,8 +1573,11 @@ function SideSection({
   colorPalette,
   historySections,
   csvPlaylistOptions,
+  selectedCsvPlaylistId,
+  onSelectCsvPlaylist,
   onImportCsvPlaylists,
   onDeleteCsvPlaylists,
+  onAddHistoryToDropdown,
 }: {
   title: string;
   tracks: CurationTrack[];
@@ -1541,6 +1595,7 @@ function SideSection({
   onSelectCsvPlaylist?: (playlistId: string) => void;
   onImportCsvPlaylists: (playlistIds: string[]) => void;
   onDeleteCsvPlaylists: (playlistIds: string[]) => void;
+  onAddHistoryToDropdown?: (side: "source" | "my", items: ImportHistoryItem[]) => void;
 }) {
   const trackColorMap = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -1565,9 +1620,7 @@ function SideSection({
 
   const filteredCsvPlaylistOptions = useMemo(() => {
     const search = csvDropdownSearch.trim().toLowerCase();
-    const items = [...(csvPlaylistOptions ?? [])].sort((a, b) =>
-      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
-    );
+    const items = [...(csvPlaylistOptions ?? [])].sort(smartCsvPlaylistCompare);
     if (!search) return items;
 
     return items.filter((item) =>
@@ -1581,6 +1634,42 @@ function SideSection({
       .map((id) => byId.get(id))
       .filter(Boolean) as CsvPlaylistOption[];
   }, [csvPlaylistOptions, selectedCsvPlaylistIds]);
+
+  useEffect(() => {
+    if (!selectedCsvPlaylistId) return;
+
+    setSelectedCsvPlaylistIds((current) =>
+      current.includes(selectedCsvPlaylistId)
+        ? current
+        : [...current, selectedCsvPlaylistId],
+    );
+  }, [selectedCsvPlaylistId]);
+
+  useEffect(() => {
+    if ((csvPlaylistOptions ?? []).length === 0 || (importedLinks ?? []).length === 0) return;
+
+    const importedPlaylistIds = (importedLinks ?? [])
+      .map((item) => extractSpotifyPlaylistId(item.link) || item.link)
+      .filter(Boolean);
+    const importedNames = (importedLinks ?? []).map((item) =>
+      smartCurationDropdownSortKey(item.display_name),
+    );
+    const matches = (csvPlaylistOptions ?? [])
+      .filter((option) => {
+        const optionKey = smartCurationDropdownSortKey(option.label);
+        return (
+          importedPlaylistIds.includes(option.playlistId) ||
+          importedNames.includes(optionKey)
+        );
+      })
+      .map((option) => option.playlistId);
+
+    if (matches.length === 0) return;
+
+    setSelectedCsvPlaylistIds((current) =>
+      Array.from(new Set([...current, ...matches])),
+    );
+  }, [csvPlaylistOptions, importedLinks]);
 
   useEffect(() => {
     if (!csvDropdownOpen) return;
@@ -1769,6 +1858,38 @@ function SideSection({
       setHistoryImporting(false);
       setHistoryStatus("");
     }
+  };
+
+  const addSelectedHistoryToDropdown = () => {
+    const selectedSections = visibleHistorySections.map((section) => ({
+      ...section,
+      items: (section.items ?? []).filter((item) =>
+        selectedHistoryKeys.includes(`${section.side}:${item.id}`),
+      ),
+    }));
+
+    const total = selectedSections.reduce(
+      (sum, section) => sum + (section.items ?? []).length,
+      0,
+    );
+
+    if (total === 0) return;
+
+    selectedSections.forEach((section) => {
+      if ((section.items ?? []).length === 0) return;
+      onAddHistoryToDropdown?.(section.side, section.items ?? []);
+    });
+
+    const playlistIds = selectedSections.flatMap((section) =>
+      historyItemsToCsvPlaylistOptions(section.side, section.items ?? []).map(
+        (item) => item.playlistId,
+      ),
+    );
+
+    setSelectedCsvPlaylistIds((current) =>
+      Array.from(new Set([...current, ...playlistIds])),
+    );
+    setHistoryStatus(`Added ${total} playlist${total === 1 ? "" : "s"} to dropdown.`);
   };
 
   const reorderImportedLinks = (targetIndex: number) => {
@@ -1979,11 +2100,11 @@ function SideSection({
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm text-white hover:bg-zinc-900">
                   <input
                     type="checkbox"
-                    checked={(csvPlaylistOptions ?? []).length > 0 && selectedCsvPlaylistIds.length === (csvPlaylistOptions ?? []).length}
+                    checked={filteredCsvPlaylistOptions.length > 0 && selectedCsvPlaylistIds.length === filteredCsvPlaylistOptions.length}
                     onChange={(event) =>
                       setSelectedCsvPlaylistIds(
                         event.target.checked
-                          ? (csvPlaylistOptions ?? []).map((item) => item.playlistId)
+                          ? filteredCsvPlaylistOptions.map((item) => item.playlistId)
                           : [],
                       )
                     }
@@ -2383,6 +2504,15 @@ function SideSection({
               <button
                 type="button"
                 disabled={selectedHistoryCount === 0 || historyImporting}
+                onClick={addSelectedHistoryToDropdown}
+                className="rounded-xl border border-green-500/40 bg-green-500/10 px-5 py-3 text-sm font-semibold text-green-300 hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Add to dropdown
+              </button>
+
+              <button
+                type="button"
+                disabled={selectedHistoryCount === 0 || historyImporting}
                 onClick={importSelectedHistory}
                 className="rounded-xl bg-green-600 px-5 py-3 text-sm font-semibold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -2745,8 +2875,8 @@ export default function CurationPage() {
 
     const sourceLocal = loadCsvPlaylistOptions("source");
     const myLocal = loadCsvPlaylistOptions("my");
-    setSourceCsvPlaylists(sourceLocal);
-    setMyCsvPlaylists(myLocal);
+    setSourceCsvPlaylists([...sourceLocal].sort(smartCsvPlaylistCompare));
+    setMyCsvPlaylists([...myLocal].sort(smartCsvPlaylistCompare));
 
     const loadDatabaseDropdowns = async () => {
       const [sourceDb, myDb] = await Promise.all([
@@ -2759,8 +2889,8 @@ export default function CurationPage() {
       const nextSource = sourceDb.length > 0 ? sourceDb : sourceLocal;
       const nextMy = myDb.length > 0 ? myDb : myLocal;
 
-      setSourceCsvPlaylists(nextSource);
-      setMyCsvPlaylists(nextMy);
+      setSourceCsvPlaylists([...nextSource].sort(smartCsvPlaylistCompare));
+      setMyCsvPlaylists([...nextMy].sort(smartCsvPlaylistCompare));
       saveCsvPlaylistOptions("source", nextSource);
       saveCsvPlaylistOptions("my", nextMy);
     };
@@ -2773,16 +2903,24 @@ export default function CurationPage() {
   }, []);
 
   useEffect(() => {
-    saveCsvPlaylistOptions("source", sourceCsvPlaylists);
+    saveCsvPlaylistOptions("source", [...sourceCsvPlaylists].sort(smartCsvPlaylistCompare));
   }, [sourceCsvPlaylists]);
 
   useEffect(() => {
-    saveCsvPlaylistOptions("my", myCsvPlaylists);
+    saveCsvPlaylistOptions("my", [...myCsvPlaylists].sort(smartCsvPlaylistCompare));
   }, [myCsvPlaylists]);
 
   useEffect(() => {
     const refreshSavedMasters = () => {
-      const items = loadSavedMasterPlaylists();
+      const items = [...loadSavedMasterPlaylists()].sort((a, b) => {
+        const firstKey = smartCurationDropdownSortKey(a.name);
+        const secondKey = smartCurationDropdownSortKey(b.name);
+        const primary = curationDropdownCollator.compare(firstKey, secondKey);
+
+        if (primary !== 0) return primary;
+
+        return curationDropdownCollator.compare(a.name, b.name);
+      });
       setSavedMasterPlaylists(items);
       setSelectedMasterPlaylistId((current) => current || items[0]?.id || "");
     };
@@ -2806,6 +2944,41 @@ export default function CurationPage() {
     }
   };
 
+  const sortedSavedMasterPlaylists = useMemo(() => {
+    return [...savedMasterPlaylists].sort((a, b) => {
+      const firstKey = smartCurationDropdownSortKey(a.name);
+      const secondKey = smartCurationDropdownSortKey(b.name);
+      const primary = curationDropdownCollator.compare(firstKey, secondKey);
+
+      if (primary !== 0) return primary;
+
+      return curationDropdownCollator.compare(a.name, b.name);
+    });
+  }, [savedMasterPlaylists]);
+
+  const matchMasterPlaylistByName = useCallback(
+    (name: string) => {
+      const targetKey = smartCurationDropdownSortKey(name);
+
+      if (!targetKey) return null;
+
+      return (
+        sortedSavedMasterPlaylists.find(
+          (playlist) => smartCurationDropdownSortKey(playlist.name) === targetKey,
+        ) ||
+        sortedSavedMasterPlaylists.find((playlist) => {
+          const playlistKey = smartCurationDropdownSortKey(playlist.name);
+          return (
+            playlistKey.includes(targetKey) ||
+            targetKey.includes(playlistKey)
+          );
+        }) ||
+        null
+      );
+    },
+    [sortedSavedMasterPlaylists],
+  );
+
   const sourceTracks = useMemo(
     () => buildMergedTracks(parseTypedTracks(sourceText), sourceImportedLinks),
     [sourceText, sourceImportedLinks],
@@ -2815,6 +2988,35 @@ export default function CurationPage() {
     () => buildMergedTracks(parseTypedTracks(myTracksText), myImportedLinks),
     [myTracksText, myImportedLinks],
   );
+
+  useEffect(() => {
+    const selectedSourceOption =
+      sourceCsvPlaylists.find(
+        (playlist) => playlist.playlistId === selectedSourceCsvPlaylistId,
+      ) ?? null;
+
+    const selectedImportedPlaylist =
+      sourceImportedLinks.length > 0
+        ? sourceImportedLinks[sourceImportedLinks.length - 1]
+        : null;
+
+    const candidateName =
+      selectedSourceOption?.label ||
+      selectedImportedPlaylist?.display_name ||
+      "";
+
+    const matchedMaster = matchMasterPlaylistByName(candidateName);
+
+    if (matchedMaster && matchedMaster.id !== selectedMasterPlaylistId) {
+      setSelectedMasterPlaylistId(matchedMaster.id);
+    }
+  }, [
+    matchMasterPlaylistByName,
+    selectedMasterPlaylistId,
+    selectedSourceCsvPlaylistId,
+    sourceCsvPlaylists,
+    sourceImportedLinks,
+  ]);
 
   const sourceTrackKeys = useMemo(
     () => new Set(sourceTracks.map((track) => trackKey(track))),
@@ -2997,12 +3199,12 @@ export default function CurationPage() {
 
     if (csvManualPlaylistSide === "source") {
       const nextSource = mergeCsvPlaylistOptions(sourceCsvPlaylists, [hydrated]);
-      setSourceCsvPlaylists(nextSource);
+      setSourceCsvPlaylists([...nextSource].sort(smartCsvPlaylistCompare));
       saveCsvPlaylistOptions("source", nextSource);
       await saveCsvPlaylistOptionsToDatabase("source", nextSource);
     } else {
       const nextMy = mergeCsvPlaylistOptions(myCsvPlaylists, [hydrated]);
-      setMyCsvPlaylists(nextMy);
+      setMyCsvPlaylists([...nextMy].sort(smartCsvPlaylistCompare));
       saveCsvPlaylistOptions("my", nextMy);
       await saveCsvPlaylistOptionsToDatabase("my", nextMy);
     }
@@ -3061,8 +3263,8 @@ export default function CurationPage() {
           ? hydratedMy
           : mergeCsvPlaylistOptions(myCsvPlaylists, hydratedMy);
 
-      setSourceCsvPlaylists(nextSource);
-      setMyCsvPlaylists(nextMy);
+      setSourceCsvPlaylists([...nextSource].sort(smartCsvPlaylistCompare));
+      setMyCsvPlaylists([...nextMy].sort(smartCsvPlaylistCompare));
       saveCsvPlaylistOptions("source", nextSource);
       saveCsvPlaylistOptions("my", nextMy);
       void saveCsvPlaylistOptionsToDatabase("source", nextSource);
@@ -3086,7 +3288,7 @@ export default function CurationPage() {
       const nextSource = sourceCsvPlaylists.filter(
         (item) => !playlistIds.includes(item.playlistId),
       );
-      setSourceCsvPlaylists(nextSource);
+      setSourceCsvPlaylists([...nextSource].sort(smartCsvPlaylistCompare));
       saveCsvPlaylistOptions("source", nextSource);
       void saveCsvPlaylistOptionsToDatabase("source", nextSource);
       setSelectedSourceCsvPlaylistId((current) =>
@@ -3098,12 +3300,47 @@ export default function CurationPage() {
     const nextMy = myCsvPlaylists.filter(
       (item) => !playlistIds.includes(item.playlistId),
     );
-    setMyCsvPlaylists(nextMy);
+    setMyCsvPlaylists([...nextMy].sort(smartCsvPlaylistCompare));
     saveCsvPlaylistOptions("my", nextMy);
     void saveCsvPlaylistOptionsToDatabase("my", nextMy);
     setSelectedMyCsvPlaylistId((current) =>
       playlistIds.includes(current) ? "" : current,
     );
+  };
+
+  const addHistoryItemsToCsvDropdown = async (
+    side: "source" | "my",
+    items: ImportHistoryItem[],
+  ) => {
+    const options = historyItemsToCsvPlaylistOptions(side, items);
+
+    if (options.length === 0) return;
+
+    if (side === "source") {
+      const nextSource = mergeCsvPlaylistOptions(sourceCsvPlaylists, options).sort(
+        smartCsvPlaylistCompare,
+      );
+      setSourceCsvPlaylists([...nextSource].sort(smartCsvPlaylistCompare));
+      saveCsvPlaylistOptions("source", nextSource);
+      void saveCsvPlaylistOptionsToDatabase("source", nextSource);
+      setSelectedSourceCsvPlaylistId(options[0].playlistId);
+
+      const matchedMaster = matchMasterPlaylistByName(options[0].label);
+
+      if (matchedMaster) {
+        setSelectedMasterPlaylistId(matchedMaster.id);
+      }
+
+      return;
+    }
+
+    const nextMy = mergeCsvPlaylistOptions(myCsvPlaylists, options).sort(
+      smartCsvPlaylistCompare,
+    );
+    setMyCsvPlaylists([...nextMy].sort(smartCsvPlaylistCompare));
+    saveCsvPlaylistOptions("my", nextMy);
+    void saveCsvPlaylistOptionsToDatabase("my", nextMy);
+    setSelectedMyCsvPlaylistId(options[0].playlistId);
   };
 
   const handleResultTrackSelect = (index: number, shiftKey: boolean) => {
@@ -3509,10 +3746,21 @@ export default function CurationPage() {
             selectedCsvPlaylistId={selectedSourceCsvPlaylistId}
             onSelectCsvPlaylist={(playlistId) => {
               setSelectedSourceCsvPlaylistId(playlistId);
+
+              const option = sourceCsvPlaylists.find(
+                (playlist) => playlist.playlistId === playlistId,
+              );
+              const matchedMaster = matchMasterPlaylistByName(option?.label || "");
+
+              if (matchedMaster) {
+                setSelectedMasterPlaylistId(matchedMaster.id);
+              }
+
               importCsvPlaylistOption("source", playlistId);
             }}
             onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("source", playlistIds)}
             onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("source", playlistIds)}
+            onAddHistoryToDropdown={addHistoryItemsToCsvDropdown}
             historySections={[
               {
                 side: "source",
@@ -3550,6 +3798,7 @@ export default function CurationPage() {
             }}
             onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("my", playlistIds)}
             onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("my", playlistIds)}
+            onAddHistoryToDropdown={addHistoryItemsToCsvDropdown}
             historySections={[
               {
                 side: "source",
@@ -3823,7 +4072,7 @@ export default function CurationPage() {
                 className="h-11 min-w-[260px] rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
               >
                 <option value="">Select saved master playlist</option>
-                {savedMasterPlaylists.map((playlist) => (
+                {sortedSavedMasterPlaylists.map((playlist) => (
                   <option key={playlist.id} value={playlist.id}>
                     {playlist.name}
                   </option>
