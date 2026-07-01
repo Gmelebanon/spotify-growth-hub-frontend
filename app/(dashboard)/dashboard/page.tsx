@@ -97,6 +97,15 @@ type SettingsSummary = {
   accounts?: SettingsAccount[];
 };
 
+type SyncStatusSummary = {
+  success?: boolean;
+  lastSync?: string | null;
+  lastSyncFreshness?: string | null;
+  status?: string | null;
+  source?: string | null;
+  message?: string | null;
+};
+
 type AdsSettingsRow = {
   playlist_id?: string | number | null;
   playlist_name?: string | null;
@@ -197,6 +206,25 @@ function formatRelativeTime(value?: string | null) {
   if (absMs < day) return `${Math.round(absMs / hour)}h ago`;
 
   return `${Math.round(absMs / day)}d ago`;
+}
+
+function getLatestTimestamp(...values: Array<string | null | undefined>) {
+  const validValues = values
+    .map((value) => {
+      if (!value) return null;
+
+      const date = new Date(value.length <= 10 ? `${value}T00:00:00` : value);
+      const time = date.getTime();
+
+      if (Number.isNaN(time)) return null;
+
+      return { value, time };
+    })
+    .filter((item): item is { value: string; time: number } => Boolean(item));
+
+  if (!validValues.length) return null;
+
+  return validValues.sort((a, b) => b.time - a.time)[0].value;
 }
 
 function getLocalDateKey(date: Date) {
@@ -401,7 +429,8 @@ function normalizeAdsSettingsPayload(payload: unknown): AdsSettingsRow[] {
   if (Array.isArray(record?.items)) return record.items as AdsSettingsRow[];
   if (Array.isArray(record?.rows)) return record.rows as AdsSettingsRow[];
   if (Array.isArray(record?.data)) return record.data as AdsSettingsRow[];
-  if (Array.isArray(record?.settings)) return record.settings as AdsSettingsRow[];
+  if (Array.isArray(record?.settings))
+    return record.settings as AdsSettingsRow[];
 
   return [];
 }
@@ -550,6 +579,18 @@ async function fetchSettingsSummary() {
   return (await response.json()) as SettingsSummary;
 }
 
+async function fetchSyncStatus() {
+  const response = await fetch(
+    `${API_BASE_URL}/api/sync-status?ts=${Date.now()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) return null;
+  return (await response.json()) as SyncStatusSummary;
+}
+
 async function fetchPlaylistsForAccount(accountId: number | string) {
   const response = await fetch(
     `${API_BASE_URL}/api/accounts/${accountId}/playlists?ts=${Date.now()}`,
@@ -629,6 +670,7 @@ export default function DashboardPage() {
   const [adsSettings, setAdsSettings] = useState<AdsSettingsRow[]>([]);
   const [settingsSummary, setSettingsSummary] =
     useState<SettingsSummary | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({
@@ -645,12 +687,14 @@ export default function DashboardPage() {
     setLoadError(null);
 
     try {
-      const [accountRows, summary, artistRows, adsRows] = await Promise.all([
-        getAccounts(),
-        fetchSettingsSummary(),
-        fetchArtistLibrary(),
-        fetchAdsSettings(),
-      ]);
+      const [accountRows, summary, latestSyncStatus, artistRows, adsRows] =
+        await Promise.all([
+          getAccounts(),
+          fetchSettingsSummary(),
+          fetchSyncStatus(),
+          fetchArtistLibrary(),
+          fetchAdsSettings(),
+        ]);
 
       const playlistGroups = await Promise.all(
         accountRows.map((account) => fetchPlaylistsForAccount(account.id)),
@@ -658,6 +702,7 @@ export default function DashboardPage() {
 
       setAccounts(accountRows);
       setSettingsSummary(summary);
+      setSyncStatus(latestSyncStatus);
       setArtists(artistRows);
       setAdsSettings(adsRows);
       setPlaylists(playlistGroups.flat());
@@ -678,8 +723,12 @@ export default function DashboardPage() {
     void loadDashboard();
   }, [loadDashboard]);
 
-  const lastSync =
-    settingsSummary?.lastSync || settingsSummary?.lastDataPush || null;
+  const lastSync = getLatestTimestamp(
+    syncStatus?.lastSync,
+    syncState.completedAt,
+    settingsSummary?.lastSync,
+    settingsSummary?.lastDataPush,
+  );
   const todayKey = getLocalDateKey(new Date());
 
   const accountNameById = useMemo(() => {
@@ -819,7 +868,10 @@ export default function DashboardPage() {
         country,
         playlists: playlistIds.size,
       }))
-      .sort((a, b) => b.playlists - a.playlists || a.country.localeCompare(b.country))
+      .sort(
+        (a, b) =>
+          b.playlists - a.playlists || a.country.localeCompare(b.country),
+      )
       .slice(0, 8);
 
     const topByFollowers = [...playlists]
@@ -925,11 +977,7 @@ export default function DashboardPage() {
                   {formatDateOnly(lastSync)}
                 </span>{" "}
                 <span className="text-zinc-500">
-                  (
-                  {settingsSummary?.lastSyncFreshness ||
-                    settingsSummary?.lastDataPushFreshness ||
-                    formatRelativeTime(lastSync)}
-                  )
+                  ({formatRelativeTime(lastSync)})
                 </span>
               </p>
             </div>
@@ -937,6 +985,7 @@ export default function DashboardPage() {
             <div className="w-full max-w-sm lg:text-right">
               <button
                 type="button"
+                data-testid="sync-all-button"
                 onClick={handleSyncAll}
                 disabled={syncState.loading}
                 className="inline-flex h-11 items-center justify-center rounded-xl bg-emerald-500 px-5 text-sm font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
