@@ -1198,9 +1198,9 @@ function ArtistsTable({
         {Array.from({ length: 8 }).map((_, index) => (
           <div
             key={index}
-            className="grid grid-cols-[70px_1.4fr_120px_100px_110px_120px_110px_130px_100px_100px_90px_130px_80px] gap-4 border-b border-zinc-900 px-4 py-4 last:border-b-0"
+            className="grid grid-cols-[70px_1.4fr_120px_90px_110px_130px_120px_100px_100px_130px_80px] gap-4 border-b border-zinc-900 px-4 py-4 last:border-b-0"
           >
-            {Array.from({ length: 13 }).map((__, cellIndex) => (
+            {Array.from({ length: 11 }).map((__, cellIndex) => (
               <div
                 key={cellIndex}
                 className="h-5 animate-pulse rounded bg-zinc-900"
@@ -1223,20 +1223,18 @@ function ArtistsTable({
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-zinc-900 bg-black [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-zinc-950 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-green-400 [&::-webkit-scrollbar-thumb:hover]:bg-green-300">
-      <table className="min-w-[1680px] w-full border-collapse text-left text-sm">
+      <table className="min-w-[1420px] w-full border-collapse text-left text-sm">
         <thead className="border-b border-emerald-400 bg-green-400 text-[11px] text-black">
           <tr>
             <SortableHeader label="URL" sortKey="url" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Artist" sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Genre" sortKey="genre" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Popularity" sortKey="popularity" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Tracks" sortKey="tracks" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Streams" sortKey="streams" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Streams/Track" sortKey="streamsPerTrack" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Streams %" sortKey="streamsPercent" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Radio/Discover" sortKey="radioDiscover" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
+            <SortableHeader label="Streams/Track" sortKey="streamsPerTrack" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Radio %" sortKey="radioPercent" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="7 Days" sortKey="followers7Days" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
-            <SortableHeader label="Tracks" sortKey="tracks" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <SortableHeader label="Latest" sortKey="latest" activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} />
             <th className="px-4 py-4 font-semibold uppercase tracking-[0.16em] text-black">
               Actions
@@ -1317,7 +1315,7 @@ function ArtistsTable({
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
-                  {artist.popularity}/100
+                  {formatNumber(artist.totalTracks)}
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
@@ -1325,23 +1323,11 @@ function ArtistsTable({
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
-                  {formatOptionalNumber(artist.streamsPerTrack)}
-                </td>
-
-                <td
-                  className={`px-4 py-4 font-semibold ${
-                    Number(artist.streamsPercent || 0) > 0
-                      ? "text-green-400"
-                      : Number(artist.streamsPercent || 0) < 0
-                      ? "text-red-400"
-                      : "text-zinc-500"
-                  }`}
-                >
-                  {formatOptionalPercent(artist.streamsPercent)}
+                  {formatOptionalNumber(artist.radioDiscover)}
                 </td>
 
                 <td className="px-4 py-4 font-semibold text-white">
-                  {formatOptionalNumber(artist.radioDiscover)}
+                  {formatOptionalNumber(artist.streamsPerTrack)}
                 </td>
 
                 <td
@@ -1366,10 +1352,6 @@ function ArtistsTable({
                   }`}
                 >
                   {formatDelta(artist.followers7Days)}
-                </td>
-
-                <td className="px-4 py-4 font-semibold text-white">
-                  {formatNumber(artist.totalTracks)}
                 </td>
 
                 <td className="px-4 py-4">
@@ -1971,14 +1953,12 @@ export default function MyArtistsPage() {
       "URL",
       "Artist",
       "Genre",
-      "Popularity",
+      "Tracks",
       "Streams",
-      "Streams/Track",
-      "Streams %",
       "Radio/Discover",
+      "Streams/Track",
       "Radio %",
       "7 Days",
-      "Tracks",
       "Latest",
     ];
 
@@ -1986,14 +1966,12 @@ export default function MyArtistsPage() {
       artist.spotifyUrl,
       artist.name,
       artist.manualGenre || "",
-      artist.popularity || 0,
+      artist.totalTracks || 0,
       artist.streams || 0,
-      artist.streamsPerTrack ?? "",
-      artist.streamsPercent ?? "",
       artist.radioDiscover ?? "",
+      artist.streamsPerTrack ?? "",
       artist.radioPercent ?? "",
       artist.followers7Days || 0,
-      artist.totalTracks || 0,
       artist.latestRelease?.name || "",
     ]);
 

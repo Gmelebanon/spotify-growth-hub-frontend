@@ -2673,7 +2673,7 @@ export default function AdsPage() {
   if (!hasMounted) {
     return (
       <div className="min-h-screen w-full bg-black px-5 py-5 text-white lg:px-6">
-        <h1 className="text-4xl font-semibold tracking-tight">Ads</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
         <p className="mt-1 text-sm text-zinc-500">Loading ads table...</p>
       </div>
     );
@@ -2683,7 +2683,7 @@ export default function AdsPage() {
     <div className="min-h-screen w-full max-w-full min-w-0 overflow-hidden bg-black px-5 py-5 text-white lg:px-6">
       <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h1 className="text-4xl font-semibold tracking-tight">Ads</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
           <p className="mt-1 text-sm text-zinc-500">
             Track ad dates and monitor playlist growth over time.
           </p>

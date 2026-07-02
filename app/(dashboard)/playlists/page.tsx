@@ -540,7 +540,7 @@ export default function PlaylistsPage() {
     <div className="h-screen overflow-hidden bg-black px-6 py-8 text-white">
       <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Playlists</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Playlists Daily</h1>
           <p className="mt-1 text-xs text-zinc-500">
             Monitor playlist genres, accounts, followers, and 30-day growth.
           </p>
