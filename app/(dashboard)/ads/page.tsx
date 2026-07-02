@@ -1366,6 +1366,11 @@ export default function AdsPage() {
     "category" | "genre" | null
   >(null);
   const [newOptionName, setNewOptionName] = useState("");
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   const accountsQuery = useQuery<AccountRow[]>({
     queryKey: ["accounts"],
@@ -2664,6 +2669,15 @@ export default function AdsPage() {
         setFilters((prev) => ({ ...prev, master: value })),
     },
   ];
+
+  if (!hasMounted) {
+    return (
+      <div className="min-h-screen w-full bg-black px-5 py-5 text-white lg:px-6">
+        <h1 className="text-4xl font-semibold tracking-tight">Ads</h1>
+        <p className="mt-1 text-sm text-zinc-500">Loading ads table...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen w-full max-w-full min-w-0 overflow-hidden bg-black px-5 py-5 text-white lg:px-6">
