@@ -1578,6 +1578,7 @@ function SideSection({
   onImportCsvPlaylists,
   onDeleteCsvPlaylists,
   onAddHistoryToDropdown,
+  onAddImportedLinkToDropdown,
 }: {
   title: string;
   tracks: CurationTrack[];
@@ -1596,6 +1597,7 @@ function SideSection({
   onImportCsvPlaylists: (playlistIds: string[]) => void;
   onDeleteCsvPlaylists: (playlistIds: string[]) => void;
   onAddHistoryToDropdown?: (side: "source" | "my", items: ImportHistoryItem[]) => void;
+  onAddImportedLinkToDropdown?: (item: ImportedLinkWithId) => void;
 }) {
   const trackColorMap = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -1634,6 +1636,11 @@ function SideSection({
       .map((id) => byId.get(id))
       .filter(Boolean) as CsvPlaylistOption[];
   }, [csvPlaylistOptions, selectedCsvPlaylistIds]);
+
+  const csvPlaylistIdSet = useMemo(
+    () => new Set((csvPlaylistOptions ?? []).map((item) => item.playlistId)),
+    [csvPlaylistOptions],
+  );
 
   useEffect(() => {
     if (!selectedCsvPlaylistId) return;
@@ -2221,48 +2228,71 @@ function SideSection({
           <div className="text-sm text-zinc-500">No imported links yet.</div>
         ) : (
           <div className="space-y-3">
-            {(importedLinks ?? []).map((item, index) => (
-              <div
-                key={`${item.id}-${index}`}
-                draggable
-                onDragStart={() => setDraggedImportedIndex(index)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => reorderImportedLinks(index)}
-                className="cursor-move rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full ${colorPalette[index % colorPalette.length]}`}
-                      />
-                      <div className="truncate text-sm font-semibold text-white">
-                        {item.display_name || "Imported Playlist"}
+            {(importedLinks ?? []).map((item, index) => {
+              const importedPlaylistId =
+                extractSpotifyPlaylistId(item.link) || item.link?.trim() || "";
+              const isSavedInDropdown =
+                Boolean(importedPlaylistId) && csvPlaylistIdSet.has(importedPlaylistId);
+
+              return (
+                <div
+                  key={`${item.id}-${index}`}
+                  draggable
+                  onDragStart={() => setDraggedImportedIndex(index)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => reorderImportedLinks(index)}
+                  className="cursor-move rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full ${colorPalette[index % colorPalette.length]}`}
+                        />
+                        <div className="truncate text-sm font-semibold text-white">
+                          {item.display_name || "Imported Playlist"}
+                        </div>
+                      </div>
+
+                      <div className="mt-1 truncate text-xs text-zinc-500">
+                        {item.accountName || "Unknown Account"}
+                      </div>
+
+                      <div className="mt-2 truncate text-xs text-zinc-400">
+                        {item.track_count} tracks - {item.source_type}
                       </div>
                     </div>
 
-                    <div className="mt-1 truncate text-xs text-zinc-500">
-                      {item.accountName || "Unknown Account"}
-                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {!isSavedInDropdown ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onAddImportedLinkToDropdown?.(item);
+                          }}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-green-400/70 bg-green-500/10 text-xl font-bold leading-none text-green-400 transition hover:bg-green-500/20"
+                          title="Add this playlist to the dropdown"
+                        >
+                          +
+                        </button>
+                      ) : null}
 
-                    <div className="mt-2 truncate text-xs text-zinc-400">
-                      {item.track_count} tracks - {item.source_type}
+                      <button
+                        onClick={() =>
+                          setImportedLinks((prev) =>
+                            prev.filter((entry) => entry.id !== item.id),
+                          )
+                        }
+                        className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20"
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
-
-                  <button
-                    onClick={() =>
-                      setImportedLinks((prev) =>
-                        prev.filter((entry) => entry.id !== item.id),
-                      )
-                    }
-                    className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20"
-                  >
-                    Remove
-                  </button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -3343,6 +3373,53 @@ export default function CurationPage() {
     setSelectedMyCsvPlaylistId(options[0].playlistId);
   };
 
+  const addImportedLinkToCsvDropdown = async (
+    side: "source" | "my",
+    item: ImportedLinkWithId,
+  ) => {
+    const playlistId = extractSpotifyPlaylistId(item.link) || item.link?.trim() || "";
+
+    if (!playlistId) {
+      setCsvImportMessage("Could not find a Spotify playlist ID for this imported link.");
+      return;
+    }
+
+    const option: CsvPlaylistOption = {
+      id: `${side}-imported-${playlistId}-${Date.now()}`,
+      playlistId,
+      label: item.display_name || csvPlaylistLabel(playlistId, side, 0),
+      side,
+      createdAt: new Date().toISOString(),
+    };
+
+    const [hydrated] = await hydrateCsvPlaylistLabels([option]);
+
+    if (side === "source") {
+      const nextSource = mergeCsvPlaylistOptions(sourceCsvPlaylists, [hydrated]).sort(
+        smartCsvPlaylistCompare,
+      );
+      setSourceCsvPlaylists(nextSource);
+      saveCsvPlaylistOptions("source", nextSource);
+      void saveCsvPlaylistOptionsToDatabase("source", nextSource);
+      setSelectedSourceCsvPlaylistId(hydrated.playlistId);
+
+      const matchedMaster = matchMasterPlaylistByName(hydrated.label);
+      if (matchedMaster) {
+        setSelectedMasterPlaylistId(matchedMaster.id);
+      }
+    } else {
+      const nextMy = mergeCsvPlaylistOptions(myCsvPlaylists, [hydrated]).sort(
+        smartCsvPlaylistCompare,
+      );
+      setMyCsvPlaylists(nextMy);
+      saveCsvPlaylistOptions("my", nextMy);
+      void saveCsvPlaylistOptionsToDatabase("my", nextMy);
+      setSelectedMyCsvPlaylistId(hydrated.playlistId);
+    }
+
+    setCsvImportMessage(`${hydrated.label} added to dropdown.`);
+  };
+
   const handleResultTrackSelect = (index: number, shiftKey: boolean) => {
     setSelectedResultIndexes((current) => {
       if (shiftKey && lastSelectedResultIndex !== null) {
@@ -3709,7 +3786,7 @@ export default function CurationPage() {
           <button
             type="button"
             onClick={() => setCsvImportOpen(true)}
-            className="h-12 whitespace-nowrap rounded-xl bg-green-600 px-6 text-sm font-semibold text-white transition hover:bg-green-500"
+            className="h-12 whitespace-nowrap rounded-xl border border-white bg-transparent px-6 text-sm font-semibold text-white transition hover:bg-white/10"
           >
             Import CSV
           </button>
@@ -3761,6 +3838,7 @@ export default function CurationPage() {
             onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("source", playlistIds)}
             onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("source", playlistIds)}
             onAddHistoryToDropdown={addHistoryItemsToCsvDropdown}
+            onAddImportedLinkToDropdown={(item) => void addImportedLinkToCsvDropdown("source", item)}
             historySections={[
               {
                 side: "source",
@@ -3799,6 +3877,7 @@ export default function CurationPage() {
             onImportCsvPlaylists={(playlistIds) => importCsvPlaylistOptions("my", playlistIds)}
             onDeleteCsvPlaylists={(playlistIds) => deleteCsvPlaylistOptions("my", playlistIds)}
             onAddHistoryToDropdown={addHistoryItemsToCsvDropdown}
+            onAddImportedLinkToDropdown={(item) => void addImportedLinkToCsvDropdown("my", item)}
             historySections={[
               {
                 side: "source",
