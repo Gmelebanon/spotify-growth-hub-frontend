@@ -2826,7 +2826,7 @@ export default function AdsPage() {
     return (
       <div className="min-h-screen w-full bg-black px-5 py-5 text-white lg:px-6">
         <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
-        <p className="mt-1 text-sm text-zinc-500">Loading ads table...</p>
+        <p className="mt-1 text-sm text-zinc-500">Track ad dates and monitor playlist growth over time.</p>
       </div>
     );
   }
