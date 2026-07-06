@@ -9,12 +9,16 @@ import { useActiveAccountStore } from "@/lib/store/activeAccount";
 
 type CodeColor =
   | "gray"
-  | "yellow"
-  | "green"
   | "blue"
+  | "pink"
+  | "green"
+  | "yellow"
   | "red"
+  | "navy"
   | "purple"
-  | "orange";
+  | "orange"
+  | "cyan"
+  | "burgundy";
 
 type SortField =
   | "title"
@@ -286,32 +290,71 @@ const colorOptions: Array<{
   textClass: string;
   bg: string;
 }> = [
-  { value: "gray", label: "Gray", textClass: "text-zinc-400", bg: "#71717a" },
+  {
+    value: "gray",
+    label: "Gray - WORLDWIDE",
+    textClass: "text-zinc-400",
+    bg: "#71717a",
+  },
+  {
+    value: "blue",
+    label: "Blue - USA",
+    textClass: "text-blue-400",
+    bg: "#60a5fa",
+  },
+  {
+    value: "pink",
+    label: "Pink - UK",
+    textClass: "text-pink-400",
+    bg: "#f472b6",
+  },
+  {
+    value: "green",
+    label: "Green - BRAZIL",
+    textClass: "text-green-400",
+    bg: "#22c55e",
+  },
   {
     value: "yellow",
-    label: "Yellow",
+    label: "Yellow - AUSTRALIA",
     textClass: "text-yellow-300",
     bg: "#fde047",
   },
   {
-    value: "green",
-    label: "Green",
-    textClass: "text-green-400",
-    bg: "#22c55e",
+    value: "red",
+    label: "Red - SPAIN",
+    textClass: "text-red-400",
+    bg: "#f87171",
   },
-  { value: "blue", label: "Blue", textClass: "text-blue-400", bg: "#60a5fa" },
-  { value: "red", label: "Red", textClass: "text-red-400", bg: "#f87171" },
+  {
+    value: "navy",
+    label: "Navy - FRANCE",
+    textClass: "text-sky-300",
+    bg: "#1e3a8a",
+  },
   {
     value: "purple",
-    label: "Purple",
+    label: "Purple - GERMANY",
     textClass: "text-purple-400",
     bg: "#c084fc",
   },
   {
     value: "orange",
-    label: "Orange",
+    label: "Orange - NETHERLANDS",
     textClass: "text-orange-400",
     bg: "#fb923c",
+  },
+  {
+    value: "cyan",
+    label: "Cyan - ITALY",
+    textClass: "text-cyan-300",
+    bg: "#22d3ee",
+  },
+  {
+    value: "burgundy",
+    label: "Burgundy - PORTUGAL",
+    textClass: "text-rose-300",
+    bg: "#7f1d1d",
   },
 ];
 
@@ -986,24 +1029,86 @@ function adsHistoryValue(
   );
 }
 
+function getDirectDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
+  const record = playlist as PlaylistRow & Record<string, unknown>;
+
+  const candidatesByOffset: Record<number, unknown[]> = {
+    0: [
+      record.today,
+      record.today_growth,
+      record.growth_today,
+      record.growth_24h,
+      record.followers_today,
+      record.day_0,
+      record.today_0,
+    ],
+    1: [
+      record.today_minus_1,
+      record.day_1,
+      record.followers_day_1,
+      record.today_1,
+    ],
+    2: [
+      record.today_minus_2,
+      record.day_2,
+      record.followers_day_2,
+      record.today_2,
+    ],
+    3: [
+      record.today_minus_3,
+      record.day_3,
+      record.followers_day_3,
+      record.today_3,
+    ],
+    4: [
+      record.today_minus_4,
+      record.day_4,
+      record.followers_day_4,
+      record.today_4,
+    ],
+  };
+
+  for (const value of candidatesByOffset[dayOffset] ?? []) {
+    const numeric = adsGetNumericValue(value);
+    if (numeric !== null) return numeric;
+  }
+
+  return null;
+}
+
 function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
   const targetLabel = adsFormatDayLabel(dayOffset);
+  let matchedValue: number | null = null;
 
-  // The backend now sends daily stat values directly. Match the exact date
-  // column instead of subtracting follower snapshots or shifting by array index.
+  // The backend sends daily stat values directly. Match the exact date column
+  // instead of subtracting follower snapshots or shifting by array index.
   const dailyGrowthRow = (playlist.daily_growth ?? []).find((item) => {
     const label = adsNormalizeHistoryLabel(item.label || item.date);
     return label === targetLabel;
   });
 
-  if (dailyGrowthRow) return adsHistoryValue(dailyGrowthRow);
+  if (dailyGrowthRow) {
+    matchedValue = adsHistoryValue(dailyGrowthRow);
+    if (matchedValue !== 0) return matchedValue;
+  }
 
   const dailyHistoryRow = (playlist.daily_history ?? []).find((item) => {
     const label = adsNormalizeHistoryLabel(item.label || item.date);
     return label === targetLabel;
   });
 
-  if (dailyHistoryRow) return adsHistoryValue(dailyHistoryRow);
+  if (dailyHistoryRow) {
+    matchedValue = adsHistoryValue(dailyHistoryRow);
+    if (matchedValue !== 0) return matchedValue;
+  }
+
+  // Fallback to direct fields like today/today_minus_1 when daily arrays are
+  // missing or stale.
+  const directValue = getDirectDailyStatValue(playlist, dayOffset);
+  if (directValue !== null && directValue !== 0) return directValue;
+
+  if (matchedValue !== null) return matchedValue;
+  if (directValue !== null) return directValue;
 
   return 0;
 }
@@ -1017,6 +1122,17 @@ function getFollowerGainSum(playlist: PlaylistRow, days: 7 | 30) {
 
   for (let offset = 0; offset < days; offset += 1) {
     total += getDailyStatValue(playlist, offset);
+  }
+
+  // If the visible daily values are unavailable, fall back to backend summary
+  // values so the 7D/30D columns do not incorrectly show 0.
+  const backendSummary =
+    days === 7
+      ? adsGetNumericValue(playlist.growth_7d)
+      : adsGetNumericValue(playlist.growth_30d);
+
+  if (total === 0 && backendSummary !== null && backendSummary !== 0) {
+    return backendSummary;
   }
 
   return total;
@@ -1582,19 +1698,54 @@ export default function AdsPage() {
   }, [playlists]);
 
   const playlistManagerSyncMap = useMemo(() => {
-    const state = playlistManagerStateQuery.data as
-      | { syncedPlaylists?: Array<Record<string, unknown>> }
-      | null
-      | undefined;
+    const state = playlistManagerStateQuery.data as Record<string, unknown> | null | undefined;
 
     const map = new Map<string, string>();
 
-    for (const item of state?.syncedPlaylists ?? []) {
+    const collectSyncedItems = (value: unknown): Array<Record<string, unknown>> => {
+      if (!value) return [];
+
+      if (Array.isArray(value)) {
+        return value.flatMap((item) => collectSyncedItems(item));
+      }
+
+      if (typeof value !== "object") return [];
+
+      const record = value as Record<string, unknown>;
+      const hasSyncDate = Boolean(
+        record.lastSyncedAt ??
+          record.last_synced_at ??
+          record.syncedAt ??
+          record.synced_at ??
+          record.lastSynced ??
+          record.last_synced,
+      );
+
+      const hasPlaylistId = Boolean(
+        record.playlistId ??
+          record.playlist_id ??
+          record.spotify_id ??
+          record.spotify_playlist_id ??
+          record.id,
+      );
+
+      const nested = Object.values(record).flatMap((item) =>
+        Array.isArray(item) || (item && typeof item === "object")
+          ? collectSyncedItems(item)
+          : [],
+      );
+
+      return hasSyncDate && hasPlaylistId ? [record, ...nested] : nested;
+    };
+
+    for (const item of collectSyncedItems(state)) {
       const lastSyncedAt =
         (item.lastSyncedAt as string | undefined) ??
         (item.last_synced_at as string | undefined) ??
         (item.syncedAt as string | undefined) ??
         (item.synced_at as string | undefined) ??
+        (item.lastSynced as string | undefined) ??
+        (item.last_synced as string | undefined) ??
         null;
 
       if (!lastSyncedAt) continue;
@@ -1604,7 +1755,8 @@ export default function AdsPage() {
         item.playlistId ??
         item.playlist_id ??
         item.spotify_id ??
-        item.spotify_playlist_id;
+        item.spotify_playlist_id ??
+        item.id;
 
       if (accountId && playlistId) {
         map.set(`${accountId}-${playlistId}`, lastSyncedAt);
@@ -2084,7 +2236,7 @@ export default function AdsPage() {
             : filters.lastUpdate === "15"
               ? 15
               : 30;
-      data = data.filter((p) => isWithinLastDays(getLastSyncedAt(p), days));
+      data = data.filter((p) => isWithinLastDays(getPlaylistManagerLastSynced(p), days));
     }
 
     return [...data].sort((a, b) => {
@@ -2105,8 +2257,8 @@ export default function AdsPage() {
         return (getTrackCount(a) - getTrackCount(b)) * dir;
       if (sortField === "lastUpdate")
         return (
-          parseTimestamp(getLastSyncedAt(a)) -
-          parseTimestamp(getLastSyncedAt(b))
+          parseTimestamp(getPlaylistManagerLastSynced(a)) -
+          parseTimestamp(getPlaylistManagerLastSynced(b))
         ) * dir;
       if (sortField === "today")
         return (getTodayValue(a, 0) - getTodayValue(b, 0)) * dir;
@@ -2191,7 +2343,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 48px 68px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -2546,6 +2698,7 @@ export default function AdsPage() {
       "Account",
       "Saves",
       "7D",
+      "30D",
       "Category",
       "Genre",
       "Country",
@@ -2558,7 +2711,6 @@ export default function AdsPage() {
       formatDayMonth(2),
       formatDayMonth(3),
       formatDayMonth(4),
-      "30D",
       "Ad Dates",
     ];
     const rows = filtered.map((playlist) => {
@@ -2570,6 +2722,7 @@ export default function AdsPage() {
         getAccountName(playlist.account_id),
         playlist.followers ?? 0,
         getFollowerGainSum(playlist, 7),
+        getFollowerGainSum(playlist, 30),
         data.category,
         data.genre,
         data.country,
@@ -2582,7 +2735,6 @@ export default function AdsPage() {
         getTodayValue(playlist, 2),
         getTodayValue(playlist, 3),
         getTodayValue(playlist, 4),
-        getFollowerGainSum(playlist, 30),
         data.ads.map((ad) => `${ad.date}:${ad.color}`).join(" | "),
       ];
     });
@@ -2692,6 +2844,16 @@ export default function AdsPage() {
         <div className="flex flex-wrap items-start gap-3 xl:justify-end">
           {hasSelectedRows ? (
             <>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRows({});
+                  setLastSelectedRowIndex(null);
+                }}
+                className="h-10 rounded-xl border border-zinc-700 bg-black px-4 text-sm font-semibold text-white hover:border-green-500 hover:text-green-400"
+              >
+                Deselect ({selectedRowKeys.length})
+              </button>
               <select
                 value={selectedAdColor}
                 onChange={(e) =>
@@ -2974,6 +3136,12 @@ export default function AdsPage() {
               >
                 7D {arrowFor("growth7d")}
               </div>
+              <div
+                className={headerClass("growth30d")}
+                onClick={() => toggleSort("growth30d")}
+              >
+                30D {arrowFor("growth30d")}
+              </div>
               <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
                 Category{" "}
                 <button
@@ -3050,12 +3218,6 @@ export default function AdsPage() {
                 onClick={() => toggleSort("today4")}
               >
                 {formatDayMonth(4)} {arrowFor("today4")}
-              </div>
-              <div
-                className={headerClass("growth30d")}
-                onClick={() => toggleSort("growth30d")}
-              >
-                30D {arrowFor("growth30d")}
               </div>
               <div
                 className={`${headerClass("adDate")} text-center`}
@@ -3166,6 +3328,9 @@ export default function AdsPage() {
                       <div className="px-1">
                         <GrowthCell value={getFollowerGainSum(playlist, 7)} />
                       </div>
+                      <div className="px-1">
+                        <GrowthCell value={getFollowerGainSum(playlist, 30)} />
+                      </div>
                       <div className="px-2">
                         <AdsSelect
                           value={data.category}
@@ -3232,9 +3397,6 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 4)} />
-                      </div>
-                      <div className="px-1">
-                        <GrowthCell value={getFollowerGainSum(playlist, 30)} />
                       </div>
                       <div className="flex items-center justify-center px-2">
                         <button
@@ -3383,6 +3545,12 @@ export default function AdsPage() {
           <div
             className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl"
             onMouseDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                saveAdDate();
+              }
+            }}
           >
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">
