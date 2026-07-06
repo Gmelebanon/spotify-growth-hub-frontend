@@ -55,34 +55,76 @@ function getRangeStart(range: ChartRange) {
   return now;
 }
 
+function getHistoryDateValue(item: PlaylistHistoryItem) {
+  return item.date || item.created_at || "";
+}
+
+function getHistoryDayKey(item: PlaylistHistoryItem) {
+  const value = getHistoryDateValue(item);
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function getHistoryTimestamp(item: PlaylistHistoryItem) {
+  const value = getHistoryDateValue(item);
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function getDailyHistoryValue(item: PlaylistHistoryItem) {
+  const raw = item as PlaylistHistoryItem & {
+    growth?: number | null;
+    value?: number | null;
+    count?: number | null;
+  };
+
+  const value = raw.growth ?? raw.value ?? raw.count ?? item.followers ?? 0;
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
 function buildDailyGrowth(history: PlaylistHistoryItem[], range: ChartRange) {
   const start = getRangeStart(range);
 
-  const sorted = [...history]
+  const latestByDate = new Map<string, PlaylistHistoryItem>();
+
+  history
     .filter((item) => item.created_at || item.date)
-    .sort(
-      (a, b) =>
-        new Date(a.created_at || a.date || "").getTime() -
-        new Date(b.created_at || b.date || "").getTime(),
-    )
-    .filter((item) => {
-      if (!start) return true;
-      const date = new Date(item.created_at || item.date || "");
-      return date >= start;
+    .forEach((item) => {
+      const dayKey = getHistoryDayKey(item);
+      if (!dayKey) return;
+
+      const existing = latestByDate.get(dayKey);
+      if (!existing || getHistoryTimestamp(item) >= getHistoryTimestamp(existing)) {
+        latestByDate.set(dayKey, item);
+      }
     });
 
-  return sorted.map((item, index) => {
-    const previous = sorted[index - 1];
-    const currentFollowers = item.followers ?? 0;
-    const previousFollowers = previous?.followers ?? currentFollowers;
-    const growth = index === 0 ? 0 : currentFollowers - previousFollowers;
+  return [...latestByDate.entries()]
+    .map(([dayKey, item]) => {
+      const dateValue = item.date || item.created_at || dayKey;
+      const date = new Date(dateValue);
+      const growth = getDailyHistoryValue(item);
 
-    return {
-      date: item.created_at || item.date || "",
-      followers: currentFollowers,
-      growth,
-    };
-  });
+      return {
+        date: dateValue,
+        dayKey,
+        timestamp: Number.isNaN(date.getTime()) ? 0 : date.getTime(),
+        followers: growth,
+        growth,
+      };
+    })
+    .filter((item) => {
+      if (!start) return true;
+      if (!item.timestamp) return true;
+      return item.timestamp >= start.getTime();
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function downloadCsv(rows: { date: string; followers: number; growth: number }[]) {
@@ -205,15 +247,26 @@ export default function PlaylistDetailPage() {
   const history = historyQuery.data ?? [];
   const tracks = tracksQuery.data ?? [];
 
+  const playlistSyncSource = (playlist ?? {}) as Playlist & {
+    last_synced?: string | null;
+    last_synced_at?: string | null;
+    synced_at?: string | null;
+    updated_at?: string | null;
+  };
+
   const lastSyncedAt =
-    history.length > 0 ? history[0].date || history[0].created_at : null;
+    playlistSyncSource.last_synced_at ||
+    playlistSyncSource.last_synced ||
+    playlistSyncSource.synced_at ||
+    playlistSyncSource.updated_at ||
+    null;
 
   const dailyGrowth = useMemo(
     () => buildDailyGrowth(history, chartRange),
     [history, chartRange],
   );
 
-  const maxGrowth = Math.max(...dailyGrowth.map((item) => Math.abs(item.growth)), 1);
+  const maxGrowth = Math.max(...dailyGrowth.map((item) => Math.abs(item.growth || 0)), 1);
 
   const copyPlaylistLink = async () => {
     const link =
@@ -448,7 +501,7 @@ export default function PlaylistDetailPage() {
 
                     return (
                       <div
-                        key={`${item.date}-${index}`}
+                        key={`${item.dayKey || item.date}-${index}`}
                         onMouseEnter={() => setHoveredBar(item)}
                         onMouseLeave={() => setHoveredBar(null)}
                         title={`${formatDate(item.date)} - ${formatGrowth(item.growth)}`}
