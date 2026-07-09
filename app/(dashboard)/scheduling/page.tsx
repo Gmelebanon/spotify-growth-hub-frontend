@@ -75,6 +75,8 @@ type TextField =
 
 type SortField = TextField;
 
+type TimeFilter = "this_week" | "this_month" | "all" | "date_range";
+
 type Column = {
   label: string;
   field: TextField;
@@ -155,6 +157,33 @@ function formatDateForInput(value: string) {
   const month = String(parsed.getMonth() + 1).padStart(2, "0");
   const day = String(parsed.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function releaseDateTimestamp(value: string) {
+  const formatted = formatDateForInput(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(formatted)) return null;
+
+  const parsed = new Date(`${formatted}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  parsed.setHours(0, 0, 0, 0);
+  return parsed.getTime();
+}
+
+function startOfCurrentWeek() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  const day = date.getDay();
+  const offsetFromMonday = day === 0 ? 6 : day - 1;
+  date.setDate(date.getDate() - offsetFromMonday);
+  return date;
+}
+
+function endOfCurrentWeek() {
+  const date = startOfCurrentWeek();
+  date.setDate(date.getDate() + 6);
+  date.setHours(23, 59, 59, 999);
+  return date;
 }
 
 function normalizeMatchKey(value: string) {
@@ -362,6 +391,9 @@ export default function SchedulingPage() {
   const [sortField, setSortField] = useState<SortField>("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
+  const [dateRangeStart, setDateRangeStart] = useState("");
+  const [dateRangeEnd, setDateRangeEnd] = useState("");
   const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
   const [isDeleteSheetOpen, setIsDeleteSheetOpen] = useState(false);
   const [isDeleteSelectedOpen, setIsDeleteSelectedOpen] = useState(false);
@@ -469,17 +501,19 @@ export default function SchedulingPage() {
       const data = (await response.json()) as SchedulingPayload | SchedulingRow[];
       if (Array.isArray(data)) {
         setSheets([{ id: 1, name: "Schedule", sort_order: 0 }]);
-        setActiveSheetId(1);
+        setActiveSheetId(null);
         setRows(data.map((row) => ({ ...row, sheet_id: row.sheet_id || 1 })));
       } else {
         const sortedSheets = [...data.sheets].sort(
           (a, b) => a.sort_order - b.sort_order || a.id - b.id,
         );
-        const latestSheet = sortedSheets[sortedSheets.length - 1] || null;
-
         setSheets(sortedSheets);
         setRows(data.rows);
-        setActiveSheetId((current) => current || latestSheet?.id || null);
+        setActiveSheetId((current) =>
+          current !== null && sortedSheets.some((sheet) => sheet.id === current)
+            ? current
+            : null,
+        );
       }
     } catch {
       setError("Failed to load releases.");
@@ -675,7 +709,40 @@ export default function SchedulingPage() {
         )
       : activeRows;
 
-    const filtered = searched.filter((row) => {
+    const timeFiltered = searched.filter((row) => {
+      if (timeFilter === "all") return true;
+
+      const rowTimestamp = releaseDateTimestamp(row.release_date);
+      if (rowTimestamp === null) return false;
+
+      if (timeFilter === "this_week") {
+        return (
+          rowTimestamp >= startOfCurrentWeek().getTime() &&
+          rowTimestamp <= endOfCurrentWeek().getTime()
+        );
+      }
+
+      if (timeFilter === "this_month") {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        return rowTimestamp >= monthStart.getTime() && rowTimestamp <= monthEnd.getTime();
+      }
+
+      const startTimestamp = dateRangeStart
+        ? releaseDateTimestamp(dateRangeStart)
+        : null;
+      const endTimestamp = dateRangeEnd
+        ? releaseDateTimestamp(dateRangeEnd)
+        : null;
+
+      if (startTimestamp !== null && rowTimestamp < startTimestamp) return false;
+      if (endTimestamp !== null && rowTimestamp > endTimestamp) return false;
+
+      return true;
+    });
+
+    const filtered = timeFiltered.filter((row) => {
       return COLUMNS.every((column) => {
         const selectedValues = activeFilters[column.field];
         if (!selectedValues || selectedValues.length === 0) return true;
@@ -706,7 +773,17 @@ export default function SchedulingPage() {
 
       return sortDirection === "asc" ? result : -result;
     });
-  }, [activeFilters, activeRows, onlineReferenceKeys, search, sortDirection, sortField]);
+  }, [
+    activeFilters,
+    activeRows,
+    dateRangeEnd,
+    dateRangeStart,
+    onlineReferenceKeys,
+    search,
+    sortDirection,
+    sortField,
+    timeFilter,
+  ]);
 
   const selectedRows = useMemo(() => {
     const selected = new Set(selectedIds);
@@ -1602,6 +1679,47 @@ export default function SchedulingPage() {
               </option>
             ))}
           </select>
+
+          <select
+            value={timeFilter}
+            onChange={(event) => {
+              const next = event.target.value as TimeFilter;
+              setTimeFilter(next);
+              if (next !== "date_range") {
+                setDateRangeStart("");
+                setDateRangeEnd("");
+              }
+              setSelectedIds([]);
+            }}
+            className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm font-semibold text-white outline-none focus:border-green-500"
+            aria-label="Filter releases by time"
+          >
+            <option value="this_week">This Week</option>
+            <option value="this_month">This Month</option>
+            <option value="all">All</option>
+            <option value="date_range">Date Range</option>
+          </select>
+
+          {timeFilter === "date_range" ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={dateRangeStart}
+                onChange={(event) => setDateRangeStart(event.target.value)}
+                className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
+                aria-label="Date range start"
+              />
+              <span className="text-sm text-zinc-600">to</span>
+              <input
+                type="date"
+                value={dateRangeEnd}
+                min={dateRangeStart || undefined}
+                onChange={(event) => setDateRangeEnd(event.target.value)}
+                className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
+                aria-label="Date range end"
+              />
+            </div>
+          ) : null}
 
           <button
             onClick={() => setIsCreateSheetOpen(true)}
