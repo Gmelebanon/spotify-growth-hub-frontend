@@ -810,6 +810,7 @@ export default function PlaylistManagerPage() {
   const [trackUndoStack, setTrackUndoStack] = useState<AddedTrack[][]>([]);
   const [syncProgress, setSyncProgress] = useState<Record<string, number>>({});
   const [syncStatus, setSyncStatus] = useState<Record<string, string>>({});
+  const [isRefreshingNames, setIsRefreshingNames] = useState(false);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const accountsQuery = useQuery<AccountItem[]>({
@@ -895,6 +896,168 @@ export default function PlaylistManagerPage() {
       }));
     });
   }, [accounts, playlistsQueries]);
+
+  const reconcileSavedPlaylistNames = (
+    currentState: PlaylistManagerState,
+    currentPlaylists: FlatPlaylistItem[],
+  ) => {
+    if (currentPlaylists.length === 0) return currentState;
+
+    const findCurrentPlaylist = (
+      playlistId: number,
+      accountId: number,
+      spotifyId?: string | null,
+    ) =>
+      currentPlaylists.find(
+        (item) =>
+          Number(item.id) === Number(playlistId) &&
+          Number(item.accountId) === Number(accountId),
+      ) ??
+      (spotifyId
+        ? currentPlaylists.find(
+            (item) =>
+              Number(item.accountId) === Number(accountId) &&
+              (item.spotify_id === spotifyId ||
+                item.spotify_playlist_id === spotifyId),
+          )
+        : undefined);
+
+    let changed = false;
+
+    const savedMasterPlaylists = currentState.savedMasterPlaylists.map((saved) => {
+      const current = findCurrentPlaylist(saved.playlistId, saved.accountId);
+      if (!current) return saved;
+
+      const nextName = current.name || saved.name;
+      const nextImageUrl = current.image_url ?? saved.imageUrl;
+      const nextTracks = current.tracks_count ?? saved.tracks;
+
+      if (
+        nextName !== saved.name ||
+        nextImageUrl !== saved.imageUrl ||
+        nextTracks !== saved.tracks
+      ) {
+        changed = true;
+        return {
+          ...saved,
+          name: nextName,
+          imageUrl: nextImageUrl,
+          tracks: nextTracks,
+        };
+      }
+
+      return saved;
+    });
+
+    const syncedPlaylists = currentState.syncedPlaylists.map((saved) => {
+      const savedSpotifyId =
+        saved.spotifyId || extractSpotifyPlaylistId(saved.spotifyUrl || "");
+      const current = findCurrentPlaylist(
+        saved.playlistId,
+        saved.accountId,
+        savedSpotifyId,
+      );
+      if (!current) return saved;
+
+      const nextName = current.name || saved.name;
+      const nextImageUrl = current.image_url ?? saved.imageUrl;
+      const nextSpotifyUrl = current.spotify_url ?? saved.spotifyUrl;
+      const nextSpotifyId =
+        current.spotify_id ||
+        current.spotify_playlist_id ||
+        saved.spotifyId ||
+        null;
+
+      if (
+        nextName !== saved.name ||
+        nextImageUrl !== saved.imageUrl ||
+        nextSpotifyUrl !== saved.spotifyUrl ||
+        nextSpotifyId !== saved.spotifyId
+      ) {
+        changed = true;
+        return {
+          ...saved,
+          name: nextName,
+          imageUrl: nextImageUrl,
+          spotifyUrl: nextSpotifyUrl,
+          spotifyId: nextSpotifyId,
+        };
+      }
+
+      return saved;
+    });
+
+    if (!changed) return currentState;
+
+    const selectedMaster =
+      savedMasterPlaylists.find(
+        (item) => item.id === currentState.selectedSavedMasterPlaylistId,
+      ) ?? null;
+
+    return {
+      ...currentState,
+      savedMasterPlaylists,
+      syncedPlaylists,
+      masterPlaylistName: selectedMaster?.name ?? currentState.masterPlaylistName,
+      masterPlaylistImageUrl:
+        selectedMaster?.imageUrl ?? currentState.masterPlaylistImageUrl,
+    };
+  };
+
+  useEffect(() => {
+    if (!hydrated || allPlaylists.length === 0) return;
+
+    setState((current) => {
+      const next = reconcileSavedPlaylistNames(current, allPlaylists);
+      if (next === current) return current;
+
+      saveStateToLocalStorage(next);
+      saveStateToDatabase(next).catch(() => undefined);
+      return next;
+    });
+  }, [hydrated, allPlaylists]);
+
+  const handleRefreshPlaylistNames = async () => {
+    if (isRefreshingNames || accounts.length === 0) return;
+
+    setIsRefreshingNames(true);
+    setPageMessage("Refreshing playlist names from Spotify...");
+
+    try {
+      for (const account of accounts) {
+        const response = await fetch(
+          `${API_BASE_URL}/api/accounts/${account.id}/playlists/sync?limit=500&offset=0`,
+          {
+            method: "POST",
+            cache: "no-store",
+          },
+        );
+
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(
+            `Could not refresh ${account.display_name || `Account ${account.id}`}: ${body}`,
+          );
+        }
+      }
+
+      await Promise.all(
+        playlistsQueries.map((query) => query.refetch()),
+      );
+
+      setPageMessage(
+        "Playlist names refreshed from Spotify. Renamed playlists are now updated.",
+      );
+    } catch (error) {
+      setPageMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to refresh playlist names.",
+      );
+    } finally {
+      setIsRefreshingNames(false);
+    }
+  };
 
   const selectedMaster = useMemo(() => {
     if (!state.selectedSavedMasterPlaylistId) return null;
@@ -1874,6 +2037,28 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
               handleImportCsvFile(event.target.files?.[0] ?? null)
             }
           />
+          <button
+            type="button"
+            onClick={handleRefreshPlaylistNames}
+            disabled={isRefreshingNames || accounts.length === 0}
+            aria-label="Refresh Names"
+            title="Refresh Names"
+            className="flex h-12 w-12 items-center justify-center rounded-xl border border-green-500/50 text-green-400 hover:bg-green-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <svg
+              className={`h-5 w-5 ${isRefreshingNames ? "animate-spin" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={handleClearAllPlaylistManager}

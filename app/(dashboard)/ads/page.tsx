@@ -3021,24 +3021,26 @@ export default function AdsPage() {
                       <span>{group.label}</span>
                       <span>›</span>
                     </div>
-                    <div className="invisible absolute right-full top-0 z-[10000] mr-2 max-h-72 w-56 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 opacity-0 shadow-[0_20px_60px_rgba(0,0,0,0.9)] group-hover/item:visible group-hover/item:opacity-100">
-                      <button
-                        type="button"
-                        onClick={() => group.set("")}
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
-                      >
-                        All
-                      </button>
-                      {group.options.map((option, optionIndex) => (
+                    <div className="invisible absolute right-full top-0 z-[10000] w-[232px] pr-2 opacity-0 group-hover/item:visible group-hover/item:opacity-100">
+                      <div className="ads-green-scrollbar max-h-72 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
                         <button
-                          key={`${group.label}-${option}-${optionIndex}`}
                           type="button"
-                          onClick={() => group.set(option)}
-                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${group.value === option ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-200"} hover:bg-zinc-900`}
+                          onClick={() => group.set("")}
+                          className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
                         >
-                          {option}
+                          All
                         </button>
-                      ))}
+                        {group.options.map((option, optionIndex) => (
+                          <button
+                            key={`${group.label}-${option}-${optionIndex}`}
+                            type="button"
+                            onClick={() => group.set(option)}
+                            className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${group.value === option ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-200"} hover:bg-zinc-900`}
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))}
