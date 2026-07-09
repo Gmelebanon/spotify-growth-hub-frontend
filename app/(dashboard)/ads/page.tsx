@@ -1083,7 +1083,7 @@ function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
   // The backend sends daily stat values directly. Match the exact date column
   // instead of subtracting follower snapshots or shifting by array index.
   const dailyGrowthRow = (playlist.daily_growth ?? []).find((item) => {
-    const label = adsNormalizeHistoryLabel(item.label || item.date);
+    const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
@@ -1093,7 +1093,7 @@ function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
   }
 
   const dailyHistoryRow = (playlist.daily_history ?? []).find((item) => {
-    const label = adsNormalizeHistoryLabel(item.label || item.date);
+    const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
@@ -1119,20 +1119,39 @@ function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
 
 function getFollowerGainSum(playlist: PlaylistRow, days: 7 | 30) {
   let total = 0;
+  let hasDailyData = false;
 
   for (let offset = 0; offset < days; offset += 1) {
+    const targetLabel = adsFormatDayLabel(offset);
+
+    const hasGrowthRow = (playlist.daily_growth ?? []).some((item) => {
+      const label = adsNormalizeHistoryLabel(item.date || item.label);
+      return label === targetLabel;
+    });
+
+    const hasHistoryRow = (playlist.daily_history ?? []).some((item) => {
+      const label = adsNormalizeHistoryLabel(item.date || item.label);
+      return label === targetLabel;
+    });
+
+    const hasDirectValue = getDirectDailyStatValue(playlist, offset) !== null;
+
+    if (hasGrowthRow || hasHistoryRow || hasDirectValue) {
+      hasDailyData = true;
+    }
+
     total += getDailyStatValue(playlist, offset);
   }
 
-  // If the visible daily values are unavailable, fall back to backend summary
-  // values so the 7D/30D columns do not incorrectly show 0.
-  const backendSummary =
-    days === 7
-      ? adsGetNumericValue(playlist.growth_7d)
-      : adsGetNumericValue(playlist.growth_30d);
+  // A real seven-day or thirty-day total can validly equal zero. Only use the
+  // backend summary when no daily source exists at all.
+  if (!hasDailyData) {
+    const backendSummary =
+      days === 7
+        ? adsGetNumericValue(playlist.growth_7d)
+        : adsGetNumericValue(playlist.growth_30d);
 
-  if (total === 0 && backendSummary !== null && backendSummary !== 0) {
-    return backendSummary;
+    if (backendSummary !== null) return backendSummary;
   }
 
   return total;
@@ -3002,26 +3021,24 @@ export default function AdsPage() {
                       <span>{group.label}</span>
                       <span>›</span>
                     </div>
-                    <div className="invisible absolute right-full top-0 z-[10000] w-[232px] pr-2 opacity-0 group-hover/item:visible group-hover/item:opacity-100">
-                      <div className="ads-green-scrollbar max-h-72 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                    <div className="invisible absolute right-full top-0 z-[10000] mr-2 max-h-72 w-56 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 opacity-0 shadow-[0_20px_60px_rgba(0,0,0,0.9)] group-hover/item:visible group-hover/item:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => group.set("")}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
+                      >
+                        All
+                      </button>
+                      {group.options.map((option, optionIndex) => (
                         <button
+                          key={`${group.label}-${option}-${optionIndex}`}
                           type="button"
-                          onClick={() => group.set("")}
-                          className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-900"
+                          onClick={() => group.set(option)}
+                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${group.value === option ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-200"} hover:bg-zinc-900`}
                         >
-                          All
+                          {option}
                         </button>
-                        {group.options.map((option, optionIndex) => (
-                          <button
-                            key={`${group.label}-${option}-${optionIndex}`}
-                            type="button"
-                            onClick={() => group.set(option)}
-                            className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${group.value === option ? "bg-green-500/10 font-bold text-green-400" : "text-zinc-200"} hover:bg-zinc-900`}
-                          >
-                            {option}
-                          </button>
-                        ))}
-                      </div>
+                      ))}
                     </div>
                   </div>
                 ))}
