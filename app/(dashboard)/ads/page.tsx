@@ -34,7 +34,10 @@ type SortField =
   | "today4"
   | "growth7d"
   | "growth30d"
+  | "category"
+  | "genre"
   | "country"
+  | "master"
   | "adDate";
 
 type SortOrder = "asc" | "desc";
@@ -2385,8 +2388,22 @@ export default function AdsPage() {
         return (getFollowerGainSum(a, 7) - getFollowerGainSum(b, 7)) * dir;
       if (sortField === "growth30d")
         return (getFollowerGainSum(a, 30) - getFollowerGainSum(b, 30)) * dir;
+      if (sortField === "category")
+        return rowA.category.localeCompare(rowB.category, undefined, {
+          sensitivity: "base",
+        }) * dir;
+      if (sortField === "genre")
+        return rowA.genre.localeCompare(rowB.genre, undefined, {
+          sensitivity: "base",
+        }) * dir;
       if (sortField === "country")
-        return rowA.country.localeCompare(rowB.country) * dir;
+        return rowA.country.localeCompare(rowB.country, undefined, {
+          sensitivity: "base",
+        }) * dir;
+      if (sortField === "master")
+        return rowA.master.localeCompare(rowB.master, undefined, {
+          sensitivity: "base",
+        }) * dir;
       if (sortField === "adDate")
         return (getLatestAdTimestamp(rowA.ads) - getLatestAdTimestamp(rowB.ads)) * dir;
       return 0;
@@ -3347,22 +3364,42 @@ export default function AdsPage() {
               >
                 30D {arrowFor("growth30d")}
               </div>
-              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
-                Category{" "}
+              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase">
+                <button
+                  type="button"
+                  onClick={() => toggleSort("category")}
+                  className={`whitespace-nowrap ${
+                    sortField === "category"
+                      ? "text-green-400"
+                      : "text-zinc-400"
+                  }`}
+                >
+                  Category {arrowFor("category")}
+                </button>
                 <button
                   type="button"
                   onClick={() => openOptionModal("category")}
                   className="text-[12px] font-black leading-none text-green-400 hover:text-green-300"
+                  title="Manage categories"
                 >
                   +
                 </button>
               </div>
-              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
-                Genre{" "}
+              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase">
+                <button
+                  type="button"
+                  onClick={() => toggleSort("genre")}
+                  className={`whitespace-nowrap ${
+                    sortField === "genre" ? "text-green-400" : "text-zinc-400"
+                  }`}
+                >
+                  Genre {arrowFor("genre")}
+                </button>
                 <button
                   type="button"
                   onClick={() => openOptionModal("genre")}
                   className="text-[12px] font-black leading-none text-green-400 hover:text-green-300"
+                  title="Manage genres"
                 >
                   +
                 </button>
@@ -3373,8 +3410,11 @@ export default function AdsPage() {
               >
                 Country {arrowFor("country")}
               </div>
-              <div className="px-1 py-3 text-[10px] font-semibold uppercase text-zinc-400">
-                Master
+              <div
+                className={headerClass("master")}
+                onClick={() => toggleSort("master")}
+              >
+                Master {arrowFor("master")}
               </div>
               <div
                 className={headerClass("ads")}
