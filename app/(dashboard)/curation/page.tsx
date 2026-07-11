@@ -1720,31 +1720,8 @@ function SideSection({
     );
   }, [selectedCsvPlaylistId]);
 
-  useEffect(() => {
-    if ((csvPlaylistOptions ?? []).length === 0 || (importedLinks ?? []).length === 0) return;
-
-    const importedPlaylistIds = (importedLinks ?? [])
-      .map((item) => extractSpotifyPlaylistId(item.link) || item.link)
-      .filter(Boolean);
-    const importedNames = (importedLinks ?? []).map((item) =>
-      smartCurationDropdownSortKey(item.display_name),
-    );
-    const matches = (csvPlaylistOptions ?? [])
-      .filter((option) => {
-        const optionKey = smartCurationDropdownSortKey(option.label);
-        return (
-          importedPlaylistIds.includes(option.playlistId) ||
-          importedNames.includes(optionKey)
-        );
-      })
-      .map((option) => option.playlistId);
-
-    if (matches.length === 0) return;
-
-    setSelectedCsvPlaylistIds((current) =>
-      Array.from(new Set([...current, ...matches])),
-    );
-  }, [csvPlaylistOptions, importedLinks]);
+  // Imported playlists must not automatically re-select dropdown options.
+  // After pressing Go, both dropdowns stay reset to their default state.
 
   useEffect(() => {
     if (!csvDropdownOpen) return;
@@ -1780,7 +1757,13 @@ function SideSection({
 
   const importSelectedCsvPlaylists = () => {
     if (selectedCsvPlaylistIds.length === 0) return;
+
     onImportCsvPlaylists(selectedCsvPlaylistIds);
+
+    // Reset the dropdown after the import is started.
+    setSelectedCsvPlaylistIds([]);
+    setCsvDropdownSearch("");
+    onSelectCsvPlaylist?.("");
     setCsvDropdownOpen(false);
   };
 
