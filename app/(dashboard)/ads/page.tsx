@@ -1078,39 +1078,38 @@ function getDirectDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
 
 function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
   const targetLabel = adsFormatDayLabel(dayOffset);
-  let matchedValue: number | null = null;
+  const dailyGrowth = playlist.daily_growth ?? [];
+  const dailyHistory = playlist.daily_history ?? [];
+  const hasDateBasedHistory = dailyGrowth.length > 0 || dailyHistory.length > 0;
 
-  // The backend sends daily stat values directly. Match the exact date column
-  // instead of subtracting follower snapshots or shifting by array index.
-  const dailyGrowthRow = (playlist.daily_growth ?? []).find((item) => {
+  // Date-based rows are the source of truth. On a new calendar day, a missing
+  // row must display 0 until the next sync writes that date. Never reuse stale
+  // today/today_minus_* fields from the previous day.
+  const dailyGrowthRow = dailyGrowth.find((item) => {
     const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
   if (dailyGrowthRow) {
-    matchedValue = adsHistoryValue(dailyGrowthRow);
-    if (matchedValue !== 0) return matchedValue;
+    return adsHistoryValue(dailyGrowthRow);
   }
 
-  const dailyHistoryRow = (playlist.daily_history ?? []).find((item) => {
+  const dailyHistoryRow = dailyHistory.find((item) => {
     const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
   if (dailyHistoryRow) {
-    matchedValue = adsHistoryValue(dailyHistoryRow);
-    if (matchedValue !== 0) return matchedValue;
+    return adsHistoryValue(dailyHistoryRow);
   }
 
-  // Fallback to direct fields like today/today_minus_1 when daily arrays are
-  // missing or stale.
-  const directValue = getDirectDailyStatValue(playlist, dayOffset);
-  if (directValue !== null && directValue !== 0) return directValue;
+  if (hasDateBasedHistory) {
+    return 0;
+  }
 
-  if (matchedValue !== null) return matchedValue;
-  if (directValue !== null) return directValue;
-
-  return 0;
+  // Older API responses may not include dated arrays. Only in that case use
+  // the direct today/today_minus_* compatibility fields.
+  return getDirectDailyStatValue(playlist, dayOffset) ?? 0;
 }
 
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
@@ -1193,7 +1192,7 @@ function getLatestAdTimestamp(ads: AdEntry[]) {
 }
 
 function CopyIcon() {
-  return <span className="text-[13px] leading-none">⧉</span>;
+  return <span className="text-[17px] font-black leading-none">⧉</span>;
 }
 
 function IdIcon() {
@@ -1318,7 +1317,7 @@ function preferSavedMeta(local: RowMeta | undefined, saved: RowMeta): RowMeta {
   if (!local) return saved;
 
   return {
-    color: local.color && local.color !== "gray" ? local.color : saved.color,
+    color: local.color ?? saved.color,
     category: isPlaceholderValue(local.category, "Category")
       ? saved.category
       : local.category,
@@ -1464,6 +1463,7 @@ export default function AdsPage() {
   const [sortField, setSortField] = useState<SortField>("growth7d");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [selectedAdColor, setSelectedAdColor] = useState<CodeColor>("gray");
+  const [selectedTitleColor, setSelectedTitleColor] = useState<CodeColor | "">("");
   const [filters, setFilters] = useState({
     category: "",
     color: "",
@@ -2362,7 +2362,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 68px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 46px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -2444,19 +2444,21 @@ export default function AdsPage() {
   };
 
   const applyTitleColorToSelected = (color: CodeColor) => {
-    setSelectedAdColor(color);
     const selectedPlaylists = filtered.filter(
       (playlist) => selectedRows[playlistKey(playlist)],
     );
     const next = { ...rowData };
+
     selectedPlaylists.forEach((playlist) => {
       const key = playlistKey(playlist);
       next[key] = { ...getDefaultRowData(playlist), ...next[key], color };
       saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
     });
+
     persistRowData(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
+    setSelectedTitleColor("");
   };
 
   const openAdModal = (playlist: PlaylistRow, adIndex?: number) => {
@@ -2617,6 +2619,47 @@ export default function AdsPage() {
     });
 
     persistRowData(next);
+    setSelectedAds({});
+    setLastSelectedAdKey(null);
+  };
+
+  const toggleStrikeForSelectedAds = () => {
+    if (selectedAdKeys.length === 0) return;
+    const selectedSet = new Set(selectedAdKeys);
+    const next = { ...rowData };
+
+    const selectedEntries = filtered.flatMap((playlist) => {
+      const key = playlistKey(playlist);
+      return getRowData(playlist).ads
+        .map((ad, index) => ({
+          ad,
+          selectionKey: `${key}::${index}`,
+        }))
+        .filter((item) => selectedSet.has(item.selectionKey));
+    });
+
+    const shouldStrike = selectedEntries.some((item) => !item.ad.stroke);
+
+    filtered.forEach((playlist) => {
+      const key = playlistKey(playlist);
+      const current = getRowData(playlist);
+      let changed = false;
+
+      const ads = current.ads.map((ad, index) => {
+        if (!selectedSet.has(`${key}::${index}`)) return ad;
+        changed = true;
+        return { ...ad, stroke: shouldStrike };
+      });
+
+      if (changed) {
+        next[key] = { ...current, ads };
+        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
+      }
+    });
+
+    persistRowData(next);
+    setSelectedAds({});
+    setLastSelectedAdKey(null);
   };
 
   useEffect(() => {
@@ -2783,6 +2826,31 @@ export default function AdsPage() {
 
   const filterGroups = [
     {
+      label: "Account",
+      options: accounts
+        .map((account) => account.display_name || account.name || `Account ${account.id}`)
+        .filter(Boolean),
+      value:
+        activeAccountId === ALL_ACCOUNTS_ID
+          ? ""
+          : getAccountName(activeAccountId ?? undefined),
+      set: (value: string) => {
+        if (!value || value === "All") {
+          setActiveAccountId(ALL_ACCOUNTS_ID);
+          return;
+        }
+
+        const matchedAccount = accounts.find(
+          (account) =>
+            (account.display_name || account.name || `Account ${account.id}`) === value,
+        );
+
+        if (matchedAccount) {
+          setActiveAccountId(matchedAccount.id);
+        }
+      },
+    },
+    {
       label: "Category",
       options: categoryOptions.filter((item) => item !== "Category"),
       value: filters.category,
@@ -2860,7 +2928,7 @@ export default function AdsPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-start gap-3 xl:justify-end">
+        <div className="flex w-full flex-wrap items-start gap-3 xl:justify-end">
           {hasSelectedRows ? (
             <>
               <button
@@ -2874,20 +2942,29 @@ export default function AdsPage() {
                 Deselect ({selectedRowKeys.length})
               </button>
               <select
-                value={selectedAdColor}
-                onChange={(e) =>
-                  applyTitleColorToSelected(e.target.value as CodeColor)
-                }
-                className={`h-10 w-auto min-w-[82px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm outline-none focus:border-green-500 ${getColorOption(selectedAdColor).textClass}`}
-                title="Color selected titles"
+                value={selectedTitleColor}
+                onChange={(event) => {
+                  const color = event.target.value as CodeColor | "";
+                  setSelectedTitleColor(color);
+                  if (color) applyTitleColorToSelected(color);
+                }}
+                className={`h-10 w-auto min-w-[100px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm outline-none focus:border-green-500 ${
+                  selectedTitleColor
+                    ? getColorOption(selectedTitleColor).textClass
+                    : "text-zinc-300"
+                }`}
+                title="Color selected playlist titles"
               >
+                <option value="" className="text-zinc-300">
+                  Color
+                </option>
                 {colorOptions.map((color) => (
                   <option
                     key={color.value}
                     value={color.value}
                     className={color.textClass}
                   >
-                    {color.label}
+                    {color.value.charAt(0).toUpperCase() + color.value.slice(1)}
                   </option>
                 ))}
               </select>
@@ -2941,6 +3018,15 @@ export default function AdsPage() {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={toggleStrikeForSelectedAds}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 hover:border-green-500 hover:text-green-400"
+                title="Toggle strike over selected ad dates"
+                aria-label="Toggle strike over selected ad dates"
+              >
+                <span className="text-xl font-black leading-none line-through">S</span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -3055,20 +3141,8 @@ export default function AdsPage() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-1 self-start">
-            <select
-              value={activeAccountId ?? ALL_ACCOUNTS_ID}
-              onChange={(e) => setActiveAccountId(Number(e.target.value))}
-              className="h-11 w-[190px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
-            >
-              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.display_name || acc.name}
-                </option>
-              ))}
-            </select>
-            <div className="flex items-center justify-end gap-1 text-[11px] text-zinc-500">
+          <div className="basis-full">
+            <div className="flex w-full items-center justify-end gap-1 pt-1 text-[11px] text-zinc-500">
               <button
                 type="button"
                 onClick={() => { setShowAllRows(false); setRowPage((current) => Math.max(1, current - 1)); }}
@@ -3239,6 +3313,9 @@ export default function AdsPage() {
                 onClick={() => toggleSort("today4")}
               >
                 {formatDayMonth(4)} {arrowFor("today4")}
+              </div>
+              <div className="px-2 py-3 text-center text-[10px] font-semibold uppercase text-zinc-400">
+                URL
               </div>
               <div
                 className={`${headerClass("adDate")} text-center`}
@@ -3418,6 +3495,19 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 4)} />
+                      </div>
+                      <div className="flex items-center justify-center px-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigator.clipboard.writeText(getPlaylistUrl(playlist))
+                          }
+                          className="text-zinc-300 hover:text-green-400"
+                          title="Copy playlist link"
+                          aria-label="Copy playlist link"
+                        >
+                          <CopyIcon />
+                        </button>
                       </div>
                       <div className="flex items-center justify-center px-2">
                         <button
