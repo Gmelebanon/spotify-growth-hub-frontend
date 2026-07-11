@@ -249,47 +249,43 @@ function extractArrayFromPossibleStorageValue(value: any): any[] {
 function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
   if (typeof window === "undefined") return [];
 
+  // Only read Playlist Manager's saved master playlists. Do not scan every
+  // localStorage key, because that can accidentally pull all account playlists.
   const preferredKeys = [
+    "nerd-engine-playlist-manager-state",
+    "nerd-engine-playlist-manager",
     "nerd-engine-master-playlists",
     "nerd-engine-saved-master-playlists",
     "nerd-engine-playlist-manager-master-playlists",
     "playlist-manager-master-playlists",
-    "masterPlaylists",
     "savedMasterPlaylists",
   ];
-
-  const allKeys = Array.from({ length: window.localStorage.length })
-    .map((_, index) => window.localStorage.key(index))
-    .filter(Boolean) as string[];
-
-  const keys = Array.from(
-    new Set([
-      ...preferredKeys,
-      ...allKeys.filter((key) =>
-        /master|playlist-manager|saved.*playlist/i.test(key),
-      ),
-    ]),
-  );
 
   const collected: SavedMasterPlaylist[] = [];
   const seen = new Set<string>();
 
-  keys.forEach((key) => {
+  preferredKeys.forEach((key) => {
     try {
       const raw = window.localStorage.getItem(key);
       if (!raw) return;
 
       const parsed = JSON.parse(raw);
-      const array = extractArrayFromPossibleStorageValue(parsed);
+      const candidates = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.savedMasterPlaylists)
+          ? parsed.savedMasterPlaylists
+          : Array.isArray(parsed?.state?.savedMasterPlaylists)
+            ? parsed.state.savedMasterPlaylists
+            : [];
 
-      array.forEach((item: any, index: number) => {
+      candidates.forEach((item: any, index: number) => {
         const normalized = normalizeSavedMasterPlaylist(item, index);
         if (!normalized || seen.has(normalized.id)) return;
         seen.add(normalized.id);
         collected.push(normalized);
       });
     } catch {
-      // Ignore malformed saved data and try the next key.
+      // Ignore malformed or unrelated storage values.
     }
   });
 
@@ -1652,31 +1648,8 @@ function SideSection({
     );
   }, [selectedCsvPlaylistId]);
 
-  useEffect(() => {
-    if ((csvPlaylistOptions ?? []).length === 0 || (importedLinks ?? []).length === 0) return;
-
-    const importedPlaylistIds = (importedLinks ?? [])
-      .map((item) => extractSpotifyPlaylistId(item.link) || item.link)
-      .filter(Boolean);
-    const importedNames = (importedLinks ?? []).map((item) =>
-      smartCurationDropdownSortKey(item.display_name),
-    );
-    const matches = (csvPlaylistOptions ?? [])
-      .filter((option) => {
-        const optionKey = smartCurationDropdownSortKey(option.label);
-        return (
-          importedPlaylistIds.includes(option.playlistId) ||
-          importedNames.includes(optionKey)
-        );
-      })
-      .map((option) => option.playlistId);
-
-    if (matches.length === 0) return;
-
-    setSelectedCsvPlaylistIds((current) =>
-      Array.from(new Set([...current, ...matches])),
-    );
-  }, [csvPlaylistOptions, importedLinks]);
+  // Do not auto-select dropdown items from imported links. After Go/import,
+  // the dropdown must return to its default empty state on both sides.
 
   useEffect(() => {
     if (!csvDropdownOpen) return;
@@ -1712,7 +1685,13 @@ function SideSection({
 
   const importSelectedCsvPlaylists = () => {
     if (selectedCsvPlaylistIds.length === 0) return;
+
     onImportCsvPlaylists(selectedCsvPlaylistIds);
+
+    // Return the dropdown to its default state after Go/import.
+    setSelectedCsvPlaylistIds([]);
+    setCsvDropdownSearch("");
+    onSelectCsvPlaylist?.("");
     setCsvDropdownOpen(false);
   };
 
