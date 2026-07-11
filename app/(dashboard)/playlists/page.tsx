@@ -81,6 +81,27 @@ const ALL_ACCOUNTS_ID = -1;
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "https://spotify-growth-hub-backend.onrender.com";
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
+const ADS_HIDDEN_ROWS_STORAGE_KEY = "ads-page-hidden-rows-v1";
+
+async function fetchHiddenRowsFromDatabase(): Promise<Record<string, boolean>> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/ads-hidden-rows?ts=${Date.now()}`,
+      { cache: "no-store" },
+    );
+
+    if (!response.ok) return {};
+
+    const payload = await response.json();
+    const hiddenRows = payload?.hidden_rows;
+
+    return hiddenRows && typeof hiddenRows === "object" && !Array.isArray(hiddenRows)
+      ? (hiddenRows as Record<string, boolean>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 async function fetchPlaylistsWithHistory(
   accountId: number,
@@ -178,28 +199,33 @@ function getNumericValue(value: unknown) {
 
 function getGrowthValue(playlist: PlaylistRow, dayOffset: number) {
   const label = formatDayLabel(dayOffset);
+  const dailyGrowth = playlist.daily_growth ?? [];
+  const dailyHistory = playlist.daily_history ?? [];
+  const hasDateBasedHistory = dailyGrowth.length > 0 || dailyHistory.length > 0;
 
-  // First use backend-calculated daily_growth. This is the table value.
-  const fromDailyGrowth = playlist.daily_growth?.find(
+  const fromDailyGrowth = dailyGrowth.find(
     (item) =>
-      normalizeHistoryLabel(item.label) === label ||
-      normalizeHistoryLabel(item.date) === label,
+      normalizeHistoryLabel(item.date || item.label) === label,
   );
 
   if (fromDailyGrowth) {
     return Number(fromDailyGrowth.growth ?? 0);
   }
 
-  // Then use saved database daily_history if daily_growth is missing.
-  const fromHistory = playlist.daily_history?.find(
+  const fromHistory = dailyHistory.find(
     (item) => normalizeHistoryLabel(item.date) === label,
   );
 
   if (fromHistory) {
-    return Number(fromHistory.growth ?? 0);
+    return Number(fromHistory.growth ?? fromHistory.followers ?? 0);
   }
 
-  // Final fallback for older API fields.
+  // Once dated history exists, a missing new date must be 0 until the next
+  // sync writes that exact calendar date. Never reuse yesterday's fields.
+  if (hasDateBasedHistory) {
+    return 0;
+  }
+
   const possibleKeys = [
     dayOffset === 0 ? "today" : `today_minus_${dayOffset}`,
     dayOffset === 0 ? "growth_24h" : `growth_day_${dayOffset}`,
@@ -244,6 +270,9 @@ export default function PlaylistsPage() {
   const [search, setSearch] = useState("");
   const [accountFilter, setAccountFilter] = useState<number>(ALL_ACCOUNTS_ID);
   const [genreFilter, setGenreFilter] = useState("all");
+  const [hiddenRows, setHiddenRows] = useState<Record<string, boolean>>({});
+  const [hiddenMode, setHiddenMode] = useState<"visible" | "hidden" | "all">("visible");
+  const [hiddenRowsLoaded, setHiddenRowsLoaded] = useState(false);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [sortField, setSortField] = useState("day-0");
   const [adsGenres, setAdsGenres] = useState<Record<string, string>>({});
@@ -298,6 +327,48 @@ export default function PlaylistsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const localRaw = window.localStorage.getItem(ADS_HIDDEN_ROWS_STORAGE_KEY);
+    let localHiddenRows: Record<string, boolean> = {};
+
+    try {
+      localHiddenRows = localRaw
+        ? (JSON.parse(localRaw) as Record<string, boolean>)
+        : {};
+    } catch {
+      localHiddenRows = {};
+    }
+
+    fetchHiddenRowsFromDatabase()
+      .then((databaseHiddenRows) => {
+        if (cancelled) return;
+
+        const merged = {
+          ...localHiddenRows,
+          ...databaseHiddenRows,
+        };
+
+        setHiddenRows(merged);
+        setHiddenRowsLoaded(true);
+        window.localStorage.setItem(
+          ADS_HIDDEN_ROWS_STORAGE_KEY,
+          JSON.stringify(merged),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHiddenRows(localHiddenRows);
+        setHiddenRowsLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+
   const playlistQueries = useQueries({
     queries: accounts.map((account) => ({
       queryKey: ["playlists", account.id],
@@ -343,6 +414,12 @@ export default function PlaylistsPage() {
   const filtered = useMemo(() => {
     let data = playlists;
 
+    if (hiddenMode === "visible") {
+      data = data.filter((playlist) => !hiddenRows[playlistKey(playlist)]);
+    } else if (hiddenMode === "hidden") {
+      data = data.filter((playlist) => !!hiddenRows[playlistKey(playlist)]);
+    }
+
     if (accountFilter !== ALL_ACCOUNTS_ID) {
       data = data.filter((playlist) => playlist.account_id === accountFilter);
     }
@@ -387,6 +464,8 @@ export default function PlaylistsPage() {
   }, [
     accountFilter,
     genreFilter,
+    hiddenMode,
+    hiddenRows,
     playlists,
     search,
     sortOrder,
@@ -536,6 +615,15 @@ export default function PlaylistsPage() {
     URL.revokeObjectURL(url);
   };
 
+  if (!hiddenRowsLoaded) {
+    return (
+      <div className="h-screen bg-black px-6 py-8 text-white">
+        <h1 className="text-3xl font-semibold tracking-tight">Playlists Daily</h1>
+        <p className="mt-2 text-sm text-zinc-500">Loading playlist filters...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen overflow-hidden bg-black px-6 py-8 text-white">
       <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
@@ -554,37 +642,138 @@ export default function PlaylistsPage() {
             className="h-10 w-[240px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
           />
 
-          <select
-            value={genreFilter}
-            onChange={(event) => setGenreFilter(event.target.value)}
-            className="h-10 w-[160px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
-          >
-            <option value="all">All Genres</option>
-            {genreOptions.map((genre) => (
-              <option key={genre} value={genre}>
-                {genre}
-              </option>
-            ))}
-          </select>
+          <div className="group relative">
+            <button
+              type="button"
+              className="h-10 rounded-xl border border-zinc-800 bg-black px-4 text-sm font-semibold text-white hover:border-green-500"
+            >
+              Filter
+            </button>
 
-          <select
-            value={accountFilter}
-            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-              const value = Number(event.target.value);
-              setAccountFilter(value);
-              setActiveAccountId(value === ALL_ACCOUNTS_ID ? 0 : value);
-            }}
-            className="h-10 w-[180px] rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
-          >
-            <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.display_name ||
-                  account.name ||
-                  `Account ${account.id}`}
-              </option>
-            ))}
-          </select>
+            <div className="invisible absolute right-0 top-full z-[9999] w-56 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                <div className="mb-2 border-b border-zinc-800 pb-2">
+                  <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Rows
+                  </p>
+                  {[
+                    { label: "Visible Rows", value: "visible" as const },
+                    {
+                      label: `Hidden Rows (${Object.values(hiddenRows).filter(Boolean).length})`,
+                      value: "hidden" as const,
+                    },
+                    { label: "All Rows", value: "all" as const },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setHiddenMode(option.value)}
+                      className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                        hiddenMode === option.value
+                          ? "bg-green-500/10 font-bold text-green-400"
+                          : "text-zinc-300"
+                      } hover:bg-zinc-900 hover:text-white`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="group/item relative rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white">
+                  <div className="flex items-center justify-between">
+                    <span>Account</span>
+                    <span>›</span>
+                  </div>
+                  <div className="invisible absolute right-full top-0 z-[10000] w-[232px] pr-2 opacity-0 group-hover/item:visible group-hover/item:opacity-100">
+                    <div className="playlists-green-scrollbar max-h-72 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountFilter(ALL_ACCOUNTS_ID);
+                          setActiveAccountId(0);
+                        }}
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                          accountFilter === ALL_ACCOUNTS_ID
+                            ? "bg-green-500/10 font-bold text-green-400"
+                            : "text-zinc-300"
+                        } hover:bg-zinc-900 hover:text-white`}
+                      >
+                        All Accounts
+                      </button>
+                      {accounts.map((account) => (
+                        <button
+                          key={account.id}
+                          type="button"
+                          onClick={() => {
+                            setAccountFilter(account.id);
+                            setActiveAccountId(account.id);
+                          }}
+                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                            accountFilter === account.id
+                              ? "bg-green-500/10 font-bold text-green-400"
+                              : "text-zinc-300"
+                          } hover:bg-zinc-900 hover:text-white`}
+                        >
+                          {account.display_name ||
+                            account.name ||
+                            `Account ${account.id}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="group/item relative rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white">
+                  <div className="flex items-center justify-between">
+                    <span>Genre</span>
+                    <span>›</span>
+                  </div>
+                  <div className="invisible absolute right-full top-0 z-[10000] w-[232px] pr-2 opacity-0 group-hover/item:visible group-hover/item:opacity-100">
+                    <div className="playlists-green-scrollbar max-h-72 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                      <button
+                        type="button"
+                        onClick={() => setGenreFilter("all")}
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                          genreFilter === "all"
+                            ? "bg-green-500/10 font-bold text-green-400"
+                            : "text-zinc-300"
+                        } hover:bg-zinc-900 hover:text-white`}
+                      >
+                        All Genres
+                      </button>
+                      {genreOptions.map((genre) => (
+                        <button
+                          key={genre}
+                          type="button"
+                          onClick={() => setGenreFilter(genre)}
+                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                            genreFilter === genre
+                              ? "bg-green-500/10 font-bold text-green-400"
+                              : "text-zinc-300"
+                          } hover:bg-zinc-900 hover:text-white`}
+                        >
+                          {genre}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountFilter(ALL_ACCOUNTS_ID);
+                    setActiveAccountId(0);
+                    setGenreFilter("all");
+                    setHiddenMode("visible");
+                  }}
+                  className="mt-1 w-full rounded-lg border-t border-zinc-800 px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
+                >
+                  Clear filters
+                </button>
+              </div>
+            </div>
+          </div>
 
           <Link
             href="/playlists/create"
@@ -709,6 +898,29 @@ export default function PlaylistsPage() {
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        .playlists-green-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #22c55e #000000;
+        }
+
+        .playlists-green-scrollbar::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+
+        .playlists-green-scrollbar::-webkit-scrollbar-track {
+          background: #000000;
+          border-radius: 9999px;
+        }
+
+        .playlists-green-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #22c55e 0%, #10b981 100%);
+          border: 2px solid #000000;
+          border-radius: 9999px;
+        }
+      `}</style>
 
       {showCreateModal && (
         <div
