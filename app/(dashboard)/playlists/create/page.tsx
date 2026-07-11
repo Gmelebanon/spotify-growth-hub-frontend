@@ -375,11 +375,9 @@ export default function CreatePlaylistPage() {
   const [accountId, setAccountId] = useState("");
   const [playlistName, setPlaylistName] = useState("");
   const [description, setDescription] = useState("");
-  const [folderName, setFolderName] = useState("");
   const [link1, setLink1] = useState("");
   const [link2, setLink2] = useState("");
 
-  const [bulkFolderName, setBulkFolderName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [results, setResults] = useState<CreateResult[]>([]);
@@ -469,7 +467,6 @@ export default function CreatePlaylistPage() {
         account_id: Number(accountId),
         name: playlistName.trim(),
         description,
-        folder_name: folderName.trim() || undefined,
         import_url_1: link1.trim() || undefined,
         import_url_2: link2.trim() || undefined,
         import_urls: uniqueNonEmpty([link1.trim(), link2.trim()]),
@@ -522,7 +519,7 @@ export default function CreatePlaylistPage() {
       if (!file) throw new Error("Choose a CSV file first.");
 
       const csvText = await file.text();
-      const rows = parseCsvRows(csvText, accountId, accounts, bulkFolderName);
+      const rows = parseCsvRows(csvText, accountId, accounts, "");
       setUploadedRows(rows);
 
       const res = await fetch(`${API_BASE_URL}/api/playlists/bulk-create`, {
@@ -632,16 +629,6 @@ export default function CreatePlaylistPage() {
               </label>
 
               <label className="col-span-2">
-                <div className="mb-2 text-xs uppercase tracking-[0.18em] text-zinc-500">Folder Name Optional</div>
-                <input
-                  value={folderName}
-                  onChange={(e) => setFolderName(e.target.value)}
-                  placeholder="Folder name to group this playlist"
-                  className="h-12 w-full rounded-xl border border-zinc-700 bg-black px-4 text-sm outline-none focus:border-green-500"
-                />
-              </label>
-
-              <label className="col-span-2">
                 <div className="mb-2 text-xs uppercase tracking-[0.18em] text-zinc-500">Description</div>
                 <textarea
                   value={description}
@@ -702,23 +689,13 @@ export default function CreatePlaylistPage() {
                     onChange={(e) => setAccountId(e.target.value)}
                     className="h-12 w-full rounded-xl border border-zinc-700 bg-black px-4 text-sm text-white outline-none focus:border-green-500"
                   >
-                    <option value="">Use account_id from CSV</option>
+                    <option value="">Choose Account</option>
                     {accounts.map((acc: Account) => (
                       <option key={acc.id} value={acc.id}>
                         {accountLabel(acc)}
                       </option>
                     ))}
                   </select>
-                </label>
-
-                <label>
-                  <div className="mb-2 text-xs uppercase tracking-[0.18em] text-zinc-500">Default Folder Name Optional</div>
-                  <input
-                    value={bulkFolderName}
-                    onChange={(e) => setBulkFolderName(e.target.value)}
-                    placeholder="Applied only when folder_name is blank in the CSV"
-                    className="h-12 w-full rounded-xl border border-zinc-700 bg-black px-4 text-sm outline-none focus:border-green-500"
-                  />
                 </label>
 
                 <label className="block h-12 w-full cursor-pointer rounded-xl border border-zinc-700 bg-black px-4 text-left text-sm leading-[48px] text-green-400 hover:border-green-500">
