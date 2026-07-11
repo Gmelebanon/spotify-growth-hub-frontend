@@ -1646,6 +1646,30 @@ export default function AdsPage() {
     refetchOnWindowFocus: false,
   });
 
+  useEffect(() => {
+    const state = playlistManagerStateQuery.data as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    const savedHiddenRows =
+      state?.adsHiddenRows ?? state?.ads_hidden_rows ?? null;
+
+    if (
+      !savedHiddenRows ||
+      typeof savedHiddenRows !== "object" ||
+      Array.isArray(savedHiddenRows)
+    ) {
+      return;
+    }
+
+    const nextHiddenRows = savedHiddenRows as Record<string, boolean>;
+    setHiddenRows(nextHiddenRows);
+    window.localStorage.setItem(
+      ADS_HIDDEN_ROWS_STORAGE_KEY,
+      JSON.stringify(nextHiddenRows),
+    );
+  }, [playlistManagerStateQuery.data]);
+
   const playlists = useMemo(() => {
     if (activeAccountId === ALL_ACCOUNTS_ID) {
       return allAccountQueries.flatMap((query, index) => {
@@ -2419,6 +2443,28 @@ export default function AdsPage() {
       ADS_HIDDEN_ROWS_STORAGE_KEY,
       JSON.stringify(nextHiddenRows),
     );
+
+    const currentState =
+      ((playlistManagerStateQuery.data as
+        | Record<string, unknown>
+        | null
+        | undefined) ?? {}) || {};
+    const nextState = {
+      ...currentState,
+      adsHiddenRows: nextHiddenRows,
+      ads_hidden_rows: nextHiddenRows,
+    };
+
+    void savePlaylistManagerState(nextState)
+      .then(() => playlistManagerStateQuery.refetch())
+      .then(() => {
+        queryClient.invalidateQueries({
+          queryKey: ["playlist-manager-state-for-ads"],
+        });
+      })
+      .catch((error) => {
+        console.error("Could not save hidden Ads playlists", error);
+      });
   };
 
   const hideSelectedRows = () => {
