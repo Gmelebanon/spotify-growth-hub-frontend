@@ -1459,26 +1459,21 @@ async function saveAdsMetaToDatabase(
 async function fetchHiddenRowsFromDatabase(): Promise<Record<string, boolean>> {
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/playlist-manager-state?user_key=${encodeURIComponent(
-        ADS_HIDDEN_ROWS_DATABASE_KEY,
-      )}&ts=${Date.now()}`,
+      `${API_BASE_URL}/api/ads-hidden-rows?ts=${Date.now()}`,
       { cache: "no-store" },
     );
 
     if (!response.ok) return {};
 
     const payload = await response.json();
-    const state = payload?.state;
+    const hiddenRows = payload?.hidden_rows;
 
     if (
-      state &&
-      typeof state === "object" &&
-      !Array.isArray(state) &&
-      state.hiddenRows &&
-      typeof state.hiddenRows === "object" &&
-      !Array.isArray(state.hiddenRows)
+      hiddenRows &&
+      typeof hiddenRows === "object" &&
+      !Array.isArray(hiddenRows)
     ) {
-      return state.hiddenRows as Record<string, boolean>;
+      return hiddenRows as Record<string, boolean>;
     }
 
     return {};
@@ -1490,12 +1485,11 @@ async function fetchHiddenRowsFromDatabase(): Promise<Record<string, boolean>> {
 async function saveHiddenRowsToDatabase(
   hiddenRows: Record<string, boolean>,
 ): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/playlist-manager-state`, {
+  const response = await fetch(`${API_BASE_URL}/api/ads-hidden-rows`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      user_key: ADS_HIDDEN_ROWS_DATABASE_KEY,
-      state: { hiddenRows },
+      hidden_rows: hiddenRows,
     }),
   });
 
