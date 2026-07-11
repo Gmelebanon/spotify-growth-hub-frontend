@@ -249,48 +249,120 @@ function extractArrayFromPossibleStorageValue(value: any): any[] {
 function loadSavedMasterPlaylists(): SavedMasterPlaylist[] {
   if (typeof window === "undefined") return [];
 
-  // Only read Playlist Manager's saved master playlists. Do not scan every
-  // localStorage key, because that can accidentally pull all account playlists.
   const preferredKeys = [
-    "nerd-engine-playlist-manager-state",
-    "nerd-engine-playlist-manager",
     "nerd-engine-master-playlists",
     "nerd-engine-saved-master-playlists",
     "nerd-engine-playlist-manager-master-playlists",
     "playlist-manager-master-playlists",
+    "masterPlaylists",
     "savedMasterPlaylists",
   ];
+
+  const allKeys = Array.from({ length: window.localStorage.length })
+    .map((_, index) => window.localStorage.key(index))
+    .filter(Boolean) as string[];
+
+  const keys = Array.from(
+    new Set([
+      ...preferredKeys,
+      ...allKeys.filter((key) =>
+        /master|playlist-manager|saved.*playlist/i.test(key),
+      ),
+    ]),
+  );
 
   const collected: SavedMasterPlaylist[] = [];
   const seen = new Set<string>();
 
-  preferredKeys.forEach((key) => {
+  keys.forEach((key) => {
     try {
       const raw = window.localStorage.getItem(key);
       if (!raw) return;
 
       const parsed = JSON.parse(raw);
-      const candidates = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed?.savedMasterPlaylists)
-          ? parsed.savedMasterPlaylists
-          : Array.isArray(parsed?.state?.savedMasterPlaylists)
-            ? parsed.state.savedMasterPlaylists
-            : [];
+      const array = extractArrayFromPossibleStorageValue(parsed);
 
-      candidates.forEach((item: any, index: number) => {
+      array.forEach((item: any, index: number) => {
         const normalized = normalizeSavedMasterPlaylist(item, index);
         if (!normalized || seen.has(normalized.id)) return;
         seen.add(normalized.id);
         collected.push(normalized);
       });
     } catch {
-      // Ignore malformed or unrelated storage values.
+      // Ignore malformed saved data and try the next key.
     }
   });
 
   return collected;
 }
+
+async function loadSavedMasterPlaylistsFromDatabase(): Promise<SavedMasterPlaylist[]> {
+  const candidateKeys = [
+    "global",
+    "playlist-manager",
+    "playlist_manager",
+    "default",
+  ];
+
+  for (const userKey of candidateKeys) {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/playlist-manager-state?user_key=${encodeURIComponent(
+          userKey,
+        )}&ts=${Date.now()}`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) continue;
+
+      const payload = await response.json();
+      const state = payload?.state ?? payload;
+
+      const candidates = Array.isArray(state?.savedMasterPlaylists)
+        ? state.savedMasterPlaylists
+        : Array.isArray(state?.state?.savedMasterPlaylists)
+          ? state.state.savedMasterPlaylists
+          : Array.isArray(state?.masterPlaylists)
+            ? state.masterPlaylists
+            : [];
+
+      const normalized = candidates
+        .map((item: any, index: number) =>
+          normalizeSavedMasterPlaylist(item, index),
+        )
+        .filter(Boolean) as SavedMasterPlaylist[];
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    } catch {
+      // Try the next supported state key.
+    }
+  }
+
+  return [];
+}
+
+function mergeSavedMasterPlaylists(
+  localItems: SavedMasterPlaylist[],
+  databaseItems: SavedMasterPlaylist[],
+) {
+  const merged = new Map<string, SavedMasterPlaylist>();
+
+  [...localItems, ...databaseItems].forEach((item) => {
+    const key = item.id || item.name;
+    const current = merged.get(key);
+
+    merged.set(key, {
+      ...current,
+      ...item,
+      name: item.name || current?.name || "Untitled Playlist",
+    });
+  });
+
+  return Array.from(merged.values());
+}
+
 
 const HISTORY_DB_NAME = "nerd-engine-curation-history-db";
 const HISTORY_STORE_NAME = "history";
@@ -1648,8 +1720,31 @@ function SideSection({
     );
   }, [selectedCsvPlaylistId]);
 
-  // Do not auto-select dropdown items from imported links. After Go/import,
-  // the dropdown must return to its default empty state on both sides.
+  useEffect(() => {
+    if ((csvPlaylistOptions ?? []).length === 0 || (importedLinks ?? []).length === 0) return;
+
+    const importedPlaylistIds = (importedLinks ?? [])
+      .map((item) => extractSpotifyPlaylistId(item.link) || item.link)
+      .filter(Boolean);
+    const importedNames = (importedLinks ?? []).map((item) =>
+      smartCurationDropdownSortKey(item.display_name),
+    );
+    const matches = (csvPlaylistOptions ?? [])
+      .filter((option) => {
+        const optionKey = smartCurationDropdownSortKey(option.label);
+        return (
+          importedPlaylistIds.includes(option.playlistId) ||
+          importedNames.includes(optionKey)
+        );
+      })
+      .map((option) => option.playlistId);
+
+    if (matches.length === 0) return;
+
+    setSelectedCsvPlaylistIds((current) =>
+      Array.from(new Set([...current, ...matches])),
+    );
+  }, [csvPlaylistOptions, importedLinks]);
 
   useEffect(() => {
     if (!csvDropdownOpen) return;
@@ -1685,13 +1780,7 @@ function SideSection({
 
   const importSelectedCsvPlaylists = () => {
     if (selectedCsvPlaylistIds.length === 0) return;
-
     onImportCsvPlaylists(selectedCsvPlaylistIds);
-
-    // Return the dropdown to its default state after Go/import.
-    setSelectedCsvPlaylistIds([]);
-    setCsvDropdownSearch("");
-    onSelectCsvPlaylist?.("");
     setCsvDropdownOpen(false);
   };
 
@@ -2766,6 +2855,8 @@ export default function CurationPage() {
   const [savedMasterPlaylists, setSavedMasterPlaylists] = useState<
     SavedMasterPlaylist[]
   >([]);
+  const [savedMasterPlaylistsLoading, setSavedMasterPlaylistsLoading] =
+    useState(true);
   const [sendStatus, setSendStatus] = useState("");
   const [undoStack, setUndoStack] = useState<CurationTrack[][]>([]);
   const [resultDragIndex, setResultDragIndex] = useState<number | null>(null);
@@ -2920,8 +3011,10 @@ export default function CurationPage() {
   }, [myCsvPlaylists]);
 
   useEffect(() => {
-    const refreshSavedMasters = () => {
-      const items = [...loadSavedMasterPlaylists()].sort((a, b) => {
+    let cancelled = false;
+
+    const sortItems = (items: SavedMasterPlaylist[]) =>
+      [...items].sort((a, b) => {
         const firstKey = smartCurationDropdownSortKey(a.name);
         const secondKey = smartCurationDropdownSortKey(b.name);
         const primary = curationDropdownCollator.compare(firstKey, secondKey);
@@ -2930,15 +3023,54 @@ export default function CurationPage() {
 
         return curationDropdownCollator.compare(a.name, b.name);
       });
-      setSavedMasterPlaylists(items);
-      setSelectedMasterPlaylistId((current) => current || items[0]?.id || "");
+
+    const applyLocalItems = () => {
+      const localItems = sortItems(loadSavedMasterPlaylists());
+
+      if (!cancelled && localItems.length > 0) {
+        setSavedMasterPlaylists(localItems);
+      }
+
+      return localItems;
     };
 
-    refreshSavedMasters();
-    window.addEventListener("storage", refreshSavedMasters);
+    const refreshSavedMasters = async () => {
+      setSavedMasterPlaylistsLoading(true);
+
+      const localItems = applyLocalItems();
+
+      try {
+        const databaseItems = await loadSavedMasterPlaylistsFromDatabase();
+        if (cancelled) return;
+
+        const mergedItems = sortItems(
+          mergeSavedMasterPlaylists(localItems, databaseItems),
+        );
+
+        setSavedMasterPlaylists(mergedItems);
+      } finally {
+        if (!cancelled) {
+          setSavedMasterPlaylistsLoading(false);
+        }
+      }
+    };
+
+    void refreshSavedMasters();
+
+    const handleStorage = () => {
+      const localItems = applyLocalItems();
+      if (localItems.length > 0) {
+        setSavedMasterPlaylists(sortItems(localItems));
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleStorage);
 
     return () => {
-      window.removeEventListener("storage", refreshSavedMasters);
+      cancelled = true;
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleStorage);
     };
   }, []);
 
@@ -4129,7 +4261,13 @@ export default function CurationPage() {
                 onChange={(e) => setSelectedMasterPlaylistId(e.target.value)}
                 className="h-11 min-w-[260px] rounded-xl border border-zinc-800 bg-black px-4 text-sm text-white outline-none transition focus:border-green-500"
               >
-                <option value="">Select saved master playlist</option>
+                <option value="">
+                  {savedMasterPlaylistsLoading
+                    ? "Loading saved master playlists..."
+                    : sortedSavedMasterPlaylists.length === 0
+                      ? "No saved master playlists"
+                      : "Select saved master playlist"}
+                </option>
                 {sortedSavedMasterPlaylists.map((playlist) => (
                   <option key={playlist.id} value={playlist.id}>
                     {playlist.name}
@@ -4140,7 +4278,12 @@ export default function CurationPage() {
               <button
                 type="button"
                 onClick={sendToPlaylistManager}
-                className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500"
+                disabled={
+                  savedMasterPlaylistsLoading ||
+                  !selectedMasterPlaylistId ||
+                  displayedCurationResult.length === 0
+                }
+                className="inline-flex h-11 items-center justify-center rounded-xl bg-green-600 px-8 text-sm font-semibold text-white transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Send {displayedCurationResult.length} tracks
               </button>
