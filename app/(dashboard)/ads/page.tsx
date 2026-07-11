@@ -176,6 +176,7 @@ const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 const ADS_CATEGORY_OPTIONS_STORAGE_KEY = "ads-page-category-options-v17";
 const ADS_GENRE_OPTIONS_STORAGE_KEY = "ads-page-genre-options-v17";
 const ADS_HIDDEN_ROWS_STORAGE_KEY = "ads-page-hidden-rows-v1";
+const ADS_HIDDEN_ROWS_DATABASE_KEY = "ads-hidden-rows";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -1454,6 +1455,56 @@ async function saveAdsMetaToDatabase(
   await saveAdsSettingsToDatabase(playlistId, playlistName, data);
 }
 
+
+async function fetchHiddenRowsFromDatabase(): Promise<Record<string, boolean>> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/playlist-manager-state?user_key=${encodeURIComponent(
+        ADS_HIDDEN_ROWS_DATABASE_KEY,
+      )}&ts=${Date.now()}`,
+      { cache: "no-store" },
+    );
+
+    if (!response.ok) return {};
+
+    const payload = await response.json();
+    const state = payload?.state;
+
+    if (
+      state &&
+      typeof state === "object" &&
+      !Array.isArray(state) &&
+      state.hiddenRows &&
+      typeof state.hiddenRows === "object" &&
+      !Array.isArray(state.hiddenRows)
+    ) {
+      return state.hiddenRows as Record<string, boolean>;
+    }
+
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveHiddenRowsToDatabase(
+  hiddenRows: Record<string, boolean>,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/playlist-manager-state`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_key: ADS_HIDDEN_ROWS_DATABASE_KEY,
+      state: { hiddenRows },
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to save hidden playlists.");
+  }
+}
+
 export default function AdsPage() {
   const queryClient = useQueryClient();
   const activeAccountId = useActiveAccountStore((s) => s.activeAccountId);
@@ -1477,6 +1528,8 @@ export default function AdsPage() {
   const [rowPage, setRowPage] = useState(1);
   const [showAllRows, setShowAllRows] = useState(false);
   const [hiddenRows, setHiddenRows] = useState<Record<string, boolean>>({});
+  const [hiddenRowsLoaded, setHiddenRowsLoaded] = useState(false);
+  const [hiddenRowsSaveError, setHiddenRowsSaveError] = useState("");
   const [hiddenMode, setHiddenMode] = useState<"visible" | "hidden" | "all">("visible");
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<
     number | null
@@ -1548,8 +1601,51 @@ export default function AdsPage() {
         ADS_GENRE_OPTIONS_STORAGE_KEY,
       );
       if (savedData) setRowData(JSON.parse(savedData));
-      const savedHiddenRows = window.localStorage.getItem(ADS_HIDDEN_ROWS_STORAGE_KEY);
-      if (savedHiddenRows) setHiddenRows(JSON.parse(savedHiddenRows));
+      const savedHiddenRows = window.localStorage.getItem(
+        ADS_HIDDEN_ROWS_STORAGE_KEY,
+      );
+      const localHiddenRows = savedHiddenRows
+        ? (JSON.parse(savedHiddenRows) as Record<string, boolean>)
+        : {};
+
+      fetchHiddenRowsFromDatabase()
+        .then(async (databaseHiddenRows) => {
+          if (cancelled) return;
+
+          const mergedHiddenRows = {
+            ...localHiddenRows,
+            ...databaseHiddenRows,
+          };
+
+          setHiddenRows(mergedHiddenRows);
+          setHiddenRowsLoaded(true);
+          window.localStorage.setItem(
+            ADS_HIDDEN_ROWS_STORAGE_KEY,
+            JSON.stringify(mergedHiddenRows),
+          );
+
+          // Migrate any old local-only hidden rows into the database once.
+          if (
+            Object.keys(localHiddenRows).some(
+              (key) => localHiddenRows[key] && !databaseHiddenRows[key],
+            )
+          ) {
+            try {
+              await saveHiddenRowsToDatabase(mergedHiddenRows);
+            } catch (error) {
+              setHiddenRowsSaveError(
+                error instanceof Error
+                  ? error.message
+                  : "Could not migrate hidden playlists.",
+              );
+            }
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setHiddenRows(localHiddenRows);
+          setHiddenRowsLoaded(true);
+        });
       setCategoryOptions(
         mergeDropdownOptions(
           defaultCategoryOptions,
@@ -1566,6 +1662,8 @@ export default function AdsPage() {
       setRowData({});
       setCategoryOptions(defaultCategoryOptions);
       setGenreOptions(defaultGenreOptions);
+      setHiddenRows({});
+      setHiddenRowsLoaded(true);
     }
 
     fetchAdsFilterOptionsFromDatabase().then((items) => {
@@ -1645,30 +1743,6 @@ export default function AdsPage() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
-
-  useEffect(() => {
-    const state = playlistManagerStateQuery.data as
-      | Record<string, unknown>
-      | null
-      | undefined;
-    const savedHiddenRows =
-      state?.adsHiddenRows ?? state?.ads_hidden_rows ?? null;
-
-    if (
-      !savedHiddenRows ||
-      typeof savedHiddenRows !== "object" ||
-      Array.isArray(savedHiddenRows)
-    ) {
-      return;
-    }
-
-    const nextHiddenRows = savedHiddenRows as Record<string, boolean>;
-    setHiddenRows(nextHiddenRows);
-    window.localStorage.setItem(
-      ADS_HIDDEN_ROWS_STORAGE_KEY,
-      JSON.stringify(nextHiddenRows),
-    );
-  }, [playlistManagerStateQuery.data]);
 
   const playlists = useMemo(() => {
     if (activeAccountId === ALL_ACCOUNTS_ID) {
@@ -2437,54 +2511,45 @@ export default function AdsPage() {
     setLastSelectedRowIndex(index);
   };
 
-  const persistHiddenRows = (nextHiddenRows: Record<string, boolean>) => {
+  const persistHiddenRows = async (
+    nextHiddenRows: Record<string, boolean>,
+  ) => {
     setHiddenRows(nextHiddenRows);
+    setHiddenRowsSaveError("");
     window.localStorage.setItem(
       ADS_HIDDEN_ROWS_STORAGE_KEY,
       JSON.stringify(nextHiddenRows),
     );
 
-    const currentState =
-      ((playlistManagerStateQuery.data as
-        | Record<string, unknown>
-        | null
-        | undefined) ?? {}) || {};
-    const nextState = {
-      ...currentState,
-      adsHiddenRows: nextHiddenRows,
-      ads_hidden_rows: nextHiddenRows,
-    };
-
-    void savePlaylistManagerState(nextState)
-      .then(() => playlistManagerStateQuery.refetch())
-      .then(() => {
-        queryClient.invalidateQueries({
-          queryKey: ["playlist-manager-state-for-ads"],
-        });
-      })
-      .catch((error) => {
-        console.error("Could not save hidden Ads playlists", error);
-      });
+    try {
+      await saveHiddenRowsToDatabase(nextHiddenRows);
+    } catch (error) {
+      setHiddenRowsSaveError(
+        error instanceof Error
+          ? error.message
+          : "Failed to save hidden playlists.",
+      );
+    }
   };
 
-  const hideSelectedRows = () => {
+  const hideSelectedRows = async () => {
     if (!hasSelectedRows) return;
     const next = { ...hiddenRows };
     selectedRowKeys.forEach((key) => {
       next[key] = true;
     });
-    persistHiddenRows(next);
+    await persistHiddenRows(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
   };
 
-  const unhideSelectedRows = () => {
+  const unhideSelectedRows = async () => {
     if (!hasSelectedRows) return;
     const next = { ...hiddenRows };
     selectedRowKeys.forEach((key) => {
       delete next[key];
     });
-    persistHiddenRows(next);
+    await persistHiddenRows(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
   };
@@ -2955,7 +3020,7 @@ export default function AdsPage() {
     },
   ];
 
-  if (!hasMounted) {
+  if (!hasMounted || !hiddenRowsLoaded) {
     return (
       <div className="min-h-screen w-full bg-black px-5 py-5 text-white lg:px-6">
         <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
@@ -2972,6 +3037,11 @@ export default function AdsPage() {
           <p className="mt-1 text-sm text-zinc-500">
             Track ad dates and monitor playlist growth over time.
           </p>
+          {hiddenRowsSaveError ? (
+            <p className="mt-1 text-xs text-red-400">
+              Hidden playlists were saved locally, but database save failed: {hiddenRowsSaveError}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex w-full flex-wrap items-start gap-3 xl:justify-end">
