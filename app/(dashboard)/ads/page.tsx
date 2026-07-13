@@ -34,10 +34,7 @@ type SortField =
   | "today4"
   | "growth7d"
   | "growth30d"
-  | "category"
-  | "genre"
   | "country"
-  | "master"
   | "adDate";
 
 type SortOrder = "asc" | "desc";
@@ -179,7 +176,6 @@ const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 const ADS_CATEGORY_OPTIONS_STORAGE_KEY = "ads-page-category-options-v17";
 const ADS_GENRE_OPTIONS_STORAGE_KEY = "ads-page-genre-options-v17";
 const ADS_HIDDEN_ROWS_STORAGE_KEY = "ads-page-hidden-rows-v1";
-const ADS_HIDDEN_ROWS_DATABASE_KEY = "ads-hidden-rows";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -1082,38 +1078,39 @@ function getDirectDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
 
 function getDailyStatValue(playlist: PlaylistRow, dayOffset: number) {
   const targetLabel = adsFormatDayLabel(dayOffset);
-  const dailyGrowth = playlist.daily_growth ?? [];
-  const dailyHistory = playlist.daily_history ?? [];
-  const hasDateBasedHistory = dailyGrowth.length > 0 || dailyHistory.length > 0;
+  let matchedValue: number | null = null;
 
-  // Date-based rows are the source of truth. On a new calendar day, a missing
-  // row must display 0 until the next sync writes that date. Never reuse stale
-  // today/today_minus_* fields from the previous day.
-  const dailyGrowthRow = dailyGrowth.find((item) => {
+  // The backend sends daily stat values directly. Match the exact date column
+  // instead of subtracting follower snapshots or shifting by array index.
+  const dailyGrowthRow = (playlist.daily_growth ?? []).find((item) => {
     const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
   if (dailyGrowthRow) {
-    return adsHistoryValue(dailyGrowthRow);
+    matchedValue = adsHistoryValue(dailyGrowthRow);
+    if (matchedValue !== 0) return matchedValue;
   }
 
-  const dailyHistoryRow = dailyHistory.find((item) => {
+  const dailyHistoryRow = (playlist.daily_history ?? []).find((item) => {
     const label = adsNormalizeHistoryLabel(item.date || item.label);
     return label === targetLabel;
   });
 
   if (dailyHistoryRow) {
-    return adsHistoryValue(dailyHistoryRow);
+    matchedValue = adsHistoryValue(dailyHistoryRow);
+    if (matchedValue !== 0) return matchedValue;
   }
 
-  if (hasDateBasedHistory) {
-    return 0;
-  }
+  // Fallback to direct fields like today/today_minus_1 when daily arrays are
+  // missing or stale.
+  const directValue = getDirectDailyStatValue(playlist, dayOffset);
+  if (directValue !== null && directValue !== 0) return directValue;
 
-  // Older API responses may not include dated arrays. Only in that case use
-  // the direct today/today_minus_* compatibility fields.
-  return getDirectDailyStatValue(playlist, dayOffset) ?? 0;
+  if (matchedValue !== null) return matchedValue;
+  if (directValue !== null) return directValue;
+
+  return 0;
 }
 
 function getTodayValue(playlist: PlaylistRow, offset: 0 | 1 | 2 | 3 | 4) {
@@ -1196,7 +1193,7 @@ function getLatestAdTimestamp(ads: AdEntry[]) {
 }
 
 function CopyIcon() {
-  return <span className="text-[17px] font-black leading-none">⧉</span>;
+  return <span className="text-[13px] leading-none">⧉</span>;
 }
 
 function IdIcon() {
@@ -1321,7 +1318,7 @@ function preferSavedMeta(local: RowMeta | undefined, saved: RowMeta): RowMeta {
   if (!local) return saved;
 
   return {
-    color: local.color ?? saved.color,
+    color: local.color && local.color !== "gray" ? local.color : saved.color,
     category: isPlaceholderValue(local.category, "Category")
       ? saved.category
       : local.category,
@@ -1458,50 +1455,6 @@ async function saveAdsMetaToDatabase(
   await saveAdsSettingsToDatabase(playlistId, playlistName, data);
 }
 
-
-async function fetchHiddenRowsFromDatabase(): Promise<Record<string, boolean>> {
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/api/ads-hidden-rows?ts=${Date.now()}`,
-      { cache: "no-store" },
-    );
-
-    if (!response.ok) return {};
-
-    const payload = await response.json();
-    const hiddenRows = payload?.hidden_rows;
-
-    if (
-      hiddenRows &&
-      typeof hiddenRows === "object" &&
-      !Array.isArray(hiddenRows)
-    ) {
-      return hiddenRows as Record<string, boolean>;
-    }
-
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-async function saveHiddenRowsToDatabase(
-  hiddenRows: Record<string, boolean>,
-): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/ads-hidden-rows`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      hidden_rows: hiddenRows,
-    }),
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "Failed to save hidden playlists.");
-  }
-}
-
 export default function AdsPage() {
   const queryClient = useQueryClient();
   const activeAccountId = useActiveAccountStore((s) => s.activeAccountId);
@@ -1511,7 +1464,6 @@ export default function AdsPage() {
   const [sortField, setSortField] = useState<SortField>("growth7d");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [selectedAdColor, setSelectedAdColor] = useState<CodeColor>("gray");
-  const [selectedTitleColor, setSelectedTitleColor] = useState<CodeColor | "">("");
   const [filters, setFilters] = useState({
     category: "",
     color: "",
@@ -1525,8 +1477,6 @@ export default function AdsPage() {
   const [rowPage, setRowPage] = useState(1);
   const [showAllRows, setShowAllRows] = useState(false);
   const [hiddenRows, setHiddenRows] = useState<Record<string, boolean>>({});
-  const [hiddenRowsLoaded, setHiddenRowsLoaded] = useState(false);
-  const [hiddenRowsSaveError, setHiddenRowsSaveError] = useState("");
   const [hiddenMode, setHiddenMode] = useState<"visible" | "hidden" | "all">("visible");
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<
     number | null
@@ -1598,51 +1548,8 @@ export default function AdsPage() {
         ADS_GENRE_OPTIONS_STORAGE_KEY,
       );
       if (savedData) setRowData(JSON.parse(savedData));
-      const savedHiddenRows = window.localStorage.getItem(
-        ADS_HIDDEN_ROWS_STORAGE_KEY,
-      );
-      const localHiddenRows = savedHiddenRows
-        ? (JSON.parse(savedHiddenRows) as Record<string, boolean>)
-        : {};
-
-      fetchHiddenRowsFromDatabase()
-        .then(async (databaseHiddenRows) => {
-          if (cancelled) return;
-
-          const mergedHiddenRows = {
-            ...localHiddenRows,
-            ...databaseHiddenRows,
-          };
-
-          setHiddenRows(mergedHiddenRows);
-          setHiddenRowsLoaded(true);
-          window.localStorage.setItem(
-            ADS_HIDDEN_ROWS_STORAGE_KEY,
-            JSON.stringify(mergedHiddenRows),
-          );
-
-          // Migrate any old local-only hidden rows into the database once.
-          if (
-            Object.keys(localHiddenRows).some(
-              (key) => localHiddenRows[key] && !databaseHiddenRows[key],
-            )
-          ) {
-            try {
-              await saveHiddenRowsToDatabase(mergedHiddenRows);
-            } catch (error) {
-              setHiddenRowsSaveError(
-                error instanceof Error
-                  ? error.message
-                  : "Could not migrate hidden playlists.",
-              );
-            }
-          }
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setHiddenRows(localHiddenRows);
-          setHiddenRowsLoaded(true);
-        });
+      const savedHiddenRows = window.localStorage.getItem(ADS_HIDDEN_ROWS_STORAGE_KEY);
+      if (savedHiddenRows) setHiddenRows(JSON.parse(savedHiddenRows));
       setCategoryOptions(
         mergeDropdownOptions(
           defaultCategoryOptions,
@@ -1659,8 +1566,6 @@ export default function AdsPage() {
       setRowData({});
       setCategoryOptions(defaultCategoryOptions);
       setGenreOptions(defaultGenreOptions);
-      setHiddenRows({});
-      setHiddenRowsLoaded(true);
     }
 
     fetchAdsFilterOptionsFromDatabase().then((items) => {
@@ -1718,8 +1623,9 @@ export default function AdsPage() {
       queryKey: ["ads-playlists", account.id],
       queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: activeAccountId === ALL_ACCOUNTS_ID,
-      staleTime: 60_000,
-      refetchOnWindowFocus: false,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
     })),
   });
 
@@ -2388,22 +2294,8 @@ export default function AdsPage() {
         return (getFollowerGainSum(a, 7) - getFollowerGainSum(b, 7)) * dir;
       if (sortField === "growth30d")
         return (getFollowerGainSum(a, 30) - getFollowerGainSum(b, 30)) * dir;
-      if (sortField === "category")
-        return rowA.category.localeCompare(rowB.category, undefined, {
-          sensitivity: "base",
-        }) * dir;
-      if (sortField === "genre")
-        return rowA.genre.localeCompare(rowB.genre, undefined, {
-          sensitivity: "base",
-        }) * dir;
       if (sortField === "country")
-        return rowA.country.localeCompare(rowB.country, undefined, {
-          sensitivity: "base",
-        }) * dir;
-      if (sortField === "master")
-        return rowA.master.localeCompare(rowB.master, undefined, {
-          sensitivity: "base",
-        }) * dir;
+        return rowA.country.localeCompare(rowB.country) * dir;
       if (sortField === "adDate")
         return (getLatestAdTimestamp(rowA.ads) - getLatestAdTimestamp(rowB.ads)) * dir;
       return 0;
@@ -2471,7 +2363,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 46px 68px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -2522,65 +2414,50 @@ export default function AdsPage() {
     setLastSelectedRowIndex(index);
   };
 
-  const persistHiddenRows = async (
-    nextHiddenRows: Record<string, boolean>,
-  ) => {
+  const persistHiddenRows = (nextHiddenRows: Record<string, boolean>) => {
     setHiddenRows(nextHiddenRows);
-    setHiddenRowsSaveError("");
     window.localStorage.setItem(
       ADS_HIDDEN_ROWS_STORAGE_KEY,
       JSON.stringify(nextHiddenRows),
     );
-
-    try {
-      await saveHiddenRowsToDatabase(nextHiddenRows);
-    } catch (error) {
-      setHiddenRowsSaveError(
-        error instanceof Error
-          ? error.message
-          : "Failed to save hidden playlists.",
-      );
-    }
   };
 
-  const hideSelectedRows = async () => {
+  const hideSelectedRows = () => {
     if (!hasSelectedRows) return;
     const next = { ...hiddenRows };
     selectedRowKeys.forEach((key) => {
       next[key] = true;
     });
-    await persistHiddenRows(next);
+    persistHiddenRows(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
   };
 
-  const unhideSelectedRows = async () => {
+  const unhideSelectedRows = () => {
     if (!hasSelectedRows) return;
     const next = { ...hiddenRows };
     selectedRowKeys.forEach((key) => {
       delete next[key];
     });
-    await persistHiddenRows(next);
+    persistHiddenRows(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
   };
 
   const applyTitleColorToSelected = (color: CodeColor) => {
+    setSelectedAdColor(color);
     const selectedPlaylists = filtered.filter(
       (playlist) => selectedRows[playlistKey(playlist)],
     );
     const next = { ...rowData };
-
     selectedPlaylists.forEach((playlist) => {
       const key = playlistKey(playlist);
       next[key] = { ...getDefaultRowData(playlist), ...next[key], color };
       saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
     });
-
     persistRowData(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
-    setSelectedTitleColor("");
   };
 
   const openAdModal = (playlist: PlaylistRow, adIndex?: number) => {
@@ -2741,47 +2618,6 @@ export default function AdsPage() {
     });
 
     persistRowData(next);
-    setSelectedAds({});
-    setLastSelectedAdKey(null);
-  };
-
-  const toggleStrikeForSelectedAds = () => {
-    if (selectedAdKeys.length === 0) return;
-    const selectedSet = new Set(selectedAdKeys);
-    const next = { ...rowData };
-
-    const selectedEntries = filtered.flatMap((playlist) => {
-      const key = playlistKey(playlist);
-      return getRowData(playlist).ads
-        .map((ad, index) => ({
-          ad,
-          selectionKey: `${key}::${index}`,
-        }))
-        .filter((item) => selectedSet.has(item.selectionKey));
-    });
-
-    const shouldStrike = selectedEntries.some((item) => !item.ad.stroke);
-
-    filtered.forEach((playlist) => {
-      const key = playlistKey(playlist);
-      const current = getRowData(playlist);
-      let changed = false;
-
-      const ads = current.ads.map((ad, index) => {
-        if (!selectedSet.has(`${key}::${index}`)) return ad;
-        changed = true;
-        return { ...ad, stroke: shouldStrike };
-      });
-
-      if (changed) {
-        next[key] = { ...current, ads };
-        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
-      }
-    });
-
-    persistRowData(next);
-    setSelectedAds({});
-    setLastSelectedAdKey(null);
   };
 
   useEffect(() => {
@@ -2948,31 +2784,6 @@ export default function AdsPage() {
 
   const filterGroups = [
     {
-      label: "Account",
-      options: accounts
-        .map((account) => account.display_name || account.name || `Account ${account.id}`)
-        .filter(Boolean),
-      value:
-        activeAccountId === ALL_ACCOUNTS_ID
-          ? ""
-          : getAccountName(activeAccountId ?? undefined),
-      set: (value: string) => {
-        if (!value || value === "All") {
-          setActiveAccountId(ALL_ACCOUNTS_ID);
-          return;
-        }
-
-        const matchedAccount = accounts.find(
-          (account) =>
-            (account.display_name || account.name || `Account ${account.id}`) === value,
-        );
-
-        if (matchedAccount) {
-          setActiveAccountId(matchedAccount.id);
-        }
-      },
-    },
-    {
       label: "Category",
       options: categoryOptions.filter((item) => item !== "Category"),
       value: filters.category,
@@ -3031,7 +2842,7 @@ export default function AdsPage() {
     },
   ];
 
-  if (!hasMounted || !hiddenRowsLoaded) {
+  if (!hasMounted) {
     return (
       <div className="min-h-screen w-full bg-black px-5 py-5 text-white lg:px-6">
         <h1 className="text-4xl font-semibold tracking-tight">Playlists</h1>
@@ -3048,14 +2859,9 @@ export default function AdsPage() {
           <p className="mt-1 text-sm text-zinc-500">
             Track ad dates and monitor playlist growth over time.
           </p>
-          {hiddenRowsSaveError ? (
-            <p className="mt-1 text-xs text-red-400">
-              Hidden playlists were saved locally, but database save failed: {hiddenRowsSaveError}
-            </p>
-          ) : null}
         </div>
 
-        <div className="flex w-full flex-wrap items-start gap-3 xl:justify-end">
+        <div className="flex flex-wrap items-start gap-3 xl:justify-end">
           {hasSelectedRows ? (
             <>
               <button
@@ -3069,29 +2875,20 @@ export default function AdsPage() {
                 Deselect ({selectedRowKeys.length})
               </button>
               <select
-                value={selectedTitleColor}
-                onChange={(event) => {
-                  const color = event.target.value as CodeColor | "";
-                  setSelectedTitleColor(color);
-                  if (color) applyTitleColorToSelected(color);
-                }}
-                className={`h-10 w-auto min-w-[100px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm outline-none focus:border-green-500 ${
-                  selectedTitleColor
-                    ? getColorOption(selectedTitleColor).textClass
-                    : "text-zinc-300"
-                }`}
-                title="Color selected playlist titles"
+                value={selectedAdColor}
+                onChange={(e) =>
+                  applyTitleColorToSelected(e.target.value as CodeColor)
+                }
+                className={`h-10 w-auto min-w-[82px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm outline-none focus:border-green-500 ${getColorOption(selectedAdColor).textClass}`}
+                title="Color selected titles"
               >
-                <option value="" className="text-zinc-300">
-                  Color
-                </option>
                 {colorOptions.map((color) => (
                   <option
                     key={color.value}
                     value={color.value}
                     className={color.textClass}
                   >
-                    {color.value.charAt(0).toUpperCase() + color.value.slice(1)}
+                    {color.label}
                   </option>
                 ))}
               </select>
@@ -3145,15 +2942,6 @@ export default function AdsPage() {
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={toggleStrikeForSelectedAds}
-                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 text-zinc-300 hover:border-green-500 hover:text-green-400"
-                title="Toggle strike over selected ad dates"
-                aria-label="Toggle strike over selected ad dates"
-              >
-                <span className="text-xl font-black leading-none line-through">S</span>
-              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -3268,8 +3056,20 @@ export default function AdsPage() {
             </div>
           </div>
 
-          <div className="basis-full">
-            <div className="flex w-full items-center justify-end gap-1 pt-1 text-[11px] text-zinc-500">
+          <div className="flex flex-col gap-1 self-start">
+            <select
+              value={activeAccountId ?? ALL_ACCOUNTS_ID}
+              onChange={(e) => setActiveAccountId(Number(e.target.value))}
+              className="h-11 w-[190px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
+            >
+              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.display_name || acc.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center justify-end gap-1 text-[11px] text-zinc-500">
               <button
                 type="button"
                 onClick={() => { setShowAllRows(false); setRowPage((current) => Math.max(1, current - 1)); }}
@@ -3364,42 +3164,22 @@ export default function AdsPage() {
               >
                 30D {arrowFor("growth30d")}
               </div>
-              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase">
-                <button
-                  type="button"
-                  onClick={() => toggleSort("category")}
-                  className={`whitespace-nowrap ${
-                    sortField === "category"
-                      ? "text-green-400"
-                      : "text-zinc-400"
-                  }`}
-                >
-                  Category {arrowFor("category")}
-                </button>
+              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
+                Category{" "}
                 <button
                   type="button"
                   onClick={() => openOptionModal("category")}
                   className="text-[12px] font-black leading-none text-green-400 hover:text-green-300"
-                  title="Manage categories"
                 >
                   +
                 </button>
               </div>
-              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase">
-                <button
-                  type="button"
-                  onClick={() => toggleSort("genre")}
-                  className={`whitespace-nowrap ${
-                    sortField === "genre" ? "text-green-400" : "text-zinc-400"
-                  }`}
-                >
-                  Genre {arrowFor("genre")}
-                </button>
+              <div className="flex items-center gap-1 px-2 py-3 text-[10px] font-semibold uppercase text-zinc-400">
+                Genre{" "}
                 <button
                   type="button"
                   onClick={() => openOptionModal("genre")}
                   className="text-[12px] font-black leading-none text-green-400 hover:text-green-300"
-                  title="Manage genres"
                 >
                   +
                 </button>
@@ -3410,11 +3190,8 @@ export default function AdsPage() {
               >
                 Country {arrowFor("country")}
               </div>
-              <div
-                className={headerClass("master")}
-                onClick={() => toggleSort("master")}
-              >
-                Master {arrowFor("master")}
+              <div className="px-1 py-3 text-[10px] font-semibold uppercase text-zinc-400">
+                Master
               </div>
               <div
                 className={headerClass("ads")}
@@ -3463,9 +3240,6 @@ export default function AdsPage() {
                 onClick={() => toggleSort("today4")}
               >
                 {formatDayMonth(4)} {arrowFor("today4")}
-              </div>
-              <div className="px-2 py-3 text-center text-[10px] font-semibold uppercase text-zinc-400">
-                URL
               </div>
               <div
                 className={`${headerClass("adDate")} text-center`}
@@ -3645,19 +3419,6 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 4)} />
-                      </div>
-                      <div className="flex items-center justify-center px-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            navigator.clipboard.writeText(getPlaylistUrl(playlist))
-                          }
-                          className="text-zinc-300 hover:text-green-400"
-                          title="Copy playlist link"
-                          aria-label="Copy playlist link"
-                        >
-                          <CopyIcon />
-                        </button>
                       </div>
                       <div className="flex items-center justify-center px-2">
                         <button
