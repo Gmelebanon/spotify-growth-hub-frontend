@@ -578,6 +578,11 @@ function getColorOption(color: CodeColor | undefined) {
   return colorOptions.find((item) => item.value === color) ?? colorOptions[0];
 }
 
+function getColorNameLabel(color: CodeColor) {
+  const label = getColorOption(color).label;
+  return label.includes(" - ") ? label.split(" - ")[0] : label;
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -1193,7 +1198,7 @@ function getLatestAdTimestamp(ads: AdEntry[]) {
 }
 
 function CopyIcon() {
-  return <span className="text-[13px] leading-none">⧉</span>;
+  return <span className="text-[15px] font-black leading-none">⧉</span>;
 }
 
 function IdIcon() {
@@ -1502,6 +1507,7 @@ export default function AdsPage() {
   >(null);
   const [newOptionName, setNewOptionName] = useState("");
   const [hasMounted, setHasMounted] = useState(false);
+  const [accountsFilterOpen, setAccountsFilterOpen] = useState(false);
 
   useEffect(() => {
     setHasMounted(true);
@@ -2363,7 +2369,7 @@ export default function AdsPage() {
     return items;
   }, [visibleRows, rowData]);
 
-  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 68px ${Array.from(
+  const gridTemplate = `46px 42px 42px 230px 92px 64px 48px 48px 124px 124px 92px 132px 46px 64px 88px 48px 44px 44px 44px 44px 46px 68px ${Array.from(
     { length: adColumnCount },
   )
     .map(() => "64px")
@@ -2384,10 +2390,17 @@ export default function AdsPage() {
     `whitespace-nowrap px-2 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.06em] ${sortField === field ? "text-green-400" : "text-zinc-400"} cursor-pointer`;
 
   const toggleSelectAll = () => {
+    const shouldSelect = !allFilteredSelected;
     const next = { ...selectedRows };
+
     filtered.forEach((playlist) => {
-      next[playlistKey(playlist)] = !allFilteredSelected;
+      next[playlistKey(playlist)] = shouldSelect;
     });
+
+    if (shouldSelect && filtered.length > 0) {
+      setSelectedAdColor(getRowData(filtered[0]).color || "gray");
+    }
+
     setSelectedRows(next);
     setLastSelectedRowIndex(null);
   };
@@ -2398,16 +2411,28 @@ export default function AdsPage() {
     event: MouseEvent<HTMLInputElement>,
   ) => {
     const key = playlistKey(playlist);
+    const isCurrentlySelected = !!selectedRows[key];
+
     if (event.shiftKey && lastSelectedRowIndex !== null) {
       const start = Math.min(lastSelectedRowIndex, index);
       const end = Math.max(lastSelectedRowIndex, index);
-      const shouldSelect = !selectedRows[key];
+      const shouldSelect = !isCurrentlySelected;
       const next = { ...selectedRows };
+
       filtered.slice(start, end + 1).forEach((row) => {
         next[playlistKey(row)] = shouldSelect;
       });
+
+      if (shouldSelect && selectedRowKeys.length === 0) {
+        setSelectedAdColor(getRowData(playlist).color || "gray");
+      }
+
       setSelectedRows(next);
       return;
+    }
+
+    if (!isCurrentlySelected && selectedRowKeys.length === 0) {
+      setSelectedAdColor(getRowData(playlist).color || "gray");
     }
 
     setSelectedRows((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -2861,7 +2886,7 @@ export default function AdsPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-start gap-3 xl:justify-end">
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
           {hasSelectedRows ? (
             <>
               <button
@@ -2888,7 +2913,7 @@ export default function AdsPage() {
                     value={color.value}
                     className={color.textClass}
                   >
-                    {color.label}
+                    {getColorNameLabel(color.value)}
                   </option>
                 ))}
               </select>
@@ -2994,8 +3019,70 @@ export default function AdsPage() {
             >
               Filter
             </button>
-            <div className="invisible absolute right-0 top-full z-[9999] w-56 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
+            <div className="invisible absolute right-0 top-full z-[9999] w-52 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
               <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
+                <div className="mb-2 border-b border-zinc-800 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => setAccountsFilterOpen((current) => !current)}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                        Accounts
+                      </span>
+                      <span className="truncate text-xs font-semibold text-green-400">
+                        {activeAccountId === ALL_ACCOUNTS_ID
+                          ? "All Accounts"
+                          : accounts.find((account) => account.id === activeAccountId)
+                              ?.display_name ||
+                            accounts.find((account) => account.id === activeAccountId)
+                              ?.name ||
+                            "All Accounts"}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-zinc-500">
+                      {accountsFilterOpen ? "−" : "+"}
+                    </span>
+                  </button>
+
+                  {accountsFilterOpen ? (
+                    <div className="ads-green-scrollbar mt-1 max-h-48 overflow-y-auto pr-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveAccountId(ALL_ACCOUNTS_ID);
+                          setAccountsFilterOpen(false);
+                        }}
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                          activeAccountId === ALL_ACCOUNTS_ID
+                            ? "bg-green-500/10 font-bold text-green-400"
+                            : "text-zinc-300"
+                        } hover:bg-zinc-900 hover:text-white`}
+                      >
+                        All Accounts
+                      </button>
+                      {accounts.map((account) => (
+                        <button
+                          key={`filter-account-${account.id}`}
+                          type="button"
+                          onClick={() => {
+                            setActiveAccountId(account.id);
+                            setAccountsFilterOpen(false);
+                          }}
+                          className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
+                            activeAccountId === account.id
+                              ? "bg-green-500/10 font-bold text-green-400"
+                              : "text-zinc-300"
+                          } hover:bg-zinc-900 hover:text-white`}
+                        >
+                          {account.display_name || account.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="mb-2 border-b border-zinc-800 pb-2">
                   <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Rows</p>
                   {[
@@ -3056,19 +3143,7 @@ export default function AdsPage() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-1 self-start">
-            <select
-              value={activeAccountId ?? ALL_ACCOUNTS_ID}
-              onChange={(e) => setActiveAccountId(Number(e.target.value))}
-              className="h-11 w-[190px] rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-green-500"
-            >
-              <option value={ALL_ACCOUNTS_ID}>All Accounts</option>
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.display_name || acc.name}
-                </option>
-              ))}
-            </select>
+          <div className="flex w-full basis-full justify-end pr-1">
             <div className="flex items-center justify-end gap-1 text-[11px] text-zinc-500">
               <button
                 type="button"
@@ -3241,6 +3316,9 @@ export default function AdsPage() {
               >
                 {formatDayMonth(4)} {arrowFor("today4")}
               </div>
+              <div className="px-2 py-3 text-center text-[10px] font-semibold uppercase tracking-[0.06em] text-zinc-400">
+                URL
+              </div>
               <div
                 className={`${headerClass("adDate")} text-center`}
                 onClick={() => toggleSort("adDate")}
@@ -3286,7 +3364,7 @@ export default function AdsPage() {
                       className="grid min-h-[46px] items-center border-b border-zinc-900 py-2 text-xs text-zinc-200 hover:bg-zinc-900/40"
                       style={{ gridTemplateColumns: gridTemplate }}
                     >
-                      <div className="px-2">
+                      <div className="flex items-center justify-center px-2">
                         <button
                           type="button"
                           onClick={() =>
@@ -3294,8 +3372,9 @@ export default function AdsPage() {
                               getPlaylistUrl(playlist),
                             )
                           }
-                          className="text-zinc-400 hover:text-green-400"
-                          title="Copy playlist link"
+                          className="inline-flex h-8 w-8 items-center justify-center text-zinc-300 hover:text-green-400"
+                          title="Copy playlist URL"
+                          aria-label="Copy playlist URL"
                         >
                           <CopyIcon />
                         </button>
@@ -3419,6 +3498,21 @@ export default function AdsPage() {
                       </div>
                       <div className="px-1">
                         <GrowthCell value={getTodayValue(playlist, 4)} />
+                      </div>
+                      <div className="flex items-center justify-center px-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigator.clipboard.writeText(
+                              getPlaylistUrl(playlist),
+                            )
+                          }
+                          className="inline-flex h-8 w-8 items-center justify-center text-zinc-300 hover:text-green-400"
+                          title="Copy playlist URL"
+                          aria-label="Copy playlist URL"
+                        >
+                          <CopyIcon />
+                        </button>
                       </div>
                       <div className="flex items-center justify-center px-2">
                         <button
