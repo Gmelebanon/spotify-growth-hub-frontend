@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+
+
+const getTodayDateInputValue = () => {
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 10);
+};
+
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "https://spotify-growth-hub-backend.onrender.com";
@@ -188,9 +197,34 @@ function endOfCurrentWeek() {
 
 function normalizeMatchKey(value: string) {
   return String(value || "")
-    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[’'`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
     .replace(/\s+/g, " ");
+}
+
+function firstStringValue(
+  record: Record<string, unknown>,
+  fields: string[],
+) {
+  for (const field of fields) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = value as Record<string, unknown>;
+      const nestedValue = String(
+        nested.name || nested.title || nested.label || nested.value || "",
+      ).trim();
+      if (nestedValue) return nestedValue;
+    }
+  }
+
+  return "";
 }
 
 function artistSongMatchKey(artist: string, song: string) {
@@ -240,14 +274,15 @@ function isReleaseDateFuture(value: string) {
 }
 
 function artistValueFromRecord(record: Record<string, unknown>) {
-  const directArtist = String(
-    record.artist ||
-      record.artistName ||
-      record.artist_name ||
-      record.primaryArtist ||
-      record.primary_artist ||
-      "",
-  ).trim();
+  const directArtist = firstStringValue(record, [
+    "artist",
+    "artistName",
+    "artist_name",
+    "primaryArtist",
+    "primary_artist",
+    "spotifyArtist",
+    "spotify_artist",
+  ]);
 
   if (directArtist) return directArtist;
 
@@ -266,19 +301,47 @@ function artistValueFromRecord(record: Record<string, unknown>) {
 }
 
 function releaseTitleFromRecord(record: Record<string, unknown>) {
-  return String(
-    record.album ||
-      record.albumName ||
-      record.album_name ||
-      record.release ||
-      record.releaseName ||
-      record.release_name ||
-      record.latestReleaseName ||
-      record.latest_release_name ||
-      record.name ||
-      record.title ||
-      "",
-  ).trim();
+  return firstStringValue(record, [
+    "album",
+    "albumName",
+    "album_name",
+    "spotifyAlbum",
+    "spotify_album",
+    "release",
+    "releaseName",
+    "release_name",
+    "latestReleaseName",
+    "latest_release_name",
+    "name",
+    "title",
+  ]);
+}
+
+function songTitleFromRecord(record: Record<string, unknown>) {
+  return firstStringValue(record, [
+    "song",
+    "songName",
+    "song_name",
+    "track",
+    "trackName",
+    "track_name",
+    "spotifyTrack",
+    "spotify_track",
+    "title",
+  ]);
+}
+
+function albumTitleFromRecord(record: Record<string, unknown>) {
+  return firstStringValue(record, [
+    "album",
+    "albumName",
+    "album_name",
+    "spotifyAlbum",
+    "spotify_album",
+    "release",
+    "releaseName",
+    "release_name",
+  ]);
 }
 
 function addReleaseReferenceKeys(
@@ -306,9 +369,9 @@ function addReleaseReferenceKeys(
     tracks.forEach((track) => {
       if (!track || typeof track !== "object") return;
       const trackRecord = track as Record<string, unknown>;
-      const trackTitle = String(
-        trackRecord.song || trackRecord.track || trackRecord.title || trackRecord.name || "",
-      ).trim();
+      const trackTitle =
+        songTitleFromRecord(trackRecord) ||
+        firstStringValue(trackRecord, ["name"]);
       const songKey = artistSongMatchKey(artist, trackTitle);
 
       if (songKey) next.add(songKey);
@@ -392,8 +455,8 @@ export default function SchedulingPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
-  const [dateRangeStart, setDateRangeStart] = useState("");
-  const [dateRangeEnd, setDateRangeEnd] = useState("");
+  const [dateRangeStart, setDateRangeStart] = useState(getTodayDateInputValue());
+  const [dateRangeEnd, setDateRangeEnd] = useState(getTodayDateInputValue());
   const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
   const [isDeleteSheetOpen, setIsDeleteSheetOpen] = useState(false);
   const [isDeleteSelectedOpen, setIsDeleteSelectedOpen] = useState(false);
@@ -409,6 +472,8 @@ export default function SchedulingPage() {
   const [onlineReferenceKeys, setOnlineReferenceKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncingSpotify, setIsSyncingSpotify] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSavingNewRow, setIsSavingNewRow] = useState(false);
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [isUndoing, setIsUndoing] = useState(false);
@@ -418,6 +483,7 @@ export default function SchedulingPage() {
   const deleteModalRef = useRef<HTMLDivElement | null>(null);
   const deleteSelectedModalRef = useRef<HTMLDivElement | null>(null);
   const uploadModalRef = useRef<HTMLDivElement | null>(null);
+  const autoOnlineSyncingIdsRef = useRef<Set<number>>(new Set());
 
   const activeSheet = useMemo(
     () => sheets.find((sheet) => sheet.id === activeSheetId) || null,
@@ -428,7 +494,7 @@ export default function SchedulingPage() {
     setUndoStack((current) => [...current.slice(-30), action]);
   }, []);
 
-  const loadOnlineReferences = useCallback(async () => {
+  const fetchOnlineReferenceKeys = useCallback(async () => {
     const next = new Set<string>();
 
     const tryRead = async (url: string) => {
@@ -447,17 +513,17 @@ export default function SchedulingPage() {
 
           const record = value as Record<string, unknown>;
           const artistValue = artistValueFromRecord(record);
-          const songValue = String(
-            record.song || record.track || record.title || "",
-          ).trim();
+          const songValue = songTitleFromRecord(record);
+          const albumValue = albumTitleFromRecord(record);
           const songKey = artistSongMatchKey(artistValue, songValue);
+          const albumKey = artistAlbumMatchKey(artistValue, albumValue);
 
-          if (songKey) {
-            next.add(songKey);
-          }
+          if (songKey) next.add(songKey);
+          if (albumKey) next.add(albumKey);
 
           const parentArtistValue =
-            artistValue || String(record.artistName || record.artist_name || record.name || "").trim();
+            artistValue ||
+            firstStringValue(record, ["artistName", "artist_name", "name"]);
 
           addReleaseReferenceKeys(next, parentArtistValue, record.latestRelease);
           addReleaseReferenceKeys(next, parentArtistValue, record.latest_release);
@@ -479,11 +545,16 @@ export default function SchedulingPage() {
     await Promise.all([
       tryRead(`${API_BASE_URL}/api/song-metrics`),
       tryRead(`${API_BASE_URL}/api/artist-library`),
-      tryRead(`${API_BASE_URL}/api/my-artists`),
     ]);
 
-    setOnlineReferenceKeys(next);
+    return next;
   }, []);
+
+  const loadOnlineReferences = useCallback(async () => {
+    const next = await fetchOnlineReferenceKeys();
+    setOnlineReferenceKeys(next);
+    return next;
+  }, [fetchOnlineReferenceKeys]);
 
   const loadRows = useCallback(async () => {
     setIsLoading(true);
@@ -521,6 +592,119 @@ export default function SchedulingPage() {
       setIsLoading(false);
     }
   }, []);
+
+  const syncSpotifyReleases = useCallback(async () => {
+    if (isSyncingSpotify) return;
+
+    setIsSyncingSpotify(true);
+    setSyncMessage(null);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/artist-library/sync-metadata`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+        },
+      );
+
+      const responseText = await response.text();
+      let result: {
+        synced?: number;
+        failed?: number;
+        total?: number;
+        detail?: string;
+      } = {};
+
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText) as typeof result;
+        } catch {
+          result = {};
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          result.detail || responseText || "Release sync failed.",
+        );
+      }
+
+      const freshReferenceKeys = await fetchOnlineReferenceKeys();
+      setOnlineReferenceKeys(freshReferenceKeys);
+
+      const schedulingResponse = await fetch(`${API_BASE_URL}/api/scheduling`, {
+        cache: "no-store",
+      });
+
+      if (!schedulingResponse.ok) {
+        throw new Error("Spotify synced, but Scheduling rows could not be loaded.");
+      }
+
+      const schedulingData =
+        (await schedulingResponse.json()) as SchedulingPayload | SchedulingRow[];
+      const schedulingRows = Array.isArray(schedulingData)
+        ? schedulingData
+        : schedulingData.rows;
+
+      const rowsToPushOnline = schedulingRows.filter((row) => {
+        const storedStatus = String(row.status || "").trim();
+        if (
+          storedStatus === "Online" ||
+          storedStatus === "Rejected" ||
+          storedStatus === "No Artist" ||
+          !isReleaseDateDue(row.release_date)
+        ) {
+          return false;
+        }
+
+        const songKey = artistSongMatchKey(row.artist, row.song);
+        const albumKey = artistAlbumMatchKey(row.artist, row.album);
+
+        return Boolean(
+          (songKey && freshReferenceKeys.has(songKey)) ||
+            (albumKey && freshReferenceKeys.has(albumKey)),
+        );
+      });
+
+      const pushResults = await Promise.allSettled(
+        rowsToPushOnline.map((row) =>
+          patchSchedulingRow(row.id, "status", "Online"),
+        ),
+      );
+      const pushedOnline = pushResults.filter(
+        (item) => item.status === "fulfilled",
+      ).length;
+      const pushFailed = pushResults.length - pushedOnline;
+
+      await loadRows();
+
+      const synced = Number(result.synced || 0);
+      const failed = Number(result.failed || 0);
+      const total = Number(result.total || synced + failed);
+      const artistSummary =
+        failed > 0
+          ? `${synced} of ${total} artists synced; ${failed} failed`
+          : `${synced} artist${synced === 1 ? "" : "s"} updated`;
+      const releaseSummary = `${pushedOnline} release${pushedOnline === 1 ? "" : "s"} pushed Online`;
+
+      setSyncMessage(
+        pushFailed > 0
+          ? `Sync finished: ${artistSummary}; ${releaseSummary}; ${pushFailed} status update${pushFailed === 1 ? "" : "s"} failed.`
+          : `Sync finished: ${artistSummary}; ${releaseSummary}.`,
+      );
+    } catch (syncError) {
+      setError(
+        syncError instanceof Error
+          ? syncError.message
+          : "Release sync failed.",
+      );
+    } finally {
+      setIsSyncingSpotify(false);
+    }
+  }, [fetchOnlineReferenceKeys, isSyncingSpotify, loadRows]);
 
   useEffect(() => {
     loadRows();
@@ -852,6 +1036,51 @@ export default function SchedulingPage() {
     },
     [pushUndo, updateRowLocal],
   );
+
+  useEffect(() => {
+    if (onlineReferenceKeys.size === 0 || rows.length === 0) return;
+
+    const rowsToMarkOnline = rows.filter((row) => {
+      const storedStatus = String(row.status || "").trim();
+
+      if (
+        storedStatus === "Online" ||
+        storedStatus === "Rejected" ||
+        storedStatus === "No Artist" ||
+        autoOnlineSyncingIdsRef.current.has(row.id) ||
+        !isReleaseDateDue(row.release_date)
+      ) {
+        return false;
+      }
+
+      const songKey = artistSongMatchKey(row.artist, row.song);
+      const albumKey = artistAlbumMatchKey(row.artist, row.album);
+
+      return Boolean(
+        (songKey && onlineReferenceKeys.has(songKey)) ||
+          (albumKey && onlineReferenceKeys.has(albumKey)),
+      );
+    });
+
+    rowsToMarkOnline.forEach(async (row) => {
+      autoOnlineSyncingIdsRef.current.add(row.id);
+
+      try {
+        const saved = await patchSchedulingRow(row.id, "status", "Online");
+        setRows((current) =>
+          current.map((item) =>
+            item.id === row.id
+              ? { ...item, ...saved, status: "Online" }
+              : item,
+          ),
+        );
+      } catch {
+        setError("A release is online, but its status could not be saved automatically.");
+      } finally {
+        autoOnlineSyncingIdsRef.current.delete(row.id);
+      }
+    });
+  }, [onlineReferenceKeys, rows]);
 
   const handleTextBlur = useCallback(
     (row: SchedulingRow, field: TextField, value: string) => {
@@ -1672,7 +1901,7 @@ export default function SchedulingPage() {
             }}
             className="h-11 rounded-xl border border-zinc-800 bg-zinc-950 px-4 text-sm font-semibold text-white outline-none focus:border-green-500"
           >
-            <option value="all">All</option>
+            <option value="all">All Time</option>
             {sheets.map((sheet) => (
               <option key={sheet.id} value={sheet.id}>
                 {sheet.name}
@@ -1696,7 +1925,7 @@ export default function SchedulingPage() {
           >
             <option value="this_week">This Week</option>
             <option value="this_month">This Month</option>
-            <option value="all">All</option>
+            <option value="all">All Time</option>
             <option value="date_range">Date Range</option>
           </select>
 
@@ -1720,6 +1949,15 @@ export default function SchedulingPage() {
               />
             </div>
           ) : null}
+
+          <button
+            onClick={syncSpotifyReleases}
+            disabled={isSyncingSpotify}
+            className="h-11 rounded-xl border border-green-700 bg-green-950/30 px-4 text-sm font-bold text-green-300 hover:border-green-500 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-60"
+            title="Sync releases and save matching Scheduling rows as Online"
+          >
+            {isSyncingSpotify ? "Syncing..." : "Sync"}
+          </button>
 
           <button
             onClick={() => setIsCreateSheetOpen(true)}
@@ -1973,6 +2211,12 @@ export default function SchedulingPage() {
         </div>
       ) : null}
 
+      {syncMessage ? (
+        <div className="mb-5 rounded-2xl border border-green-700/80 bg-green-950/20 p-5 text-sm font-semibold text-green-200">
+          {syncMessage}
+        </div>
+      ) : null}
+
       {error ? (
         <div className="mb-5 rounded-2xl border border-red-500/80 bg-red-950/20 p-5 text-sm font-semibold text-red-200">
           {error}
@@ -2009,7 +2253,7 @@ export default function SchedulingPage() {
                 className={`${activeSheet ? "cursor-text" : "cursor-default"} text-lg font-bold`}
                 title={activeSheet ? "Double click to rename sheet" : "All sheets"}
               >
-                {activeSheet?.name || "All"}
+                {activeSheet?.name || "All Time"}
               </h2>
             )}
           </div>
