@@ -233,6 +233,31 @@ function extractSpotifyTrackId(input: string) {
 
   return null;
 }
+
+function extractStoredSpotifyTrackId(value: string | null | undefined) {
+  const clean = String(value || "").trim();
+  if (!clean) return null;
+
+  return (
+    extractSpotifyTrackId(clean) ||
+    (/^[a-zA-Z0-9]{15,40}$/.test(clean) ? clean : null)
+  );
+}
+
+function extractSpotifyAlbumId(input: string) {
+  const trimmed = input.trim();
+  const directMatch = trimmed.match(/album\/([a-zA-Z0-9]+)(\?|$|\/)/);
+  if (directMatch?.[1]) return directMatch[1];
+
+  const uriMatch = trimmed.match(/^spotify:album:([a-zA-Z0-9]+)$/);
+  if (uriMatch?.[1]) return uriMatch[1];
+
+  return null;
+}
+
+function isSpotifyUrl(value: string) {
+  return /^https?:\/\/(?:open\.)?spotify\.com\//i.test(value.trim());
+}
 function extractSpotifyPlaylistId(input: string) {
   const trimmed = input.trim().replace(/^"|"$/g, "");
   if (!trimmed) return null;
@@ -257,7 +282,12 @@ function parseSpotifyOembedTitle(rawTitle: string, spotifyId: string) {
   const clean = rawTitle
     .replace(/\s*\|\s*Spotify\s*$/i, "")
     .replace(/\s+-\s+song and lyrics by\s+/i, " - ")
+    .replace(/\s+-\s+song by\s+/i, " - ")
+    .replace(/\s+-\s+track by\s+/i, " - ")
     .replace(/\s+-\s+single by\s+/i, " - ")
+    .replace(/\s+-\s+album by\s+/i, " - ")
+    .replace(/\s+-\s+ep by\s+/i, " - ")
+    .replace(/\s+by\s+/i, " - ")
     .trim();
 
   if (!clean) {
@@ -281,44 +311,56 @@ function parseSpotifyOembedTitle(rawTitle: string, spotifyId: string) {
   };
 }
 
+async function resolveSpotifyDisplayMetadata(
+  spotifyUrl: string,
+  fallbackId: string,
+) {
+  try {
+    const response = await fetch(
+      `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`,
+    );
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      title?: string;
+      author_name?: string;
+    };
+
+    const parsed = parseSpotifyOembedTitle(data.title || "", fallbackId);
+
+    return {
+      title: parsed.title,
+      artist: parsed.artist || String(data.author_name || "").trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function parseTrackInput(input: string): Promise<AddedTrack | null> {
   const clean = input.trim();
 
   if (!clean) return null;
 
   const spotifyId = extractSpotifyTrackId(clean);
+  const spotifyAlbumId = extractSpotifyAlbumId(clean);
 
   if (spotifyId) {
-    try {
-      const response = await fetch(
-        `https://open.spotify.com/oembed?url=${encodeURIComponent(
-          `https://open.spotify.com/track/${spotifyId}`,
-        )}`,
-      );
-
-      if (response.ok) {
-        const data = (await response.json()) as { title?: string };
-        const parsedTitle = parseSpotifyOembedTitle(data.title || "", spotifyId);
-
-        return {
-          id: spotifyId,
-          spotify_id: spotifyId,
-          title: parsedTitle.title,
-          artist: parsedTitle.artist,
-          createdAt: new Date().toISOString(),
-        };
-      }
-    } catch {
-      // Fall back below if oEmbed is blocked or unavailable.
-    }
+    const spotifyUrl = `https://open.spotify.com/track/${spotifyId}`;
+    const parsedTitle = await resolveSpotifyDisplayMetadata(spotifyUrl, spotifyId);
 
     return {
       id: spotifyId,
       spotify_id: spotifyId,
-      title: `Spotify Track ${spotifyId}`,
-      artist: "",
+      title: parsedTitle?.title || `Spotify Track ${spotifyId}`,
+      artist: parsedTitle?.artist || "",
       createdAt: new Date().toISOString(),
     };
+  }
+
+  if (spotifyAlbumId || isSpotifyUrl(clean)) {
+    return null;
   }
 
   const split = clean.split(/\s+-\s+/);
@@ -868,6 +910,94 @@ export default function PlaylistManagerPage() {
     });
   };
 
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const missingArtistRows = state.masterCurationBoxes.flatMap((box) =>
+      box.tracks
+        .map((track, index) => ({ boxId: box.id, track, index }))
+        .filter(
+          ({ track }) =>
+            Boolean(
+              track.spotify_id ||
+                extractStoredSpotifyTrackId(track.id) ||
+                extractStoredSpotifyTrackId(track.title),
+            ) &&
+            !String(track.artist || "").trim(),
+        ),
+    );
+
+    if (missingArtistRows.length === 0) return;
+
+    let cancelled = false;
+
+    async function repairMissingArtists() {
+      const resolved = await Promise.all(
+        missingArtistRows.map(async ({ boxId, track, index }) => {
+          const spotifyId =
+            track.spotify_id ||
+            extractStoredSpotifyTrackId(track.id) ||
+            extractStoredSpotifyTrackId(track.title);
+
+          if (!spotifyId) {
+            return { boxId, index, spotifyId: null, metadata: null };
+          }
+
+          const metadata = await resolveSpotifyDisplayMetadata(
+            `https://open.spotify.com/track/${spotifyId}`,
+            spotifyId,
+          );
+
+          return { boxId, index, spotifyId, metadata };
+        }),
+      );
+
+      if (cancelled) return;
+
+      let changed = false;
+
+      const nextBoxes = state.masterCurationBoxes.map((box) => {
+        const repairs = resolved.filter((item) => item.boxId === box.id);
+        if (repairs.length === 0) return box;
+
+        const tracks = box.tracks.map((track, index) => {
+          const repair = repairs.find((item) => item.index === index);
+          if (!repair?.metadata?.artist) return track;
+
+          changed = true;
+
+          return {
+            ...track,
+            id: repair.spotifyId || track.id,
+            spotify_id: repair.spotifyId || track.spotify_id || null,
+            title: repair.metadata.title || track.title,
+            artist: repair.metadata.artist,
+          };
+        });
+
+        return { ...box, tracks };
+      });
+
+      if (!changed) return;
+
+      const nextState = {
+        ...state,
+        masterCurationBoxes: nextBoxes,
+      };
+
+      setState(nextState);
+      saveStateToLocalStorage(nextState);
+      saveStateToDatabase(nextState).catch(() => undefined);
+    }
+
+    void repairMissingArtists();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, state.masterCurationBoxes]);
+
   const handleClearAllPlaylistManager = () => {
     const confirmed = window.confirm(
       "Clear all Playlist Manager data?\n\nThis will remove all saved master playlists, synced playlists, curation boxes, and local saved state. It will NOT delete anything from Spotify.",
@@ -1298,33 +1428,109 @@ export default function PlaylistManagerPage() {
   };
 
   const handleDownloadCsvTemplate = () => {
-    const template = [
-      [
-        "account_name",
-        "master_playlist_id",
-        "master_playlist_name",
-        "synced_playlist_1",
-        "synced_playlist_2",
-        "synced_playlist_3",
-        "synced_playlist_4",
-        "synced_playlist_5",
-      ]
-        .map(escapeCsvValue)
-        .join(","),
-      [
-        "Kim Kay",
-        "0rgFb1H731kfBzlc26zqsW",
-        "Techno Main",
-        "14bqGG3a6QuKmKGpWyfjVq",
-        "14kFZUwk9tFNmBjQ8deYa8",
-        "7zZnRHmr84TYObDkTkcxEn",
-        "",
-        "",
-      ]
-        .map(escapeCsvValue)
-        .join(","),
-    ].join("\n");
-    downloadTextFile("playlist_manager_template.csv", template);
+    const masters = state.savedMasterPlaylists;
+
+    if (masters.length === 0) {
+      setPageMessage(
+        "No saved master playlists are available to export.",
+      );
+      return;
+    }
+
+    const syncedByMaster = new Map<string, SyncedPlaylistItem[]>();
+
+    masters.forEach((master) => {
+      syncedByMaster.set(
+        master.id,
+        state.syncedPlaylists.filter(
+          (playlist) => playlist.masterPlaylistId === master.id,
+        ),
+      );
+    });
+
+    const maxSyncedColumns = Math.max(
+      1,
+      ...Array.from(syncedByMaster.values()).map(
+        (playlists) => playlists.length,
+      ),
+    );
+
+    const headers = [
+      "account_name",
+      "master_playlist_id",
+      "master_playlist_name",
+      ...Array.from(
+        { length: maxSyncedColumns },
+        (_, index) => `synced_playlist_${index + 1}`,
+      ),
+    ];
+
+    const rows = masters.map((master) => {
+      const matchedMaster = allPlaylists.find(
+        (playlist) =>
+          Number(playlist.id) === Number(master.playlistId) &&
+          Number(playlist.accountId) === Number(master.accountId),
+      );
+
+      const masterSpotifyId =
+        matchedMaster?.spotify_id ||
+        matchedMaster?.spotify_playlist_id ||
+        extractSpotifyPlaylistId(matchedMaster?.spotify_url || "") ||
+        String(master.playlistId);
+
+      const accountName =
+        accounts.find((account) => account.id === master.accountId)
+          ?.display_name ||
+        matchedMaster?.accountName ||
+        `Account ${master.accountId}`;
+
+      const syncedIds = (syncedByMaster.get(master.id) || []).map(
+        (playlist) => {
+          const matchedSynced = allPlaylists.find(
+            (item) =>
+              Number(item.id) === Number(playlist.playlistId) &&
+              Number(item.accountId) === Number(playlist.accountId),
+          );
+
+          return (
+            playlist.spotifyId ||
+            extractSpotifyPlaylistId(playlist.spotifyUrl || "") ||
+            matchedSynced?.spotify_id ||
+            matchedSynced?.spotify_playlist_id ||
+            extractSpotifyPlaylistId(matchedSynced?.spotify_url || "") ||
+            String(playlist.playlistId)
+          );
+        },
+      );
+
+      return [
+        accountName,
+        masterSpotifyId,
+        master.name,
+        ...Array.from(
+          { length: maxSyncedColumns },
+          (_, index) => syncedIds[index] || "",
+        ),
+      ];
+    });
+
+    const csv = [headers, ...rows]
+      .map((row) => row.map(escapeCsvValue).join(","))
+      .join("\n");
+
+    downloadTextFile(
+      `playlist_manager_export_${new Date().toISOString().slice(0, 10)}.csv`,
+      csv,
+    );
+
+    const totalSynced = Array.from(syncedByMaster.values()).reduce(
+      (total, playlists) => total + playlists.length,
+      0,
+    );
+
+    setPageMessage(
+      `Exported ${masters.length} master playlist(s) and ${totalSynced} synced playlist(s).`,
+    );
   };
 
   const handleImportCsvFile = async (file: File | null) => {
@@ -1702,9 +1908,15 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
     const parsed = await parseTrackInput(addTrackInput);
 
     if (!parsed) {
-      setPageMessage(
-        "Paste a Spotify track link or type Song Name - Artist Name.",
-      );
+      if (extractSpotifyAlbumId(addTrackInput)) {
+        setPageMessage(
+          "This is a Spotify album or single link. Open the song, choose Share, then paste the Spotify track link so the song name, artist, and valid track ID can be added.",
+        );
+      } else {
+        setPageMessage(
+          "Paste a valid Spotify track link or type Song Name - Artist Name.",
+        );
+      }
       return;
     }
 
