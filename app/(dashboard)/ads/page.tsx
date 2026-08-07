@@ -2515,52 +2515,106 @@ export default function AdsPage() {
     setModalStroke(false);
   };
 
-  const saveAdDate = () => {
-    if (!modalDate) return;
-    const next = { ...rowData };
+  const saveAdDate = async () => {
+  if (!modalDate) return;
 
-    if (bulkAdModalOpen) {
-      filtered.forEach((playlist) => {
-        const key = playlistKey(playlist);
-        if (!selectedRows[key]) return;
-        const current = { ...getDefaultRowData(playlist), ...next[key] };
-        next[key] = {
-          ...current,
-          ads: [
-            { date: modalDate, color: modalColor, stroke: modalStroke },
-            ...current.ads,
-          ].slice(0, 12),
-        };
-        saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
-      });
-      persistRowData(next);
-      setSelectedRows({});
-      closeAdModal();
-      return;
-    }
+  const next = { ...rowData };
 
-    if (!adModalKey) return;
-    const playlist = playlists.find((p) => playlistKey(p) === adModalKey);
-    if (!playlist) return;
-    const current = { ...getDefaultRowData(playlist), ...next[adModalKey] };
-    const nextAds = [...current.ads];
-    if (modalAdIndex !== null)
-      nextAds[modalAdIndex] = {
-        date: modalDate,
-        color: modalColor,
-        stroke: modalStroke,
+  if (bulkAdModalOpen) {
+    const promises: Promise<void>[] = [];
+
+    filtered.forEach((playlist) => {
+      const key = playlistKey(playlist);
+
+      if (!selectedRows[key]) return;
+
+      const current = {
+        ...getDefaultRowData(playlist),
+        ...next[key],
       };
-    else
-      nextAds.unshift({
-        date: modalDate,
-        color: modalColor,
-        stroke: modalStroke,
-      });
-    next[adModalKey] = { ...current, ads: nextAds.slice(0, 12) };
+
+      next[key] = {
+        ...current,
+        ads: [
+          {
+            date: modalDate,
+            color: modalColor,
+            stroke: modalStroke,
+          },
+          ...current.ads,
+        ].slice(0, 12),
+      };
+
+      promises.push(
+        saveAdsMetaToDatabase(
+          playlist.id,
+          next[key],
+          playlist.name
+        )
+      );
+    });
+
     persistRowData(next);
-    saveAdsMetaToDatabase(playlist.id, next[adModalKey], playlist.name);
+
+    await Promise.all(promises);
+
+    queryClient.invalidateQueries({
+      queryKey: ["ads-playlists"],
+    });
+
     closeAdModal();
+    setSelectedRows({});
+    return;
+  }
+
+  if (!adModalKey) return;
+
+  const playlist = playlists.find(
+    (p) => playlistKey(p) === adModalKey
+  );
+
+  if (!playlist) return;
+
+  const current = {
+    ...getDefaultRowData(playlist),
+    ...next[adModalKey],
   };
+
+  const nextAds = [...current.ads];
+
+  if (modalAdIndex !== null) {
+    nextAds[modalAdIndex] = {
+      date: modalDate,
+      color: modalColor,
+      stroke: modalStroke,
+    };
+  } else {
+    nextAds.unshift({
+      date: modalDate,
+      color: modalColor,
+      stroke: modalStroke,
+    });
+  }
+
+  next[adModalKey] = {
+    ...current,
+    ads: nextAds.slice(0, 12),
+  };
+
+  persistRowData(next);
+
+  await saveAdsMetaToDatabase(
+    playlist.id,
+    next[adModalKey],
+    playlist.name
+  );
+
+  queryClient.invalidateQueries({
+    queryKey: ["ads-playlists"],
+  });
+
+  closeAdModal();
+};
 
   const deleteAdDate = () => {
     if (!adModalKey || modalAdIndex === null) return;
