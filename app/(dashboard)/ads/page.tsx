@@ -171,6 +171,7 @@ type AdsFilterOptionRow = {
   value?: string;
 };
 
+const EMPTY_ACCOUNTS: AccountRow[] = [];
 const ALL_ACCOUNTS_ID = -1;
 const ADS_DATA_STORAGE_KEY = "ads-page-row-data-v17";
 const ADS_CATEGORY_OPTIONS_STORAGE_KEY = "ads-page-category-options-v17";
@@ -185,10 +186,7 @@ async function fetchPlaylistsWithHistory(
   accountId: number,
 ): Promise<PlaylistRow[]> {
   const response = await fetch(
-    `${API_BASE_URL}/api/accounts/${accountId}/playlists?ts=${Date.now()}`,
-    {
-      cache: "no-store",
-    },
+    `${API_BASE_URL}/api/accounts/${accountId}/playlists`,
   );
 
   if (!response.ok) {
@@ -1447,17 +1445,20 @@ async function saveAdsMetaToDatabase(
     color: data.color,
   };
 
-  try {
-    await fetch(`${API_BASE_URL}/api/playlists/${playlistId}/ads-meta`, {
+  // These two writes hit different backend tables (`ads_meta`, embedded as a
+  // fallback on the playlists list response, and `ads_playlist_settings`,
+  // which is what hydrates rowData on load) - both are needed, but neither
+  // depends on the other completing first, so run them together.
+  await Promise.all([
+    fetch(`${API_BASE_URL}/api/playlists/${playlistId}/ads-meta`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    console.error("Playlist ads-meta autosave failed", error);
-  }
-
-  await saveAdsSettingsToDatabase(playlistId, playlistName, data);
+    }).catch((error) => {
+      console.error("Playlist ads-meta autosave failed", error);
+    }),
+    saveAdsSettingsToDatabase(playlistId, playlistName, data),
+  ]);
 }
 
 export default function AdsPage() {
@@ -1519,7 +1520,7 @@ export default function AdsPage() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
-  const accounts = accountsQuery.data ?? [];
+  const accounts = accountsQuery.data ?? EMPTY_ACCOUNTS;
 
   useEffect(() => {
     if (!activeAccountId && accounts.length > 0)
@@ -1629,9 +1630,9 @@ export default function AdsPage() {
       queryKey: ["ads-playlists", account.id],
       queryFn: () => fetchPlaylistsWithHistory(account.id),
       enabled: activeAccountId === ALL_ACCOUNTS_ID,
-      staleTime: 0,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
+      staleTime: 60_000,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
     })),
   });
 
@@ -1670,6 +1671,16 @@ export default function AdsPage() {
       }),
     );
   }, [activeAccountId, accounts, allAccountQueries, singleAccountQuery.data]);
+
+  // `playlists` above is rebuilt (new array reference) on effectively every
+  // render because `allAccountQueries` (from useQueries) isn't referentially
+  // stable. Effects and memos that only care about *which* playlists are
+  // loaded — not the array identity — should key off this instead, or they
+  // will re-run (and re-fetch) on every render.
+  const playlistsSyncKey = useMemo(
+    () => playlists.map((playlist) => playlistKey(playlist)).join("|"),
+    [playlists],
+  );
 
   useEffect(() => {
     if (playlists.length === 0) return;
@@ -1721,7 +1732,8 @@ export default function AdsPage() {
     return () => {
       cancelled = true;
     };
-  }, [playlists]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistsSyncKey]);
 
   const playlistManagerSyncMap = useMemo(() => {
     const state = playlistManagerStateQuery.data as Record<string, unknown> | null | undefined;
@@ -1864,12 +1876,39 @@ export default function AdsPage() {
       const [previous, ...rest] = current;
       if (!previous) return current;
 
+      const beforeUndo = rowData;
+
       setRowData(previous);
       window.localStorage.setItem(ADS_DATA_STORAGE_KEY, JSON.stringify(previous));
       setSelectedAds({});
       setLastSelectedAdKey(null);
       setSelectedRows({});
       setLastSelectedRowIndex(null);
+
+      // Every other edit in this file (add/edit/delete ad date, color, etc.)
+      // writes through to the backend via saveAdsMetaToDatabase in addition
+      // to updating local state. Undo has to do the same for whichever rows
+      // actually changed, or the reverted value only lives in this browser
+      // tab/localStorage — the next sync from the DB (or a reload) brings
+      // the un-undone value right back.
+      const changedKeys = new Set([
+        ...Object.keys(beforeUndo),
+        ...Object.keys(previous),
+      ]);
+
+      changedKeys.forEach((key) => {
+        if (
+          JSON.stringify(beforeUndo[key]) === JSON.stringify(previous[key])
+        ) {
+          return;
+        }
+
+        const playlist = playlists.find((p) => playlistKey(p) === key);
+        if (!playlist) return;
+
+        const revertedMeta = previous[key] ?? getDefaultRowData(playlist);
+        saveAdsMetaToDatabase(playlist.id, revertedMeta, playlist.name);
+      });
 
       return rest;
     });
@@ -2558,10 +2597,6 @@ export default function AdsPage() {
 
     await Promise.all(promises);
 
-    queryClient.invalidateQueries({
-      queryKey: ["ads-playlists"],
-    });
-
     closeAdModal();
     setSelectedRows({});
     return;
@@ -2608,10 +2643,6 @@ export default function AdsPage() {
     next[adModalKey],
     playlist.name
   );
-
-  queryClient.invalidateQueries({
-    queryKey: ["ads-playlists"],
-  });
 
   closeAdModal();
 };
@@ -2708,11 +2739,30 @@ export default function AdsPage() {
       if (event.key === "Delete" && selectedAdKeys.length > 0) {
         deleteSelectedAds();
       }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "z"
+      ) {
+        const target = event.target as HTMLElement | null;
+        const isTextInput =
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable);
+
+        // Let native undo happen inside text fields; only hijack Ctrl/Cmd+Z
+        // for the table when focus isn't in an editable field.
+        if (!isTextInput && undoStack.length > 0) {
+          event.preventDefault();
+          undoLastChange();
+        }
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedAdKeys, filtered, rowData]);
+  }, [selectedAdKeys, filtered, rowData, undoStack, playlists]);
 
   const openOptionModal = (type: "category" | "genre") => {
     setOptionModalType(type);
