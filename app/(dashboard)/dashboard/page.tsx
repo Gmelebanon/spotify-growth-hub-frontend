@@ -523,7 +523,7 @@ function GrowthCard({
     return (
       <Link
         href={href}
-        className="block rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition hover:border-emerald-500/40 hover:bg-zinc-950"
+        className="block min-w-0 rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition hover:border-emerald-500/40 hover:bg-zinc-950"
       >
         {content}
       </Link>
@@ -531,7 +531,7 @@ function GrowthCard({
   }
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+    <div className="min-w-0 rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
       {content}
     </div>
   );
@@ -960,7 +960,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen bg-black px-4 py-6 text-white sm:px-6 lg:px-8">
+    <main className="min-h-screen min-w-0 overflow-x-hidden bg-black px-4 py-6 text-white sm:px-6 lg:px-8">
       <section className="mx-auto max-w-[1500px] space-y-6">
         <div className="rounded-3xl border border-emerald-500/15 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.16),transparent_34%),linear-gradient(180deg,rgba(24,24,27,0.72),rgba(9,9,11,0.92))] p-5 shadow-[0_0_60px_rgba(16,185,129,0.08)]">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -1071,7 +1071,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1.25fr_0.75fr]">
-          <section className="flex min-h-[420px] flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
+          <section className="flex min-h-[420px] min-w-0 flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
@@ -1085,7 +1085,7 @@ export default function DashboardPage() {
 
             {dashboardStats.monthlyTotals.length ? (
               <div className="mt-auto h-80 pt-8">
-                <div className="flex h-full items-end gap-4 border-b border-zinc-800 pb-7">
+                <div className="flex h-full items-end gap-4 overflow-x-auto border-b border-zinc-800 pb-7 sm:overflow-x-visible">
                   {dashboardStats.monthlyTotals.map((item) => {
                     const height = Math.max(
                       6,
@@ -1095,7 +1095,7 @@ export default function DashboardPage() {
                     return (
                       <div
                         key={item.key}
-                        className="flex min-w-0 flex-1 flex-col items-center gap-3"
+                        className="flex w-14 shrink-0 flex-col items-center gap-3 sm:w-auto sm:min-w-0 sm:flex-1 sm:shrink"
                       >
                         <div className="flex h-64 w-full items-end rounded-t-xl bg-zinc-900/35 px-2">
                           <div
@@ -1177,7 +1177,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid items-stretch gap-4 lg:grid-cols-2">
-          <section className="flex flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
+          <section className="flex min-w-0 flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
                 This Week&apos;s
@@ -1260,7 +1260,7 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          <section className="flex flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
+          <section className="flex min-w-0 flex-col rounded-3xl border border-zinc-800 bg-zinc-950/70 p-5">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
                 Worldwide
@@ -1272,7 +1272,7 @@ export default function DashboardPage() {
 
             <div className="mt-5 h-[390px] rounded-2xl border border-zinc-800 bg-black/30 p-5">
               {dashboardStats.worldwideListeners.length ? (
-                <div className="flex h-full items-end justify-between gap-3 px-1 pb-1">
+                <div className="flex h-full items-end justify-start gap-3 overflow-x-auto px-1 pb-1 sm:justify-between sm:overflow-x-visible">
                   {dashboardStats.worldwideListeners.map((item) => {
                     const height = Math.max(
                       16,
@@ -1282,7 +1282,7 @@ export default function DashboardPage() {
                     return (
                       <div
                         key={item.country}
-                        className="relative flex h-full min-w-0 flex-1 flex-col items-center justify-end"
+                        className="relative flex h-full w-16 shrink-0 flex-col items-center justify-end sm:w-auto sm:min-w-0 sm:flex-1 sm:shrink"
                       >
                         <div className="flex h-[260px] w-full items-end justify-center pb-12">
                           <Link

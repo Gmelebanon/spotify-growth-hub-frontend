@@ -95,7 +95,7 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`flex min-h-screen flex-col border-r border-zinc-900 bg-black py-7 transition-all duration-300 ${
+      className={`hidden min-h-screen flex-col border-r border-zinc-900 bg-black py-7 transition-all duration-300 lg:flex ${
         collapsed ? "w-[72px] px-3" : "w-[210px] px-3"
       }`}
     >
