@@ -1,10 +1,17 @@
-"use client";
-
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import Providers from "./Providers";
 
-const queryClient = new QueryClient();
+export const metadata: Metadata = {
+  title: "Spotify Growth Hub",
+  description: "Spotify Growth Hub Dashboard",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
 
 export default function RootLayout({
   children,
@@ -14,9 +21,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <QueryClientProvider client={queryClient}>
-          {children}
-        </QueryClientProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
