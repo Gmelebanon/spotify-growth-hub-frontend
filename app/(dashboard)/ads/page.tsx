@@ -2775,7 +2775,7 @@ export default function AdsPage() {
   // (see the modal's onMouseDown={(e) => e.stopPropagation()}), so
   // interacting with a modal never wipes a selection it still needs.
   useEffect(() => {
-    const handleOutsideClick = (event: MouseEvent) => {
+    const handleOutsideClick = (event: globalThis.MouseEvent) => {
       const target = event.target as HTMLElement | null;
       const isInsideSelectable = target?.closest(
         '[data-ad-pill="true"], [data-row-checkbox="true"], [data-selection-toolbar="true"]',
