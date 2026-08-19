@@ -2728,6 +2728,8 @@ export default function AdsPage() {
     });
 
     persistRowData(next);
+    setSelectedAds({});
+    setLastSelectedAdKey(null);
   };
 
   useEffect(() => {
@@ -2763,6 +2765,36 @@ export default function AdsPage() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedAdKeys, filtered, rowData, undoStack, playlists]);
+
+  // Clicking anywhere outside an ad-date pill / row checkbox / the
+  // selection toolbar clears whichever selection is active. Elements that
+  // need to manage the selection themselves (the pills, the checkboxes,
+  // the toolbar buttons) are marked with data-ad-pill / data-row-checkbox /
+  // data-selection-toolbar so this doesn't fight with their own handlers.
+  // Anything inside an open modal already stops this event from bubbling
+  // (see the modal's onMouseDown={(e) => e.stopPropagation()}), so
+  // interacting with a modal never wipes a selection it still needs.
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isInsideSelectable = target?.closest(
+        '[data-ad-pill="true"], [data-row-checkbox="true"], [data-selection-toolbar="true"]',
+      );
+      if (isInsideSelectable) return;
+
+      setSelectedAds((prev) =>
+        Object.keys(prev).length > 0 ? {} : prev,
+      );
+      setLastSelectedAdKey(null);
+      setSelectedRows((prev) =>
+        Object.keys(prev).length > 0 ? {} : prev,
+      );
+      setLastSelectedRowIndex(null);
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   const openOptionModal = (type: "category" | "genre") => {
     setOptionModalType(type);
@@ -2990,7 +3022,10 @@ export default function AdsPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        <div
+          className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2"
+          data-selection-toolbar="true"
+        >
           {hasSelectedRows ? (
             <>
               <button
@@ -3309,6 +3344,7 @@ export default function AdsPage() {
               <div className="flex items-center px-2 py-3">
                 <input
                   type="checkbox"
+                  data-row-checkbox="true"
                   checked={allFilteredSelected}
                   onChange={toggleSelectAll}
                 />
@@ -3500,6 +3536,7 @@ export default function AdsPage() {
                       <div className="px-2">
                         <input
                           type="checkbox"
+                          data-row-checkbox="true"
                           checked={!!selectedRows[key]}
                           onClick={(event) =>
                             handleRowCheckboxClick(playlist, rowIndex, event)
@@ -3641,6 +3678,7 @@ export default function AdsPage() {
                             {ad ? (
                               <button
                                 type="button"
+                                data-ad-pill="true"
                                 onClick={(event) =>
                                   toggleAdSelection(playlist, index, event)
                                 }
