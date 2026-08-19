@@ -82,6 +82,11 @@ type SpaceApartSettings = Record<string, number>;
 
 const DUPLICATE_SPACE_KEY = "__all_duplicate_groups__";
 
+// How many tracks must separate two songs by the same artist when the
+// curation engine builds a playlist. Not exposed in the UI on purpose
+// (per request) — tune here if the spacing ever needs to change.
+const CURATION_ARTIST_SPACING = 6;
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -1567,12 +1572,20 @@ function enforceGroupSpacing(
   spaceApartSettings: SpaceApartSettings,
 ) {
   const output = [...input];
-  const spacing = Math.max(
+  const defaultSpacing = Math.max(
     0,
     Number(spaceApartSettings[DUPLICATE_SPACE_KEY] ?? 10) || 10,
   );
 
   groups.forEach((group) => {
+    // Each group can have its own custom spacing set in the UI
+    // (spaceApartSettings[group.id]); only fall back to the shared
+    // default when the group hasn't been customized.
+    const spacing = Math.max(
+      0,
+      Number(spaceApartSettings[group.id] ?? defaultSpacing) || defaultSpacing,
+    );
+
     const baseTrack = group.tracks[0];
     let baseIndex = findTrackIndexByIdentity(output, baseTrack);
 
@@ -1582,12 +1595,14 @@ function enforceGroupSpacing(
       const currentIndex = findTrackIndexByIdentity(output, track);
       if (currentIndex === -1) return;
 
-      const targetIndex = Math.min(
-        output.length - 1,
-        baseIndex + spacing * (groupIndex + 1),
-      );
+      const minTargetIndex = baseIndex + spacing * (groupIndex + 1);
 
-      if (currentIndex === targetIndex) return;
+      // "Space apart" is a minimum gap, not a fixed offset — if the track
+      // is already at least `spacing` tracks away from the base, leave it
+      // where it is instead of yanking it backward.
+      if (currentIndex >= minTargetIndex) return;
+
+      const targetIndex = Math.min(output.length - 1, minTargetIndex);
 
       const [moved] = output.splice(currentIndex, 1);
       output.splice(Math.min(targetIndex, output.length), 0, moved);
@@ -2662,11 +2677,21 @@ function DuplicateGroupCard({
 
       <div className="space-y-2">
         {group.tracks.map((track, slotIndex) => {
+          // Show the track's *current* position in the spaced-out list
+          // (displayedTracks === displayedCurationResult, i.e. after
+          // enforceGroupSpacing has already run) rather than its original
+          // pre-spacing index — otherwise these numbers never reflect the
+          // spacing that was actually applied.
+          const liveIndex = displayedTracks.findIndex(
+            (displayedTrack) => displayedTrack === track,
+          );
           const originalIndex = group.originalIndexes?.[slotIndex];
           const calculatedIndex =
-            typeof originalIndex === "number"
-              ? originalIndex
-              : displayedTracks.findIndex((displayedTrack) => displayedTrack === track);
+            liveIndex >= 0
+              ? liveIndex
+              : typeof originalIndex === "number"
+                ? originalIndex
+                : -1;
           const displayNumber =
             calculatedIndex >= 0 ? calculatedIndex + 1 : slotIndex + 1;
 
@@ -3615,29 +3640,233 @@ export default function CurationPage() {
     setResultDragIndex(null);
   };
 
+  // ---------------------------------------------------------------------
+  // Curation engine
+  //
+  // Replaces the old "shift N off each queue in a loop" approach with a
+  // proper allocator:
+  //   1. dedupe every pool against every other pool (by title + artist)
+  //   2. pull leads straight off the lead source, in playlist order
+  //   3. cycle through the requested ratio, pulling exactly N from each
+  //      source per cycle, in playlist order (no shuffling — sources stay
+  //      exactly as given)
+  //   4. when a source runs dry mid-cycle, borrow from whichever other
+  //      source still has the most tracks left, instead of silently
+  //      breaking the ratio
+  //   5. skip a candidate that would put the same artist within
+  //      `artistSpacing` tracks of their last appearance, pulling the next
+  //      valid track from that same source's queue instead
+  //   6. log every duplicate removed, every shortage fill, and every time
+  //      spacing couldn't be honored, so failures are never silent
+  // ---------------------------------------------------------------------
+
+  // Same-song definition used elsewhere in this app for "exact title"
+  // duplicates: normalized title + artist. Spotify IDs alone aren't
+  // reliable here — the same song imported via two different playlists
+  // frequently ends up with two different (or missing) IDs, which is
+  // exactly the case that was slipping past the old spotify_id-only check.
+  const trackDedupeKey = (track: CurationTrack) =>
+    `${track.title.trim().toLowerCase()}__${track.artist.trim().toLowerCase()}`;
+
+  type CurationSourceInput = {
+    key: string;
+    label: string;
+    tracks: CurationTrack[];
+    ratio: number;
+  };
+
+  const buildCuratedPlaylist = ({
+    leadSourceKey,
+    leadsCount,
+    sources,
+    artistSpacing,
+  }: {
+    leadSourceKey: string;
+    leadsCount: number;
+    sources: CurationSourceInput[];
+    artistSpacing: number;
+  }): { tracks: CurationTrack[]; log: string[] } => {
+    const log: string[] = [];
+    const usedIds = new Set<string>();
+
+    // Step 1: dedupe every source against every other source (first one to
+    // claim a track keeps it) — tracks stay in the order they were given,
+    // no shuffling.
+    const queues = sources.map((source) => {
+      const kept: CurationTrack[] = [];
+
+      source.tracks.forEach((track) => {
+        const id = trackDedupeKey(track);
+        if (usedIds.has(id)) {
+          log.push(
+            `Duplicate removed: "${track.title}" by ${track.artist} (already used from another source)`,
+          );
+          return;
+        }
+        usedIds.add(id);
+        kept.push(track);
+      });
+
+      return {
+        key: source.key,
+        label: source.label,
+        ratio: Math.max(1, Math.round(source.ratio) || 1),
+        queue: kept,
+      };
+    });
+
+    const output: CurationTrack[] = [];
+    const recentArtists: string[] = [];
+
+    const artistOf = (track: CurationTrack) => track.artist.toLowerCase().trim();
+
+    const spacingOk = (track: CurationTrack) => {
+      if (artistSpacing <= 0) return true;
+      const window = recentArtists.slice(-artistSpacing);
+      return !window.includes(artistOf(track));
+    };
+
+    const remember = (track: CurationTrack) => {
+      recentArtists.push(artistOf(track));
+      if (recentArtists.length > artistSpacing * 4) {
+        recentArtists.splice(0, recentArtists.length - artistSpacing * 4);
+      }
+    };
+
+    // Take the next valid track from a queue, honoring artist spacing when
+    // possible. Falls back to the front track (logging why) rather than
+    // stalling the whole engine over one artist collision.
+    const takeFrom = (queue: CurationTrack[], label: string) => {
+      if (queue.length === 0) return null;
+
+      const validIndex = queue.findIndex((track) => spacingOk(track));
+      if (validIndex === -1) {
+        const track = queue.shift() as CurationTrack;
+        log.push(
+          `Artist spacing relaxed for "${track.title}" by ${track.artist} — every remaining ${label} track was too close to a recent artist`,
+        );
+        remember(track);
+        return track;
+      }
+
+      const [track] = queue.splice(validIndex, 1);
+      remember(track);
+      return track;
+    };
+
+    // Steps 3-5: build one repeating cycle from the ratio, e.g. source:my
+    // 2:1 -> ["source","source","my"]. Leads are folded into this SAME
+    // cycle (as forced "source" picks) instead of being bolted on as a
+    // separate block in front of it — otherwise leads and the ratio's own
+    // source slots stack, pushing the first "my" track much further out
+    // than a 2:1 ratio actually implies. Any cycle slot a lead "steals"
+    // from another source is tracked as debt and paid back right after
+    // leads run out, so nothing requested is ever silently dropped.
+    const pattern: string[] = [];
+    queues.forEach((source) => {
+      for (let i = 0; i < source.ratio; i += 1) pattern.push(source.key);
+    });
+
+    const pullOne = (key: string) => {
+      const target = queues.find((q) => q.key === key) ?? null;
+      let pulled = target && target.queue.length > 0 ? target : null;
+
+      if (!pulled) {
+        const donor = queues
+          .filter((q) => q.key !== key && q.queue.length > 0)
+          .sort((a, b) => b.queue.length - a.queue.length)[0];
+
+        if (donor) {
+          if (target) {
+            log.push(
+              `${target.label} exhausted — filling this slot from ${donor.label} instead`,
+            );
+          }
+          pulled = donor;
+        }
+      }
+
+      if (!pulled) return null;
+      return takeFrom(pulled.queue, pulled.label);
+    };
+
+    let leadsRemaining = Math.max(0, leadsCount);
+    let patternPos = 0;
+    const debt = new Map<string, number>();
+    const totalAvailable =
+      queues.reduce((sum, q) => sum + q.queue.length, 0) + leadsRemaining;
+
+    for (let iteration = 0; iteration < totalAvailable + 10; iteration += 1) {
+      const anyQueueHasTracks = queues.some((q) => q.queue.length > 0);
+      const anyDebt = Array.from(debt.values()).some((amount) => amount > 0);
+
+      if (leadsRemaining <= 0 && !anyDebt && !anyQueueHasTracks) break;
+
+      let nextKey: string;
+
+      if (leadsRemaining > 0) {
+        nextKey = leadSourceKey;
+        const patternKey = pattern[patternPos % pattern.length];
+        if (patternKey !== leadSourceKey) {
+          debt.set(patternKey, (debt.get(patternKey) ?? 0) + 1);
+        }
+        patternPos += 1;
+        leadsRemaining -= 1;
+      } else if (anyDebt) {
+        const owedKey = queues.map((q) => q.key).find((key) => (debt.get(key) ?? 0) > 0);
+        nextKey = owedKey ?? pattern[patternPos % pattern.length];
+        if (owedKey) {
+          debt.set(owedKey, (debt.get(owedKey) ?? 0) - 1);
+        } else {
+          patternPos += 1;
+        }
+      } else {
+        nextKey = pattern[patternPos % pattern.length];
+        patternPos += 1;
+      }
+
+      const track = pullOne(nextKey);
+      if (track) {
+        output.push(track);
+      } else if (!anyQueueHasTracks) {
+        // Nothing left anywhere — stop trying to honor remaining leads/debt.
+        leadsRemaining = 0;
+        debt.clear();
+      }
+    }
+
+    return { tracks: output, log };
+  };
+
   const runCuration = () => {
     const leads = Math.max(0, Number(leadsCount) || 0);
     const sourceCount = Math.max(1, Number(sourceRatio) || 1);
     const myCount = Math.max(1, Number(myRatio) || 1);
 
-    const sourceQueue = [...sourceTracks];
-    const myQueue = [...myTracks];
-    const output: CurationTrack[] = [];
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[CURATION ENGINE v3 — no shuffle] first 5 Source tracks going in, in order:",
+      sourceTracks.slice(0, 5).map((t) => `${t.title} - ${t.artist}`),
+    );
 
-    while (output.length < leads && sourceQueue.length > 0) {
-      output.push(sourceQueue.shift() as CurationTrack);
-    }
+    const { tracks: output, log: curationLog } = buildCuratedPlaylist({
+      leadSourceKey: "source",
+      leadsCount: leads,
+      artistSpacing: CURATION_ARTIST_SPACING,
+      sources: [
+        {
+          key: "source",
+          label: "Source",
+          tracks: sourceTracks,
+          ratio: sourceCount,
+        },
+        { key: "my", label: "My Tracks", tracks: myTracks, ratio: myCount },
+      ],
+    });
 
-    while (sourceQueue.length > 0 || myQueue.length > 0) {
-      for (let i = 0; i < sourceCount && sourceQueue.length > 0; i += 1) {
-        output.push(sourceQueue.shift() as CurationTrack);
-      }
-
-      for (let i = 0; i < myCount && myQueue.length > 0; i += 1) {
-        output.push(myQueue.shift() as CurationTrack);
-      }
-
-      if (sourceQueue.length === 0 && myQueue.length === 0) break;
+    if (curationLog.length > 0) {
+      // eslint-disable-next-line no-console
+      console.info("[Curation engine]\n" + curationLog.join("\n"));
     }
 
     const groups = groupDuplicateTracks(output);
