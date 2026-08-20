@@ -2607,15 +2607,6 @@ export default function AdsPage() {
       targets.push({ playlist, key });
     });
 
-    // eslint-disable-next-line no-console
-    console.warn("[Bulk Ad Dates] diagnostic", {
-      modalDate,
-      selectedRowKeys: Object.keys(selectedRows).filter((k) => selectedRows[k]),
-      filteredCount: filtered.length,
-      targetsFound: targets.length,
-      targetNames: targets.map((t) => t.playlist.name),
-    });
-
     persistRowData(next);
 
     // Save one at a time rather than firing every request at once — the
@@ -2826,13 +2817,9 @@ export default function AdsPage() {
       );
       if (isInsideSelectable) return;
 
-      setSelectedAds((prev) =>
-        Object.keys(prev).length > 0 ? {} : prev,
-      );
+      setSelectedAds((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       setLastSelectedAdKey(null);
-      setSelectedRows((prev) =>
-        Object.keys(prev).length > 0 ? {} : prev,
-      );
+      setSelectedRows((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       setLastSelectedRowIndex(null);
     };
 
@@ -3779,6 +3766,7 @@ export default function AdsPage() {
           onMouseDown={closeOptionModal}
         >
           <div
+            data-selection-toolbar="true"
             className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl"
             onMouseDown={(event) => event.stopPropagation()}
           >
@@ -3845,6 +3833,7 @@ export default function AdsPage() {
           onMouseDown={closeAdModal}
         >
           <div
+            data-selection-toolbar="true"
             className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl"
             onMouseDown={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
