@@ -638,7 +638,7 @@ function formatAdDateDisplay(value: string) {
   if (Number.isNaN(date.getTime())) return value;
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-  return `${month}/${day}`;
+  return `${day}/${month}`;
 }
 
 function truncateTitle(title: string) {
@@ -1402,32 +1402,35 @@ async function saveAdsSettingsToDatabase(
 ) {
   const latestAd = data.ads?.[0] ?? null;
 
-  try {
-    await fetch(`${API_BASE_URL}/api/ads/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        playlist_id: String(playlistId),
-        playlist_name: playlistName,
+  const response = await fetch(`${API_BASE_URL}/api/ads/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      playlist_id: String(playlistId),
+      playlist_name: playlistName,
+      category: data.category,
+      genre: data.genre,
+      country: data.country,
+      master_playlist: data.master,
+      ad_date: latestAd?.date ?? null,
+      color: data.color ?? "gray",
+      ads: data.ads,
+      settings: {
         category: data.category,
         genre: data.genre,
         country: data.country,
         master_playlist: data.master,
-        ad_date: latestAd?.date ?? null,
         color: data.color ?? "gray",
         ads: data.ads,
-        settings: {
-          category: data.category,
-          genre: data.genre,
-          country: data.country,
-          master_playlist: data.master,
-          color: data.color ?? "gray",
-          ads: data.ads,
-        },
-      }),
-    });
-  } catch {
-    // The playlists ads-meta route below is still the main fallback.
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    // The playlists ads-meta route (saveAdsMetaToDatabase) is still the
+    // main fallback, so don't block on this one — but the caller needs to
+    // know it failed rather than silently treating it as saved.
+    throw new Error(`ads-settings save failed (${response.status})`);
   }
 }
 
@@ -1447,18 +1450,36 @@ async function saveAdsMetaToDatabase(
 
   // These two writes hit different backend tables (`ads_meta`, embedded as a
   // fallback on the playlists list response, and `ads_playlist_settings`,
-  // which is what hydrates rowData on load) - both are needed, but neither
-  // depends on the other completing first, so run them together.
-  await Promise.all([
+  // which is what hydrates rowData on load). ads-meta is the primary write;
+  // ads-settings is best-effort, so a settings-only failure is logged but
+  // doesn't fail the whole save.
+  //
+  // Both throw on a non-2xx response (not just a network failure) — a fetch
+  // promise resolves normally even for a 429/500, so without this check a
+  // rate-limited or failed save looked identical to a successful one.
+  const [metaResult, settingsResult] = await Promise.allSettled([
     fetch(`${API_BASE_URL}/api/playlists/${playlistId}/ads-meta`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    }).catch((error) => {
-      console.error("Playlist ads-meta autosave failed", error);
+    }).then((response) => {
+      if (!response.ok) {
+        throw new Error(`ads-meta save failed (${response.status})`);
+      }
     }),
     saveAdsSettingsToDatabase(playlistId, playlistName, data),
   ]);
+
+  if (settingsResult.status === "rejected") {
+    console.error("Playlist ads-settings autosave failed", settingsResult.reason);
+  }
+
+  if (metaResult.status === "rejected") {
+    console.error("Playlist ads-meta autosave failed", metaResult.reason);
+    throw metaResult.reason instanceof Error
+      ? metaResult.reason
+      : new Error(String(metaResult.reason));
+  }
 }
 
 export default function AdsPage() {
@@ -2560,11 +2581,10 @@ export default function AdsPage() {
   const next = { ...rowData };
 
   if (bulkAdModalOpen) {
-    const promises: Promise<void>[] = [];
+    const targets: { playlist: PlaylistRow; key: string }[] = [];
 
     filtered.forEach((playlist) => {
       const key = playlistKey(playlist);
-
       if (!selectedRows[key]) return;
 
       const current = {
@@ -2584,21 +2604,45 @@ export default function AdsPage() {
         ].slice(0, 12),
       };
 
-      promises.push(
-        saveAdsMetaToDatabase(
-          playlist.id,
-          next[key],
-          playlist.name
-        )
-      );
+      targets.push({ playlist, key });
+    });
+
+    // eslint-disable-next-line no-console
+    console.warn("[Bulk Ad Dates] diagnostic", {
+      modalDate,
+      selectedRowKeys: Object.keys(selectedRows).filter((k) => selectedRows[k]),
+      filteredCount: filtered.length,
+      targetsFound: targets.length,
+      targetNames: targets.map((t) => t.playlist.name),
     });
 
     persistRowData(next);
 
-    await Promise.all(promises);
+    // Save one at a time rather than firing every request at once — the
+    // backend rate-limits bursts of simultaneous requests (visible as 429s
+    // in the network tab), and since fetch() doesn't reject on an HTTP
+    // error status, those rate-limited saves were previously indistinguishable
+    // from successful ones. Going sequential avoids triggering the limit in
+    // the first place.
+    const failedPlaylists: string[] = [];
+    for (const { playlist, key } of targets) {
+      try {
+        await saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
+      } catch (error) {
+        console.error(`Failed to save ad date for "${playlist.name}"`, error);
+        failedPlaylists.push(playlist.name);
+      }
+    }
 
     closeAdModal();
     setSelectedRows({});
+
+    if (failedPlaylists.length > 0) {
+      alert(
+        `Ad date saved, but ${failedPlaylists.length} playlist(s) failed to save to the server — you may need to try them again:\n\n${failedPlaylists.join("\n")}`,
+      );
+    }
+
     return;
   }
 
