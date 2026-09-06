@@ -1938,209 +1938,257 @@ export default function AdsPage() {
   const savePlaylistManagerState = async (nextState: Record<string, unknown>) => {
     persistPlaylistManagerStateLocally(nextState);
 
-    const bodyWithQueryUser = JSON.stringify({ state: nextState });
-    const bodyWithUserKey = JSON.stringify({ user_key: "global", state: nextState });
-    const bodyWithQueryStateJson = JSON.stringify({ state_json: nextState });
-    const bodyWithStateJson = JSON.stringify({ user_key: "global", state_json: nextState });
-    const bodyRawState = JSON.stringify(nextState);
+    // Backend contract (app/api/routes/playlist_manager_state.py):
+    //   POST /api/playlist-manager-state
+    //   body: { user_key: string, state: dict }
+    // No query params, no PUT/PATCH support, no "state_json" field.
+    const response = await fetch(`${API_BASE_URL}/api/playlist-manager-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_key: "global", state: nextState }),
+    });
 
-    const attempts = [
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state`,
-        method: "PUT",
-        body: bodyWithStateJson,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state`,
-        method: "POST",
-        body: bodyWithStateJson,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "PUT",
-        body: bodyWithQueryStateJson,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "PATCH",
-        body: bodyWithQueryStateJson,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "POST",
-        body: bodyWithQueryStateJson,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "PUT",
-        body: bodyWithQueryUser,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "PATCH",
-        body: bodyWithQueryUser,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "POST",
-        body: bodyWithQueryUser,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state`,
-        method: "PUT",
-        body: bodyWithUserKey,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state`,
-        method: "POST",
-        body: bodyWithUserKey,
-      },
-      {
-        url: `${API_BASE_URL}/api/playlist-manager-state?user_key=global`,
-        method: "PUT",
-        body: bodyRawState,
-      },
-    ];
-
-    let lastError = "Could not save playlist manager state.";
-
-    for (const attempt of attempts) {
-      try {
-        const response = await fetch(attempt.url, {
-          method: attempt.method,
-          headers: { "Content-Type": "application/json" },
-          body: attempt.body,
-        });
-
-        if (response.ok) return true;
-
-        lastError = await response.text();
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-      }
+    if (!response.ok) {
+      const responseText = await response.text();
+      // eslint-disable-next-line no-console
+      console.error("[PlaylistManager save] failed", response.status, responseText);
+      throw new Error(responseText || `Playlist manager save failed (${response.status})`);
     }
 
-    throw new Error(lastError);
+    return true;
   };
 
-  const ensureMasterPlaylistInManager = async (masterName: string) => {
+
+  // Playlist Manager's real state shape (from its own page.tsx) is:
+  //   savedMasterPlaylists: { id, playlistId, accountId, name, imageUrl, tracks, createdAt }[]
+  //   syncedPlaylists: { id, masterPlaylistId, playlistId, accountId, name, imageUrl,
+  //                       spotifyUrl, spotifyId, checked, lastSyncedAt }[]
+  // A synced (child) playlist is linked to its master via masterPlaylistId matching
+  // a savedMasterPlaylists entry's id — that link was completely missing before,
+  // which is why changing Master here was saving/re-touching a playlist that
+  // happened to share the master's name instead of linking the actual child row.
+  const findOrCreateMasterPlaylistEntry = (
+    currentState: Record<string, unknown>,
+    masterName: string,
+  ) => {
+    const nameKey = masterName.trim().toLowerCase();
+    const list = Array.isArray(currentState.savedMasterPlaylists)
+      ? [...(currentState.savedMasterPlaylists as Record<string, unknown>[])]
+      : [];
+
+    const existing = list.find(
+      (item) => String(item?.name || "").trim().toLowerCase() === nameKey,
+    );
+
+    if (existing) {
+      return { id: String(existing.id), list };
+    }
+
+    // Seed metadata from a real playlist sharing this name, if one exists —
+    // otherwise this is a brand new master group with no linked playlist yet.
+    const matchedPlaylist = playlists.find(
+      (playlist) => playlist.name.trim().toLowerCase() === nameKey,
+    ) as PlaylistRow | undefined;
+
+    const newId = `master-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newEntry: Record<string, unknown> = {
+      id: newId,
+      playlistId: matchedPlaylist?.id ?? 0,
+      accountId: matchedPlaylist?.account_id ?? 0,
+      name: masterName.trim(),
+      imageUrl: matchedPlaylist?.image_url ?? null,
+      tracks: matchedPlaylist ? getTrackCount(matchedPlaylist) : undefined,
+      createdAt: new Date().toISOString(),
+    };
+
+    return { id: newId, list: [...list, newEntry] };
+  };
+
+  // One-time catch-up for Master values that were set via the dropdown
+  // before ensureMasterPlaylistInManager actually linked things correctly.
+  // Does everything in-memory against a single fetched state and writes
+  // once at the end, instead of looping the per-playlist save (which would
+  // mean two network round trips per playlist and risk the same rate
+  // limiting we hit with Sync All / bulk Ad Dates).
+  const backfillAllMasterPlaylistsToManager = async () => {
+    if (activeAccountId !== ALL_ACCOUNTS_ID) {
+      alert(
+        "Switch the account filter to \"All Accounts\" first, so this can see every playlist across every account before backfilling.",
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This scans every playlist's currently-saved Master value and links it " +
+        "in Playlist Manager. Existing links are left as-is; only playlists " +
+        "with a Master that isn't linked yet are added. Continue?",
+    );
+    if (!confirmed) return;
+
+    const currentState =
+      ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) || {};
+
+    let workingSavedMasterPlaylists = Array.isArray(currentState.savedMasterPlaylists)
+      ? [...(currentState.savedMasterPlaylists as Record<string, unknown>[])]
+      : [];
+    let workingSyncedPlaylists = Array.isArray(currentState.syncedPlaylists)
+      ? [...(currentState.syncedPlaylists as Record<string, unknown>[])]
+      : [];
+
+    let linkedCount = 0;
+    let createdMasterCount = 0;
+
+    for (const playlist of playlists) {
+      const key = playlistKey(playlist);
+      const masterName = String(rowData[key]?.master || "").trim();
+      if (!masterName) continue;
+
+      const nameKey = masterName.toLowerCase();
+      let masterEntry = workingSavedMasterPlaylists.find(
+        (item) => String(item?.name || "").trim().toLowerCase() === nameKey,
+      );
+
+      if (!masterEntry) {
+        const matchedMasterPlaylist = playlists.find(
+          (p) => p.name.trim().toLowerCase() === nameKey,
+        );
+        masterEntry = {
+          id: `master-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          playlistId: matchedMasterPlaylist?.id ?? 0,
+          accountId: matchedMasterPlaylist?.account_id ?? 0,
+          name: masterName,
+          imageUrl: matchedMasterPlaylist?.image_url ?? null,
+          tracks: matchedMasterPlaylist ? getTrackCount(matchedMasterPlaylist) : undefined,
+          createdAt: new Date().toISOString(),
+        };
+        workingSavedMasterPlaylists = [...workingSavedMasterPlaylists, masterEntry];
+        createdMasterCount += 1;
+      }
+
+      const childAccountId = playlist.account_id ?? 0;
+      const existingIndex = workingSyncedPlaylists.findIndex(
+        (item) =>
+          Number(item?.playlistId) === Number(playlist.id) &&
+          Number(item?.accountId) === Number(childAccountId),
+      );
+
+      // Already linked to this exact master — nothing to do for this row.
+      if (existingIndex >= 0 && workingSyncedPlaylists[existingIndex].masterPlaylistId === masterEntry.id) {
+        continue;
+      }
+
+      const childSpotifyId = playlist.spotify_id || playlist.spotify_playlist_id || null;
+      const childSpotifyUrl =
+        playlist.playlist_url || playlist.spotify_url || playlist.external_url || null;
+      const childLastSynced = getPlaylistManagerLastSynced(playlist) || new Date().toISOString();
+
+      const nextSyncedItem: Record<string, unknown> = {
+        id:
+          existingIndex >= 0
+            ? workingSyncedPlaylists[existingIndex].id
+            : `synced-${playlist.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        masterPlaylistId: masterEntry.id,
+        playlistId: playlist.id,
+        accountId: childAccountId,
+        name: playlist.name,
+        imageUrl: playlist.image_url ?? null,
+        spotifyUrl: childSpotifyUrl,
+        spotifyId: childSpotifyId,
+        checked: existingIndex >= 0 ? (workingSyncedPlaylists[existingIndex].checked ?? true) : true,
+        lastSyncedAt: childLastSynced,
+      };
+
+      workingSyncedPlaylists =
+        existingIndex >= 0
+          ? workingSyncedPlaylists.map((item, index) => (index === existingIndex ? nextSyncedItem : item))
+          : [...workingSyncedPlaylists, nextSyncedItem];
+
+      linkedCount += 1;
+    }
+
+    if (linkedCount === 0) {
+      alert("Nothing to backfill — every playlist with a Master set is already linked.");
+      return;
+    }
+
+    const nextState = {
+      ...currentState,
+      savedMasterPlaylists: workingSavedMasterPlaylists,
+      syncedPlaylists: workingSyncedPlaylists,
+    };
+
+    try {
+      await savePlaylistManagerState(nextState);
+      await playlistManagerStateQuery.refetch();
+      queryClient.invalidateQueries({ queryKey: ["playlist-manager-state-for-ads"] });
+      alert(
+        `Backfill complete: ${linkedCount} playlist(s) linked, ${createdMasterCount} new master group(s) created.`,
+      );
+    } catch (error) {
+      console.error("Backfill failed", error);
+      alert(
+        "Backfill failed to save: " + (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  };
+
+  const ensureMasterPlaylistInManager = async (masterName: string, childPlaylist: PlaylistRow) => {
     const selectedName = masterName.trim();
     if (!selectedName) return;
 
     const currentState =
       ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) || {};
 
-    const selectedNameKey = selectedName.toLowerCase();
-    const managerItems = [
-      ...extractPlaylistManagerItemsFromState(currentState),
-      ...loadPlaylistManagerItemsFromLocalStorage(),
-    ];
-    const matchedManagerItem = managerItems.find(
-      (item) => readPlaylistManagerName(item).toLowerCase() === selectedNameKey,
+    const { id: masterId, list: nextSavedMasterPlaylists } = findOrCreateMasterPlaylistEntry(
+      currentState,
+      selectedName,
     );
 
-    const matchedPlaylist = playlists.find(
-      (playlist) => playlist.name.trim().toLowerCase() === selectedNameKey,
-    ) as PlaylistRow | undefined;
+    const childAccountId = childPlaylist.account_id ?? 0;
+    const existingSynced = Array.isArray(currentState.syncedPlaylists)
+      ? [...(currentState.syncedPlaylists as Record<string, unknown>[])]
+      : [];
 
-    const now = new Date().toISOString();
-    const sourceId = matchedManagerItem
-      ? readPlaylistManagerId(matchedManagerItem, selectedName)
-      : "";
-    const playlistId =
-      matchedPlaylist?.spotify_playlist_id ||
-      matchedPlaylist?.spotify_id ||
-      matchedPlaylist?.id ||
-      sourceId ||
-      selectedName;
+    const existingIndex = existingSynced.findIndex(
+      (item) =>
+        Number(item?.playlistId) === Number(childPlaylist.id) &&
+        Number(item?.accountId) === Number(childAccountId),
+    );
 
-    const accountId =
-      matchedPlaylist?.account_id ??
-      (matchedManagerItem?.accountId as number | undefined) ??
-      (matchedManagerItem?.account_id as number | undefined) ??
+    const childSpotifyId =
+      childPlaylist.spotify_id || childPlaylist.spotify_playlist_id || null;
+    const childSpotifyUrl =
+      childPlaylist.playlist_url ||
+      childPlaylist.spotify_url ||
+      childPlaylist.external_url ||
       null;
-    const accountName =
-      (accountId ? getAccountName(accountId) : "") ||
-      String(
-        matchedManagerItem?.accountName ??
-          matchedManagerItem?.account_name ??
-          matchedManagerItem?.active_account_name ??
-          "",
-      );
-    const trackCount = matchedPlaylist
-      ? getTrackCount(matchedPlaylist)
-      : matchedManagerItem
-        ? readPlaylistManagerTrackCount(matchedManagerItem)
-        : 0;
-    const imageUrl = String(
-      matchedPlaylist?.image_url ??
-        matchedManagerItem?.image_url ??
-        matchedManagerItem?.imageUrl ??
-        "",
-    );
-    const playlistUrl = String(
-      matchedPlaylist?.playlist_url ??
-        matchedPlaylist?.spotify_url ??
-        matchedPlaylist?.external_url ??
-        matchedManagerItem?.playlist_url ??
-        matchedManagerItem?.spotify_url ??
-        matchedManagerItem?.external_url ??
-        "",
-    );
-    const lastSyncedAt = matchedPlaylist
-      ? getPlaylistManagerLastSynced(matchedPlaylist)
-      : String(
-          matchedManagerItem?.lastSyncedAt ??
-            matchedManagerItem?.last_synced_at ??
-            matchedManagerItem?.synced_at ??
-            now,
-        );
+    const childLastSynced = getPlaylistManagerLastSynced(childPlaylist) || new Date().toISOString();
 
-    const nextSyncedPlaylist = {
-      ...(matchedManagerItem ?? {}),
-      id: String(playlistId),
-      playlistId: String(playlistId),
-      playlist_id: String(playlistId),
-      spotify_id: matchedPlaylist?.spotify_id || matchedPlaylist?.spotify_playlist_id || matchedManagerItem?.spotify_id || null,
-      spotify_playlist_id: matchedPlaylist?.spotify_playlist_id || matchedPlaylist?.spotify_id || matchedManagerItem?.spotify_playlist_id || null,
-      name: selectedName,
-      title: selectedName,
-      playlist_name: selectedName,
-      playlistName: selectedName,
-      display_name: selectedName,
-      accountId,
-      account_id: accountId,
-      accountName,
-      account_name: accountName,
-      followers: matchedPlaylist?.followers ?? matchedManagerItem?.followers ?? 0,
-      tracks: trackCount,
-      track_count: trackCount,
-      tracks_count: trackCount,
-      total_tracks: trackCount,
-      image_url: imageUrl || null,
-      imageUrl: imageUrl || null,
-      spotify_url: playlistUrl || null,
-      playlist_url: playlistUrl || null,
-      external_url: playlistUrl || null,
-      lastSyncedAt,
-      last_synced_at: lastSyncedAt,
-      syncedAt: lastSyncedAt,
-      synced_at: lastSyncedAt,
-      createdAt: (matchedManagerItem?.createdAt as string | undefined) ?? now,
-      created_at: (matchedManagerItem?.created_at as string | undefined) ?? now,
-      source: "ads-master-dropdown",
-      managedBy: "ads-master-dropdown",
-      managed_by: "ads-master-dropdown",
-      adsManaged: true,
-      ads_managed: true,
+    const nextSyncedItem: Record<string, unknown> = {
+      id:
+        existingIndex >= 0
+          ? existingSynced[existingIndex].id
+          : `synced-${childPlaylist.id}-${Date.now()}`,
+      masterPlaylistId: masterId,
+      playlistId: childPlaylist.id,
+      accountId: childAccountId,
+      name: childPlaylist.name,
+      imageUrl: childPlaylist.image_url ?? null,
+      spotifyUrl: childSpotifyUrl,
+      spotifyId: childSpotifyId,
+      checked: existingIndex >= 0 ? (existingSynced[existingIndex].checked ?? true) : true,
+      lastSyncedAt: childLastSynced,
     };
+
+    const nextSyncedPlaylists =
+      existingIndex >= 0
+        ? existingSynced.map((item, index) => (index === existingIndex ? nextSyncedItem : item))
+        : [...existingSynced, nextSyncedItem];
 
     const nextState = {
       ...currentState,
-      syncedPlaylists: mergePlaylistManagerList(currentState.syncedPlaylists, nextSyncedPlaylist),
-      importedPlaylists: mergePlaylistManagerList(currentState.importedPlaylists, nextSyncedPlaylist),
-      synced_playlists: mergePlaylistManagerList(currentState.synced_playlists, nextSyncedPlaylist),
-      imported_playlists: mergePlaylistManagerList(currentState.imported_playlists, nextSyncedPlaylist),
+      savedMasterPlaylists: nextSavedMasterPlaylists,
+      syncedPlaylists: nextSyncedPlaylists,
     };
 
     await savePlaylistManagerState(nextState);
@@ -2164,7 +2212,7 @@ export default function AdsPage() {
     }
   };
 
-  const removeOldMasterPlaylistFromManager = async (oldMasterName: string) => {
+  const removeOldMasterPlaylistFromManager = async (oldMasterName: string, childPlaylist: PlaylistRow) => {
     const oldName = oldMasterName.trim();
     if (!oldName) return;
 
@@ -2174,12 +2222,37 @@ export default function AdsPage() {
       ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) ??
       {};
 
+    const nameKey = oldName.toLowerCase();
+    const savedMasterPlaylists = Array.isArray(currentState.savedMasterPlaylists)
+      ? (currentState.savedMasterPlaylists as Record<string, unknown>[])
+      : [];
+    const oldMasterEntry = savedMasterPlaylists.find(
+      (item) => String(item?.name || "").trim().toLowerCase() === nameKey,
+    );
+
+    // No master group by that name exists (or it was never actually linked) —
+    // nothing to unlink.
+    if (!oldMasterEntry) return;
+
+    const childAccountId = childPlaylist.account_id ?? 0;
+    const existingSynced = Array.isArray(currentState.syncedPlaylists)
+      ? (currentState.syncedPlaylists as Record<string, unknown>[])
+      : [];
+
+    // Only remove *this* child's link to the old master — other playlists
+    // still under that master group are untouched, and the master group
+    // itself is never deleted here.
+    const nextSyncedPlaylists = existingSynced.filter((item) => {
+      const isThisChild =
+        Number(item?.playlistId) === Number(childPlaylist.id) &&
+        Number(item?.accountId) === Number(childAccountId);
+      const isLinkedToOldMaster = item?.masterPlaylistId === oldMasterEntry.id;
+      return !(isThisChild && isLinkedToOldMaster);
+    });
+
     const nextState = {
       ...currentState,
-      syncedPlaylists: removeAdsManagedPlaylistManagerItem(currentState.syncedPlaylists, oldName),
-      importedPlaylists: removeAdsManagedPlaylistManagerItem(currentState.importedPlaylists, oldName),
-      synced_playlists: removeAdsManagedPlaylistManagerItem(currentState.synced_playlists, oldName),
-      imported_playlists: removeAdsManagedPlaylistManagerItem(currentState.imported_playlists, oldName),
+      syncedPlaylists: nextSyncedPlaylists,
     };
 
     await savePlaylistManagerState(nextState);
@@ -2210,22 +2283,14 @@ export default function AdsPage() {
     saveAdsMetaToDatabase(playlist.id, next[key], playlist.name);
 
     if (Object.prototype.hasOwnProperty.call(updates, "master")) {
-      const oldMasterStillUsed = Object.values(next).some((item) => {
-        return String(item?.master || "").trim().toLowerCase() === previousMaster.toLowerCase();
-      });
-
       Promise.resolve()
         .then(async () => {
           if (nextMaster) {
-            await ensureMasterPlaylistInManager(nextMaster);
+            await ensureMasterPlaylistInManager(nextMaster, playlist);
           }
 
-          if (
-            previousMaster &&
-            previousMaster.toLowerCase() !== nextMaster.toLowerCase() &&
-            !oldMasterStillUsed
-          ) {
-            await removeOldMasterPlaylistFromManager(previousMaster);
+          if (previousMaster && previousMaster.toLowerCase() !== nextMaster.toLowerCase()) {
+            await removeOldMasterPlaylistFromManager(previousMaster, playlist);
           }
         })
         .catch((error) => {
@@ -3173,6 +3238,14 @@ export default function AdsPage() {
             title="Undo last ads table edit"
           >
             <UndoIcon />
+          </button>
+          <button
+            type="button"
+            onClick={backfillAllMasterPlaylistsToManager}
+            className="h-10 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-xs font-semibold text-zinc-300 hover:border-green-500 hover:text-green-400"
+            title="Link every playlist's already-saved Master value into Playlist Manager (one-time catch-up)"
+          >
+            Backfill Masters
           </button>
           <input
             value={search}
