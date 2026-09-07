@@ -159,6 +159,17 @@ function formatDateForInput(value: string) {
   const trimmed = value.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
 
+  // If the value is an ISO timestamp (e.g. "2026-07-21T00:00:00Z" from the
+  // backend), pull the date portion directly instead of parsing it through
+  // `new Date(...)` and reading getFullYear/getMonth/getDate — those read
+  // in the browser's LOCAL timezone, which silently shifted the displayed
+  // day whenever the UTC timestamp landed near a local-timezone day
+  // boundary. That's what caused dates to "change by themselves" after a
+  // save round-trip through the backend.
+  const isoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+  if (isoMatch) return isoMatch[1];
+
+  // Genuinely different formats (e.g. "07/21/2026") still need real parsing.
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) return trimmed;
 
@@ -2033,9 +2044,9 @@ export default function SchedulingPage() {
           <input
             type="date"
             value={bulkReleaseDate}
-            onChange={(event) => {
-              setBulkReleaseDate(event.target.value);
-              applyBulkField("release_date", event.target.value);
+            onChange={(event) => setBulkReleaseDate(event.target.value)}
+            onBlur={(event) => {
+              if (event.target.value) applyBulkField("release_date", event.target.value);
             }}
             className="h-10 rounded-xl border border-zinc-800 bg-black px-3 text-sm text-white outline-none focus:border-green-500"
             title="Release date"
@@ -2445,9 +2456,9 @@ export default function SchedulingPage() {
                           ) : column.type === "date" ? (
                             <input
                               type="date"
-                              value={formatDateForInput(row[column.field])}
-                              onChange={(event) =>
-                                saveRowField(row, column.field, event.target.value)
+                              defaultValue={formatDateForInput(row[column.field])}
+                              onBlur={(event) =>
+                                handleTextBlur(row, column.field, event.target.value)
                               }
                               onKeyDown={handleKeyDownBlur}
                               className="schedule-date-input h-9 min-w-[132px] rounded-lg border border-transparent bg-transparent px-2 text-sm text-white outline-none hover:border-zinc-800 focus:border-green-500 focus:bg-black schedule-date-input [color-scheme:dark]"
