@@ -2846,9 +2846,9 @@ export default function CurationPage() {
     [],
   );
 
-  const [sourceRatio, setSourceRatio] = useState("3");
+  const [sourceRatio, setSourceRatio] = useState("1");
   const [myRatio, setMyRatio] = useState("1");
-  const [leadsCount, setLeadsCount] = useState("5");
+  const [leadsCount, setLeadsCount] = useState("3");
 
   const [curationName, setCurationName] = useState("");
   const [savedCurations, setSavedCurations] = useState<SavedCuration[]>([]);
