@@ -179,6 +179,21 @@ function formatDateForInput(value: string) {
   return `${year}-${month}-${day}`;
 }
 
+// A stable, unique color per genre within the current release library.
+// Imported sheets often use a dash instead of an empty album cell.
+function releaseLabel(value: string | null | undefined) {
+  const label = String(value ?? "").trim();
+  return /^(?:[-–—]+|n\/?a|none|null)$/i.test(label) ? "" : label;
+}
+
+function genreColor(genre: string, genrePalette: Map<string, string>) {
+  return genrePalette.get(genre.trim().toLocaleLowerCase()) || "#71717a";
+}
+
+function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function releaseDateTimestamp(value: string) {
   const formatted = formatDateForInput(value);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(formatted)) return null;
@@ -465,6 +480,9 @@ export default function SchedulingPage() {
   const [sortField, setSortField] = useState<SortField>("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [focusedArtist, setFocusedArtist] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [dateRangeStart, setDateRangeStart] = useState(getTodayDateInputValue());
   const [dateRangeEnd, setDateRangeEnd] = useState(getTodayDateInputValue());
@@ -904,7 +922,11 @@ export default function SchedulingPage() {
         )
       : activeRows;
 
-    const timeFiltered = searched.filter((row) => {
+    const artistFiltered = focusedArtist
+      ? searched.filter((row) => row.artist.trim().toLowerCase() === focusedArtist.toLowerCase())
+      : searched;
+
+    const timeFiltered = artistFiltered.filter((row) => {
       if (timeFilter === "all") return true;
 
       const rowTimestamp = releaseDateTimestamp(row.release_date);
@@ -975,10 +997,118 @@ export default function SchedulingPage() {
     dateRangeStart,
     onlineReferenceKeys,
     search,
+    focusedArtist,
     sortDirection,
     sortField,
     timeFilter,
   ]);
+
+  const calendarRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return activeRows.filter((row) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(formatDateForInput(row.release_date))) return false;
+      if (!query) return true;
+      return [row.artist, row.album, row.song, row.genre, row.release_date]
+        .join(" ").toLowerCase().includes(query);
+    });
+  }, [activeRows, search]);
+
+  const genrePalette = useMemo(() => {
+    // Fixed, high-contrast colors: a genre keeps its color across months and filters.
+    const fixedColors: Record<string, string> = {
+      "afro": "#00E5A8",
+      "afro house": "#00B8FF",
+      "ambient": "#FFB000",
+      "ambient crystal bowls": "#B388FF",
+      "ambient gongs": "#FF5C8A",
+      "chill house": "#D6FF3F",
+      "garage": "#FF7043",
+      "house": "#EA4CFF",
+      "hyper techno": "#45E0E8",
+      "hyperpop": "#FFEA00",
+      "instrumentals": "#A8FF9E",
+      "soft pop": "#FF9FCA",
+    };
+    const fallbackColors = [
+      "#F59E0B", "#38BDF8", "#F472B6", "#A3E635",
+      "#C084FC", "#FB7185", "#2DD4BF", "#FACC15",
+    ];
+    const genres = Array.from(new Set(rows.map((row) => row.genre.trim().toLocaleLowerCase()).filter(Boolean))).sort();
+    const palette = new Map<string, string>();
+    let fallbackIndex = 0;
+    genres.forEach((genre) => {
+      palette.set(genre, fixedColors[genre] || fallbackColors[fallbackIndex++ % fallbackColors.length]);
+    });
+    return palette;
+  }, [rows]);
+
+  const releasesByDate = useMemo(() => {
+    const grouped = new Map<string, SchedulingRow[]>();
+    const seen = new Set<string>();
+    const namedAlbums = new Set<string>();
+
+    calendarRows.forEach((row) => {
+      const album = releaseLabel(row.album);
+      if (album) namedAlbums.add(JSON.stringify([
+        formatDateForInput(row.release_date),
+        normalizeMatchKey(row.artist),
+        normalizeMatchKey(row.genre),
+      ]));
+    });
+
+    calendarRows.forEach((row) => {
+      const date = formatDateForInput(row.release_date);
+      const artist = normalizeMatchKey(row.artist);
+      const genre = normalizeMatchKey(row.genre);
+      const album = releaseLabel(row.album);
+      const song = releaseLabel(row.song);
+      const groupKey = JSON.stringify([date, artist, genre]);
+
+      // Ignore genuinely empty placeholders only when a named album exists.
+      // Keep real singles even if this artist has an album on the same day.
+      if (!album && !song && namedAlbums.has(groupKey)) return;
+
+      const identity = album
+        ? `album:${normalizeMatchKey(album)}`
+        : song ? `single:${normalizeMatchKey(song)}` : "untitled";
+      const key = JSON.stringify([date, artist, genre, identity]);
+      if (seen.has(key)) return;
+      seen.add(key);
+      grouped.set(date, [...(grouped.get(date) || []), row]);
+    });
+
+    grouped.forEach((entries, date) => {
+      grouped.set(date, [...entries].sort((a, b) =>
+        a.genre.trim().localeCompare(b.genre.trim(), undefined, { sensitivity: "base" }) ||
+        a.artist.trim().localeCompare(b.artist.trim(), undefined, { sensitivity: "base" }) ||
+        (releaseLabel(a.album) || releaseLabel(a.song)).localeCompare(
+          releaseLabel(b.album) || releaseLabel(b.song), undefined, { sensitivity: "base" }
+        )
+      ));
+    });
+    return grouped;
+  }, [calendarRows]);
+
+  const calendarDays = useMemo(() => {
+    const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const mondayOffset = (first.getDay() + 6) % 7;
+    const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    const cells = Math.ceil((mondayOffset + daysInMonth) / 7) * 7;
+    return Array.from({ length: cells }, (_, index) =>
+      new Date(first.getFullYear(), first.getMonth(), index - mondayOffset + 1),
+    );
+  }, [calendarMonth]);
+
+  const openReleaseList = useCallback((date: string, artist?: string) => {
+    setViewMode("list");
+    setTimeFilter("date_range");
+    setDateRangeStart(date);
+    setDateRangeEnd(date);
+    setFocusedArtist(artist || null);
+    setSearch("");
+    setActiveFilters({});
+    setSelectedIds([]);
+  }, []);
 
   const selectedRows = useMemo(() => {
     const selected = new Set(selectedIds);
@@ -1890,6 +2020,19 @@ export default function SchedulingPage() {
         <h1 className="text-3xl font-bold tracking-tight">Releases</h1>
 
         <div className="flex flex-wrap items-center gap-3">
+          <div className="flex h-11 items-center rounded-xl border border-zinc-800 bg-zinc-950 p-1" aria-label="Release view">
+            <button type="button" onClick={() => setViewMode("list")}
+              className={`flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${viewMode === "list" ? "bg-green-500 text-black" : "text-zinc-300 hover:text-white"}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" strokeLinecap="round" /></svg>
+              List
+            </button>
+            <button type="button" onClick={() => { setViewMode("calendar"); setFocusedArtist(null); }}
+              className={`flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${viewMode === "calendar" ? "bg-green-500 text-black" : "text-zinc-300 hover:text-white"}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18" strokeLinecap="round"/></svg>
+              Calendar
+            </button>
+          </div>
+
           {undoStack.length > 0 ? (
             <button
               onClick={handleUndo}
@@ -2234,6 +2377,65 @@ export default function SchedulingPage() {
         </div>
       ) : null}
 
+      {viewMode === "list" && focusedArtist ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-green-900/60 bg-green-950/20 px-4 py-3 text-sm">
+          <span className="text-zinc-400">Artist:</span>
+          <strong className="text-green-300">{focusedArtist}</strong>
+          <button type="button" onClick={() => setFocusedArtist(null)} className="ml-auto rounded-lg border border-zinc-700 px-3 py-1 text-zinc-200 hover:border-green-500">Clear artist filter ×</button>
+        </div>
+      ) : null}
+
+      {viewMode === "calendar" ? (
+        <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/60 shadow-2xl shadow-black/20">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+            <div>
+              <h2 className="text-xl font-bold text-white">{calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
+              <p className="mt-1 text-xs text-zinc-500">Select a date for all releases, or an artist for their releases on that date.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setCalendarMonth(new Date())} className="rounded-lg border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:border-green-500">Today</button>
+              <button type="button" aria-label="Previous month" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-200 hover:border-green-500">‹</button>
+              <button type="button" aria-label="Next month" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-200 hover:border-green-500">›</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-7 border-b border-zinc-800 bg-black/40 text-center text-[11px] font-bold uppercase tracking-widest text-zinc-500">
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <div key={day} className="py-3">{day}</div>)}
+          </div>
+          <div className="grid grid-cols-7">
+            {calendarDays.map((day) => {
+              const key = dateKey(day);
+              const entries = releasesByDate.get(key) || [];
+              const inMonth = day.getMonth() === calendarMonth.getMonth();
+              const isToday = key === getTodayDateInputValue();
+              return (
+                <div key={key} className={`min-h-[115px] border-b border-r border-zinc-800/70 p-1.5 sm:min-h-[150px] sm:p-2 ${inMonth ? "bg-zinc-950/30" : "bg-black/50 opacity-45"}`}>
+                  <button type="button" onClick={() => openReleaseList(key)} title={`View releases on ${key}`}
+                    className={`mb-2 flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold hover:bg-green-500 hover:text-black ${isToday ? "bg-green-500 text-black" : "text-zinc-300"}`}>
+                    {day.getDate()}
+                  </button>
+                  <div className="space-y-1">
+                    {entries.map((entry) => (
+                      <button key={entry.id} type="button" onClick={() => openReleaseList(key, entry.artist.trim() || undefined)}
+                        title={`${entry.artist || "Unnamed artist"} • ${releaseLabel(entry.album) || releaseLabel(entry.song) || "Untitled release"} • ${entry.genre || "No genre"}`}
+                        className={`flex w-full items-center gap-1.5 rounded-md bg-zinc-900/80 px-1.5 py-1 text-left text-[10px] hover:bg-zinc-800 sm:text-xs ${statusForRow(entry, onlineReferenceKeys) === "Online" ? "text-green-400 hover:text-green-300" : "text-zinc-100 hover:text-green-300"}`}>
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: genreColor(entry.genre, genrePalette) }} />
+                        <span className="truncate">{entry.artist || "Unnamed artist"}{releaseLabel(entry.album) || releaseLabel(entry.song) ? ` — ${releaseLabel(entry.album) || releaseLabel(entry.song)}` : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800 px-5 py-4 text-xs text-zinc-400">
+            <span className="font-semibold text-zinc-300">Genres:</span>
+            {Array.from(new Set(calendarRows.map((row) => row.genre.trim()).filter(Boolean))).sort().map((genre) => (
+              <span key={genre} className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: genreColor(genre, genrePalette) }} />{genre}</span>
+            ))}
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />No genre</span>
+          </div>
+        </section>
+      ) : (
       <section className="rounded-2xl border border-zinc-800 bg-zinc-950/60 shadow-2xl shadow-black/20">
         <div className="flex items-center justify-between gap-4 border-b border-zinc-800/80 p-5">
           <div>
@@ -2494,6 +2696,7 @@ export default function SchedulingPage() {
           </table>
         </div>
       </section>
+      )}
     </main>
   );
 }
