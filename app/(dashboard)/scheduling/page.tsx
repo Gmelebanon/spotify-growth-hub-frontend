@@ -480,7 +480,7 @@ export default function SchedulingPage() {
   const [sortField, setSortField] = useState<SortField>("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
   const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [focusedArtist, setFocusedArtist] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
