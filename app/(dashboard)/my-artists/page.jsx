@@ -5,6 +5,8 @@ import Link from "next/link";
 
 const ADDED_ARTISTS_STORAGE_KEY = "spotify-growth-hub-added-artists";
 const REMOVED_ARTISTS_STORAGE_KEY = "spotify-growth-hub-removed-artists";
+const ARTIST_DAILY_SYNC_STORAGE_KEY = "spotify-growth-hub-my-artists-last-daily-sync";
+const ARTIST_DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function CopyIcon() {
   return (
@@ -1644,6 +1646,8 @@ export default function MyArtistsPage() {
               .join(", ")}.`
           : "";
 
+      localStorage.setItem(ARTIST_DAILY_SYNC_STORAGE_KEY, String(Date.now()));
+
       setToastMessage(
         `Artist library refreshed. Saved ${saved.length}. Synced ${
           syncData.synced || nextDatabaseArtists.length
@@ -1749,6 +1753,20 @@ export default function MyArtistsPage() {
 
     loadArtists();
   }, []);
+
+  // Run a full metadata refresh at most once per 24 hours when this page is visited.
+  // A backend scheduler is required to sync on days when nobody opens the page.
+  useEffect(() => {
+    if (isLoading || isRefreshing || errorMessage) return;
+
+    const lastSync = Number(localStorage.getItem(ARTIST_DAILY_SYNC_STORAGE_KEY) || 0);
+    if (Number.isFinite(lastSync) && lastSync > 0 &&
+        Date.now() - lastSync < ARTIST_DAILY_SYNC_INTERVAL_MS) return;
+
+    handleRefreshArtists();
+    // Only re-evaluate when the initial load finishes; the refresh records its success.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
 
   useEffect(() => {
     if (!toastMessage) return;
