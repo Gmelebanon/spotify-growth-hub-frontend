@@ -405,6 +405,19 @@ function addReleaseReferenceKeys(
   }
 }
 
+// A Scheduling row may store a single's title in Song, or an EP/album title
+// in Album. Spotify's release feed uses the release title for both kinds.
+function rowMatchesOnline(row: SchedulingRow, keys: Set<string>) {
+  const artist = row.artist;
+  const titles = [row.song, row.album]
+    .map((value) => releaseLabel(value))
+    .filter(Boolean);
+  return titles.some((title) =>
+    keys.has(artistSongMatchKey(artist, title)) ||
+    keys.has(artistAlbumMatchKey(artist, title)),
+  );
+}
+
 function statusForRow(row: SchedulingRow, onlineReferenceKeys: Set<string>) {
   const storedPlatformStatus = String(row.platform_status || "").trim().toLowerCase();
   const storedStatus = String(row.status || "").trim();
@@ -413,11 +426,7 @@ function statusForRow(row: SchedulingRow, onlineReferenceKeys: Set<string>) {
     return storedStatus;
   }
 
-  const songMatchKey = artistSongMatchKey(row.artist, row.song);
-  const albumMatchKey = artistAlbumMatchKey(row.artist, row.album);
-  const hasOnlineMatch =
-    (songMatchKey && onlineReferenceKeys.has(songMatchKey)) ||
-    (albumMatchKey && onlineReferenceKeys.has(albumMatchKey));
+  const hasOnlineMatch = rowMatchesOnline(row, onlineReferenceKeys);
 
   if (
     storedStatus === "Online" ||
@@ -532,38 +541,39 @@ export default function SchedulingPage() {
         if (!response.ok) return;
         const data = await response.json();
 
-        const visit = (value: unknown) => {
-          if (!value || typeof value !== "object") return;
+         // Carry the artist name into nested release/track records. Spotify
+         // releases usually have `name`, not an `artist` field of their own.
+         const visit = (value: unknown, inheritedArtist = "", context = "") => {
+           if (!value || typeof value !== "object") return;
+           if (Array.isArray(value)) {
+             value.forEach((item) => visit(item, inheritedArtist, context));
+             return;
+           }
 
-          if (Array.isArray(value)) {
-            value.forEach(visit);
-            return;
-          }
+           const record = value as Record<string, unknown>;
+           const artist = artistValueFromRecord(record) ||
+             (context === "artist" ? firstStringValue(record, ["name"]) : "") ||
+             inheritedArtist;
+           const isRelease = /release|album|single|track|song|item/i.test(context);
+           const song = songTitleFromRecord(record) ||
+             (isRelease ? firstStringValue(record, ["name"]) : "");
+           const album = albumTitleFromRecord(record) ||
+             (isRelease ? releaseTitleFromRecord(record) : "");
 
-          const record = value as Record<string, unknown>;
-          const artistValue = artistValueFromRecord(record);
-          const songValue = songTitleFromRecord(record);
-          const albumValue = albumTitleFromRecord(record);
-          const songKey = artistSongMatchKey(artistValue, songValue);
-          const albumKey = artistAlbumMatchKey(artistValue, albumValue);
+           if (artist) {
+             const songKey = artistSongMatchKey(artist, song);
+             const albumKey = artistAlbumMatchKey(artist, album);
+             if (songKey) next.add(songKey);
+             if (albumKey) next.add(albumKey);
+           }
 
-          if (songKey) next.add(songKey);
-          if (albumKey) next.add(albumKey);
-
-          const parentArtistValue =
-            artistValue ||
-            firstStringValue(record, ["artistName", "artist_name", "name"]);
-
-          addReleaseReferenceKeys(next, parentArtistValue, record.latestRelease);
-          addReleaseReferenceKeys(next, parentArtistValue, record.latest_release);
-          addReleaseReferenceKeys(next, parentArtistValue, record.recentReleases);
-          addReleaseReferenceKeys(next, parentArtistValue, record.recent_releases);
-          addReleaseReferenceKeys(next, parentArtistValue, record.releases);
-
-          Object.values(record).forEach((child) => {
-            if (typeof child === "object") visit(child);
-          });
-        };
+           Object.entries(record).forEach(([field, child]) => {
+             if (!child || typeof child !== "object") return;
+             const childContext = /artist/i.test(field) && !/release/i.test(field)
+               ? "artist" : field;
+             visit(child, artist, childContext);
+           });
+         };
 
         visit(data);
       } catch {
@@ -689,13 +699,7 @@ export default function SchedulingPage() {
           return false;
         }
 
-        const songKey = artistSongMatchKey(row.artist, row.song);
-        const albumKey = artistAlbumMatchKey(row.artist, row.album);
-
-        return Boolean(
-          (songKey && freshReferenceKeys.has(songKey)) ||
-            (albumKey && freshReferenceKeys.has(albumKey)),
-        );
+        return rowMatchesOnline(row, freshReferenceKeys);
       });
 
       const pushResults = await Promise.allSettled(
@@ -1194,13 +1198,7 @@ export default function SchedulingPage() {
         return false;
       }
 
-      const songKey = artistSongMatchKey(row.artist, row.song);
-      const albumKey = artistAlbumMatchKey(row.artist, row.album);
-
-      return Boolean(
-        (songKey && onlineReferenceKeys.has(songKey)) ||
-          (albumKey && onlineReferenceKeys.has(albumKey)),
-      );
+      return rowMatchesOnline(row, onlineReferenceKeys);
     });
 
     rowsToMarkOnline.forEach(async (row) => {
