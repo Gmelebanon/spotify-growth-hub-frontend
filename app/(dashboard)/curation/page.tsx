@@ -3716,42 +3716,12 @@ export default function CurationPage() {
     });
 
     const output: CurationTrack[] = [];
-    const recentArtists: string[] = [];
 
-    const artistOf = (track: CurationTrack) => track.artist.toLowerCase().trim();
-
-    const spacingOk = (track: CurationTrack) => {
-      if (artistSpacing <= 0) return true;
-      const window = recentArtists.slice(-artistSpacing);
-      return !window.includes(artistOf(track));
-    };
-
-    const remember = (track: CurationTrack) => {
-      recentArtists.push(artistOf(track));
-      if (recentArtists.length > artistSpacing * 4) {
-        recentArtists.splice(0, recentArtists.length - artistSpacing * 4);
-      }
-    };
-
-    // Take the next valid track from a queue, honoring artist spacing when
-    // possible. Falls back to the front track (logging why) rather than
-    // stalling the whole engine over one artist collision.
-    const takeFrom = (queue: CurationTrack[], label: string) => {
-      if (queue.length === 0) return null;
-
-      const validIndex = queue.findIndex((track) => spacingOk(track));
-      if (validIndex === -1) {
-        const track = queue.shift() as CurationTrack;
-        log.push(
-          `Artist spacing relaxed for "${track.title}" by ${track.artist} — every remaining ${label} track was too close to a recent artist`,
-        );
-        remember(track);
-        return track;
-      }
-
-      const [track] = queue.splice(validIndex, 1);
-      remember(track);
-      return track;
+    // Preserve each imported playlist's exact track order. Artist-spacing
+    // checks must not skip ahead in a queue because that silently reorders
+    // tracks when Curation is pressed.
+    const takeFrom = (queue: CurationTrack[], _label: string) => {
+      return queue.shift() ?? null;
     };
 
     // Steps 3-5: build one repeating cycle from the ratio, e.g. source:my

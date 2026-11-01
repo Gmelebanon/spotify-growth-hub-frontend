@@ -142,6 +142,18 @@ async function fetchSettingsSummary(): Promise<SettingsSummary> {
   return response.json();
 }
 
+async function refreshSpotifyAccount(accountId: string | number) {
+  const response = await fetch(`${API_BASE_URL}/api/accounts/${encodeURIComponent(String(accountId))}/refresh`, {
+    method: "POST",
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.detail || `Spotify refresh failed (${response.status})`);
+  }
+  return payload;
+}
+
 async function fetchDatabaseUsers(): Promise<SettingsUser[]> {
   const response = await fetch(`${API_BASE_URL}/api/settings/users?ts=${Date.now()}`, {
     cache: "no-store",
@@ -502,6 +514,8 @@ export default function SettingsPage() {
   const [databaseUsersConnected, setDatabaseUsersConnected] = useState(false);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersMessage, setUsersMessage] = useState("");
+  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
+  const [accountRefreshFeedback, setAccountRefreshFeedback] = useState<Record<string, { ok: boolean; message: string }>>({});
 
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedUser, setSelectedUser] = useState<SettingsUser | null>(null);
@@ -746,6 +760,25 @@ export default function SettingsPage() {
     }
   };
 
+  const handleAccountRefresh = async (account: AccountRow) => {
+    if (!canControl || account.id == null) return;
+    const id = String(account.id);
+    setRefreshingAccountId(id);
+    setAccountRefreshFeedback((prev) => ({ ...prev, [id]: { ok: true, message: "Refreshing…" } }));
+    try {
+      await refreshSpotifyAccount(account.id);
+      await Promise.all([summaryQuery.refetch(), accountsQuery.refetch()]);
+      setAccountRefreshFeedback((prev) => ({ ...prev, [id]: { ok: true, message: "API refreshed successfully" } }));
+    } catch (error) {
+      setAccountRefreshFeedback((prev) => ({
+        ...prev,
+        [id]: { ok: false, message: error instanceof Error ? error.message : "Refresh failed" },
+      }));
+    } finally {
+      setRefreshingAccountId(null);
+    }
+  };
+
   const handleLogout = () => {
     logoutUser();
     router.push("/login");
@@ -805,24 +838,45 @@ export default function SettingsPage() {
       <div className="space-y-4">
         <SectionCard title="Account Sync Status" eyebrow="Database health">
           <div className="overflow-hidden rounded-2xl border border-zinc-800">
-            <div className="grid grid-cols-[1.2fr_1.2fr_0.8fr_0.8fr] border-b border-zinc-800 bg-zinc-900/40 px-4 py-3 text-[10px] uppercase tracking-[0.22em] text-zinc-500">
+            <div className="min-w-[760px] grid grid-cols-[1.15fr_1fr_0.75fr_0.7fr_0.8fr] items-center gap-3 border-b border-zinc-800 bg-zinc-900/40 px-4 py-3 text-[10px] uppercase tracking-[0.22em] text-zinc-500">
               <div>Account</div>
               <div>Last Synced</div>
               <div>Status</div>
               <div>Freshness</div>
+              <div>API Refresh</div>
             </div>
             {accounts.length ? (
-              accounts.map((account) => (
-                <div
-                  key={String(account.id)}
-                  className="grid grid-cols-[1.2fr_1.2fr_0.8fr_0.8fr] border-b border-zinc-900 px-4 py-3 text-sm last:border-b-0"
-                >
-                  <div className="font-semibold text-white">{account.name}</div>
-                  <div className="text-zinc-300">{formatDateOnly(account.lastSynced)}</div>
-                  <div className="text-green-400">{account.status || "Connected"}</div>
-                  <div className="text-zinc-500">{account.freshness || timeAgo(account.lastSynced)}</div>
-                </div>
-              ))
+              accounts.map((account, index) => {
+                const id = account.id == null ? `missing-${index}` : String(account.id);
+                const isRefreshing = refreshingAccountId === id;
+                const feedback = accountRefreshFeedback[id];
+                return (
+                  <div
+                    key={id}
+                    className="min-w-[760px] grid grid-cols-[1.15fr_1fr_0.75fr_0.7fr_0.8fr] items-center gap-3 border-b border-zinc-900 px-4 py-3 text-sm last:border-b-0"
+                  >
+                    <div className="font-semibold text-white">{account.name}</div>
+                    <div className="text-zinc-300">{formatDateOnly(account.lastSynced)}</div>
+                    <div className="text-green-400">{account.status || "Connected"}</div>
+                    <div className="text-zinc-500">{account.freshness || timeAgo(account.lastSynced)}</div>
+                    <div className="flex flex-col items-start gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleAccountRefresh(account)}
+                        disabled={!canControl || account.id == null || refreshingAccountId !== null}
+                        className="rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-400 hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {isRefreshing ? "Refreshing…" : "Refresh API"}
+                      </button>
+                      {feedback && !isRefreshing ? (
+                        <span role="status" className={`max-w-[210px] break-words text-[11px] ${feedback.ok ? "text-green-400" : "text-red-400"}`}>
+                          {feedback.message}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })
             ) : (
               <div className="px-4 py-6 text-sm text-zinc-500">No connected accounts found.</div>
             )}
