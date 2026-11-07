@@ -142,17 +142,7 @@ async function fetchSettingsSummary(): Promise<SettingsSummary> {
   return response.json();
 }
 
-async function refreshSpotifyAccount(accountId: string | number) {
-  const response = await fetch(`${API_BASE_URL}/api/accounts/${encodeURIComponent(String(accountId))}/refresh`, {
-    method: "POST",
-    cache: "no-store",
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload?.detail || `Spotify refresh failed (${response.status})`);
-  }
-  return payload;
-}
+const SPOTIFY_RECONNECT_URL = `${API_BASE_URL.replace(/\/$/, "")}/api/spotify/login`;
 
 async function fetchDatabaseUsers(): Promise<SettingsUser[]> {
   const response = await fetch(`${API_BASE_URL}/api/settings/users?ts=${Date.now()}`, {
@@ -514,8 +504,6 @@ export default function SettingsPage() {
   const [databaseUsersConnected, setDatabaseUsersConnected] = useState(false);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersMessage, setUsersMessage] = useState("");
-  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
-  const [accountRefreshFeedback, setAccountRefreshFeedback] = useState<Record<string, { ok: boolean; message: string }>>({});
 
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedUser, setSelectedUser] = useState<SettingsUser | null>(null);
@@ -760,23 +748,11 @@ export default function SettingsPage() {
     }
   };
 
-  const handleAccountRefresh = async (account: AccountRow) => {
-    if (!canControl || account.id == null) return;
-    const id = String(account.id);
-    setRefreshingAccountId(id);
-    setAccountRefreshFeedback((prev) => ({ ...prev, [id]: { ok: true, message: "Refreshing…" } }));
-    try {
-      await refreshSpotifyAccount(account.id);
-      await Promise.all([summaryQuery.refetch(), accountsQuery.refetch()]);
-      setAccountRefreshFeedback((prev) => ({ ...prev, [id]: { ok: true, message: "API refreshed successfully" } }));
-    } catch (error) {
-      setAccountRefreshFeedback((prev) => ({
-        ...prev,
-        [id]: { ok: false, message: error instanceof Error ? error.message : "Refresh failed" },
-      }));
-    } finally {
-      setRefreshingAccountId(null);
-    }
+  const handleAccountRefresh = () => {
+    // OAuth must be completed through the backend so it can save the new tokens.
+    // This endpoint does not accept an account ID; reconnect the intended Spotify
+    // identity and verify the connected account after returning.
+    window.location.assign(SPOTIFY_RECONNECT_URL);
   };
 
   const handleLogout = () => {
@@ -843,13 +819,11 @@ export default function SettingsPage() {
               <div>Last Synced</div>
               <div>Status</div>
               <div>Freshness</div>
-              <div>API Refresh</div>
+              <div>Spotify Authorization</div>
             </div>
             {accounts.length ? (
               accounts.map((account, index) => {
                 const id = account.id == null ? `missing-${index}` : String(account.id);
-                const isRefreshing = refreshingAccountId === id;
-                const feedback = accountRefreshFeedback[id];
                 return (
                   <div
                     key={id}
@@ -863,16 +837,14 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={() => handleAccountRefresh(account)}
-                        disabled={!canControl || account.id == null || refreshingAccountId !== null}
+                        disabled={!canControl}
                         className="rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-400 hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        {isRefreshing ? "Refreshing…" : "Refresh API"}
+                        Reconnect Spotify
                       </button>
-                      {feedback && !isRefreshing ? (
-                        <span role="status" className={`max-w-[210px] break-words text-[11px] ${feedback.ok ? "text-green-400" : "text-red-400"}`}>
-                          {feedback.message}
-                        </span>
-                      ) : null}
+                      <span className="max-w-[210px] text-[11px] text-zinc-500">
+                        Opens Spotify authorization. Sign in to the matching account.
+                      </span>
                     </div>
                   </div>
                 );
@@ -883,7 +855,7 @@ export default function SettingsPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Users & Permissions" eyebrow="Admin / Viewer">
+        <SectionCard title="Users & Permissions" eyebrow="Admin / Viewer" defaultOpen={false}>
           <div className="rounded-2xl border border-zinc-800 bg-black p-4">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
@@ -1006,7 +978,7 @@ export default function SettingsPage() {
           <div className="grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-zinc-800 bg-black p-4">
               <div className="text-xs font-medium text-zinc-300">App version</div>
-              <div className="mt-1 text-xs text-zinc-500">Nerd Engine V2 240526</div>
+              <div className="mt-1 text-xs text-zinc-500">Nerd Engine V10 071126</div>
             </div>
             <div className="rounded-2xl border border-zinc-800 bg-black p-4">
               <div className="text-xs font-medium text-zinc-300">Design and Development</div>
