@@ -18,6 +18,7 @@ type ModalMode = "create" | "password" | null;
 type AccountRow = {
   id?: number | string;
   display_name?: string | null;
+  email?: string | null;
   name?: string | null;
   lastSynced?: string | null;
   last_synced_at?: string | null;
@@ -533,7 +534,17 @@ export default function SettingsPage() {
 
   const summary = summaryQuery.data;
   const accounts = useMemo(() => {
-    if (summary?.accounts?.length) return summary.accounts.map(normalizeAccount);
+    if (summary?.accounts?.length) {
+      const emailById = new Map(
+        fallbackAccounts.map((account) => [String(account.id), account.email]),
+      );
+      return summary.accounts.map((account) =>
+        normalizeAccount({
+          ...account,
+          email: account.email || emailById.get(String(account.id)) || null,
+        }),
+      );
+    }
     return fallbackAccounts;
   }, [summary?.accounts, fallbackAccounts]);
 
@@ -829,7 +840,12 @@ export default function SettingsPage() {
                     key={id}
                     className="min-w-[760px] grid grid-cols-[1.15fr_1fr_0.75fr_0.7fr_0.8fr] items-center gap-3 border-b border-zinc-900 px-4 py-3 text-sm last:border-b-0"
                   >
-                    <div className="font-semibold text-white">{account.name}</div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-white">{account.name}</div>
+                      <div className="mt-1 break-all text-xs font-normal text-zinc-500">
+                        {account.email || "Email unavailable"}
+                      </div>
+                    </div>
                     <div className="text-zinc-300">{formatDateOnly(account.lastSynced)}</div>
                     <div className="text-green-400">{account.status || "Connected"}</div>
                     <div className="text-zinc-500">{account.freshness || timeAgo(account.lastSynced)}</div>
