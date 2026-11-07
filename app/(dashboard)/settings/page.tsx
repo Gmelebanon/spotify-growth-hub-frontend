@@ -836,7 +836,7 @@ export default function SettingsPage() {
                     <div className="flex flex-col items-start gap-1.5">
                       <button
                         type="button"
-                        onClick={() => handleAccountRefresh(account)}
+                        onClick={handleAccountRefresh}
                         disabled={!canControl}
                         className="rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-400 transition hover:border-green-400 hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                       >
