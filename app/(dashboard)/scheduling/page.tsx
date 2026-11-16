@@ -58,6 +58,9 @@ type SchedulingRow = {
   artist: string;
   album: string;
   song: string;
+  spotify_url?: string | null;
+  spotify_track_url?: string | null;
+  spotify_track_id?: string | null;
   release_date: string;
   platform_status: string;
   rn_account: string;
@@ -148,6 +151,22 @@ const COLUMNS: Column[] = [
 function normalizeValue(value: string | boolean | null | undefined) {
   if (typeof value === "boolean") return value;
   return String(value ?? "").trim();
+}
+
+function spotifyLinkForRow(row: SchedulingRow) {
+  const directUrl = [row.spotify_track_url, row.spotify_url].find(
+    (value) => typeof value === "string" && /^https:\/\/open\.spotify\.com\/track\/[a-zA-Z0-9]+(?:[/?#]|$)/.test(value),
+  );
+  if (directUrl) return directUrl;
+
+  const trackId = String(row.spotify_track_id || "").trim();
+  if (/^[a-zA-Z0-9]{22}$/.test(trackId)) {
+    return `https://open.spotify.com/track/${trackId}`;
+  }
+
+  const title = releaseLabel(row.song) || releaseLabel(row.album);
+  const query = [row.artist.trim(), title].filter(Boolean).join(" ");
+  return query ? `https://open.spotify.com/search/${encodeURIComponent(query)}` : null;
 }
 
 function statusTextClass(value: string) {
@@ -509,6 +528,7 @@ export default function SchedulingPage() {
   const [activeFilters, setActiveFilters] = useState<Partial<Record<TextField, string[]>>>({});
   const [onlineReferenceKeys, setOnlineReferenceKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [copiedSpotifyRowId, setCopiedSpotifyRowId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncingSpotify, setIsSyncingSpotify] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -1613,6 +1633,18 @@ export default function SchedulingPage() {
     [pushUndo, selectedIds, selectedRows],
   );
 
+  const copySpotifyLink = useCallback(async (row: SchedulingRow) => {
+    const url = spotifyLinkForRow(row);
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedSpotifyRowId(row.id);
+      setError(null);
+    } catch {
+      setError("Could not copy the Spotify link. Please check clipboard permissions.");
+    }
+  }, []);
+
   const visibleSelectedCount = filteredRows.filter((row) =>
     selectedIds.includes(row.id),
   ).length;
@@ -2485,7 +2517,7 @@ export default function SchedulingPage() {
           <table className="w-full min-w-[1600px] border-separate border-spacing-0 text-left text-sm">
             <thead className="sticky top-0 z-10 bg-zinc-950">
               <tr className="border-b border-zinc-800/80 text-xs uppercase tracking-[0.13em] text-zinc-500">
-                <th className="w-[56px] px-4 py-3">
+                <th className="w-[128px] min-w-[128px] px-3 py-3">
                   <input
                     type="checkbox"
                     checked={
@@ -2624,13 +2656,41 @@ export default function SchedulingPage() {
                         selectedIds.includes(row.id) ? "bg-green-950/10" : ""
                       } ${statusText}`}
                     >
-                      <td className="px-4 py-3 align-middle">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(row.id)}
-                          onChange={(event) => toggleSelection(row, index, event)}
-                          className="h-4 w-4 rounded border-zinc-700 accent-green-500"
-                        />
+                      <td className="px-3 py-3 align-middle">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(row.id)}
+                            onChange={(event) => toggleSelection(row, index, event)}
+                            className="h-4 w-4 shrink-0 rounded border-zinc-700 accent-green-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void copySpotifyLink(row)}
+                            disabled={!spotifyLinkForRow(row)}
+                            title={copiedSpotifyRowId === row.id ? "Copied Spotify link" : "Copy Spotify link"}
+                            aria-label="Copy Spotify link"
+                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 transition hover:border-green-500 hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-30 ${copiedSpotifyRowId === row.id ? "text-green-400" : "text-zinc-400"}`}
+                          >
+                            {copiedSpotifyRowId === row.id ? (
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                            )}
+                          </button>
+                          <a
+                            href={spotifyLinkForRow(row) || undefined}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open on Spotify in a new tab"
+                            aria-label="Open on Spotify in a new tab"
+                            aria-disabled={!spotifyLinkForRow(row)}
+                            onClick={(event) => { if (!spotifyLinkForRow(row)) event.preventDefault(); }}
+                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 text-zinc-400 transition hover:border-green-500 hover:text-green-400 ${!spotifyLinkForRow(row) ? "pointer-events-none opacity-30" : ""}`}
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9" /><path d="M17 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h5" /></svg>
+                          </a>
+                        </div>
                       </td>
 
                       {COLUMNS.map((column) => (
