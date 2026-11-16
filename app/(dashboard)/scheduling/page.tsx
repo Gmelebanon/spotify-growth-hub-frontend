@@ -998,6 +998,23 @@ export default function SchedulingPage() {
     });
 
     return [...filtered].sort((a, b) => {
+      // Release dates must be compared chronologically, not as text. The API
+      // may return YYYY-MM-DD, ISO timestamps, or imported date strings.
+      if (sortField === "release_date") {
+        const aDate = releaseDateTimestamp(a.release_date);
+        const bDate = releaseDateTimestamp(b.release_date);
+
+        // Keep blank/invalid dates at the bottom in either direction.
+        if (aDate === null && bDate !== null) return 1;
+        if (bDate === null && aDate !== null) return -1;
+        if (aDate !== null && bDate !== null && aDate !== bDate) {
+          return sortDirection === "asc" ? aDate - bDate : bDate - aDate;
+        }
+
+        // Stable ordering for releases on the same day.
+        return a.sort_order - b.sort_order || a.id - b.id;
+      }
+
       const aRaw =
         sortField === "status"
           ? statusForRow(a, onlineReferenceKeys)
@@ -2716,6 +2733,7 @@ export default function SchedulingPage() {
                           ) : column.type === "date" ? (
                             <input
                               type="date"
+                              key={`${row.id}-${formatDateForInput(row[column.field])}`}
                               defaultValue={formatDateForInput(row[column.field])}
                               onBlur={(event) =>
                                 handleTextBlur(row, column.field, event.target.value)
