@@ -854,6 +854,28 @@ export default function PlaylistManagerPage() {
   const [syncStatus, setSyncStatus] = useState<Record<string, string>>({});
   const [isRefreshingNames, setIsRefreshingNames] = useState(false);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const saveVersionRef = useRef(0);
+
+  // Serialize full-state writes so an older request cannot overwrite a newer import.
+  const queueDatabaseSave = (nextState: PlaylistManagerState) => {
+    const version = ++saveVersionRef.current;
+    setSaveStatus("saving");
+    const operation = saveQueueRef.current.catch(() => undefined).then(() =>
+      saveStateToDatabase(nextState),
+    );
+    saveQueueRef.current = operation;
+    return operation.then(
+      () => {
+        if (version === saveVersionRef.current) setSaveStatus("saved");
+      },
+      (error: unknown) => {
+        if (version === saveVersionRef.current) setSaveStatus("error");
+        throw error;
+      },
+    );
+  };
 
   const accountsQuery = useQuery<AccountItem[]>({
     queryKey: ["accounts"],
@@ -903,11 +925,13 @@ export default function PlaylistManagerPage() {
     setState(nextState);
     saveStateToLocalStorage(nextState);
 
-    saveStateToDatabase(nextState).catch(() => {
-      setPageMessage(
-        "Saved locally, but database save failed. Check backend connection.",
-      );
-    });
+    return queueDatabaseSave(nextState).then(
+      () => true,
+      () => {
+        setPageMessage("Saved locally, but database save failed. Check backend connection.");
+        return false;
+      },
+    );
   };
 
 
@@ -1335,7 +1359,7 @@ export default function PlaylistManagerPage() {
     });
   };
 
-  const handleImportPlaylist = () => {
+  const handleImportPlaylist = async () => {
     if (!importMode) return;
 
     if (!importPlaylistLink.trim()) {
@@ -1373,14 +1397,16 @@ export default function PlaylistManagerPage() {
         ? state.savedMasterPlaylists
         : [master, ...state.savedMasterPlaylists];
 
-      persistState({
+      const saved = await persistState({
         ...state,
         savedMasterPlaylists,
         selectedSavedMasterPlaylistId: master.id,
         ...syncMasterMetaFromSelection(master),
       });
 
-      setPageMessage(`${selected.name} imported as master playlist.`);
+      setPageMessage(saved
+        ? `${selected.name} imported and saved successfully.`
+        : `${selected.name} imported locally, but database save failed. Please retry Save.`);
     }
 
     if (importMode === "synced") {
@@ -1398,7 +1424,7 @@ export default function PlaylistManagerPage() {
       if (exists) {
         setPageMessage("This synced playlist is already imported.");
       } else {
-        persistState({
+        const saved = await persistState({
           ...state,
           syncedPlaylists: [
             ...state.syncedPlaylists,
@@ -1419,7 +1445,9 @@ export default function PlaylistManagerPage() {
             },
           ],
         });
-        setPageMessage(`${selected.name} imported as synced playlist.`);
+        setPageMessage(saved
+          ? `${selected.name} imported and saved successfully.`
+          : `${selected.name} imported locally, but database save failed. Please retry Save.`);
       }
     }
 
@@ -1697,9 +1725,9 @@ export default function PlaylistManagerPage() {
           Object.assign(nextState, syncMasterMetaFromSelection(master));
         }
       });
-      persistState(nextState);
+      const saved = await persistState(nextState);
       setPageMessage(
-        importedMasters === 0 && importedSynced === 0
+        !saved ? "CSV imported locally, but database save failed. Please retry Save." : importedMasters === 0 && importedSynced === 0
           ? `CSV imported, but no usable rows were found. Skipped: ${skipped}. Make sure columns are: account_name, master_playlist_id, master_playlist_name, then synced_playlist_1, synced_playlist_2, etc.`
           : `CSV imported. Masters: ${importedMasters}, synced playlists: ${importedSynced}, skipped: ${skipped}.`,
       );
@@ -1869,39 +1897,10 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
   };
 
   const handleSaveOrder = async () => {
-    if (!state.masterPlaylistId || !state.masterPlaylistAccountId) {
-      setPageMessage("Import a master playlist first.");
-      return;
-    }
-
-    try {
-      saveStateToLocalStorage(state);
-      await saveStateToDatabase(state);
-
-      if (!selectedCurationBox || selectedCurationBox.tracks.length === 0) {
-        setPageMessage(
-          "Playlist Manager saved. This master playlist has 0 curation tracks.",
-        );
-        return;
-      }
-
-      await replacePlaylistTracks(
-        state.masterPlaylistAccountId,
-        state.masterPlaylistId,
-        selectedCurationBox.tracks.map((track) => ({
-          id: track.spotify_id || track.id,
-          spotify_id: track.spotify_id || track.id,
-          title: track.title,
-          artist: track.artist,
-        })),
-      );
-
-      setPageMessage("Playlist order saved to Spotify and Playlist Manager.");
-    } catch (error) {
-      setPageMessage(
-        error instanceof Error ? error.message : "Save order failed.",
-      );
-    }
+    const saved = await persistState(state);
+    setPageMessage(saved
+      ? "Playlist Manager saved successfully."
+      : "Saved locally, but database save failed. Please retry Save.");
   };
 
   const handleAddOneTrack = async () => {
@@ -2332,7 +2331,11 @@ This only clears the Playlist Manager curation list. It will not delete songs fr
               onClick={handleSaveOrder}
               className="h-12 rounded-xl border border-zinc-700 px-7 text-sm font-semibold text-white hover:bg-zinc-900"
             >
-              Save
+              {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? (
+                <span className="inline-flex items-center gap-2 text-green-400">
+                  <span aria-hidden="true">✓</span> Saved
+                </span>
+              ) : saveStatus === "error" ? "Retry Save" : "Save"}
             </button>
           </div>
 
