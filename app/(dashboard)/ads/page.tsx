@@ -1512,6 +1512,8 @@ export default function AdsPage() {
   const [undoStack, setUndoStack] = useState<Record<string, RowMeta>[]>([]);
   const [adModalKey, setAdModalKey] = useState<string | null>(null);
   const [bulkAdModalOpen, setBulkAdModalOpen] = useState(false);
+  const [bulkMasterSaving, setBulkMasterSaving] = useState(false);
+  const [bulkMasterError, setBulkMasterError] = useState("");
   const [modalAdIndex, setModalAdIndex] = useState<number | null>(null);
   const [modalDate, setModalDate] = useState("");
   const [modalColor, setModalColor] = useState<CodeColor>("gray");
@@ -2136,8 +2138,9 @@ export default function AdsPage() {
     const selectedName = masterName.trim();
     if (!selectedName) return;
 
+    const latestState = await fetchLatestPlaylistManagerState();
     const currentState =
-      ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) || {};
+      latestState ?? ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {});
 
     const { id: masterId, list: nextSavedMasterPlaylists } = findOrCreateMasterPlaylistEntry(
       currentState,
@@ -2608,6 +2611,45 @@ export default function AdsPage() {
     persistRowData(next);
     setSelectedRows({});
     setLastSelectedRowIndex(null);
+  };
+
+  const applyMasterToSelected = async (masterName: string) => {
+    if (!masterName || bulkMasterSaving) return;
+    const targets = filtered.filter((playlist) => selectedRows[playlistKey(playlist)]);
+    if (!targets.length) return;
+
+    setBulkMasterSaving(true);
+    setBulkMasterError("");
+    const next = { ...rowData };
+    const changes = targets.map((playlist) => {
+      const key = playlistKey(playlist);
+      const previous = { ...getDefaultRowData(playlist), ...next[key] };
+      next[key] = { ...previous, master: masterName };
+      return { playlist, previousMaster: String(previous.master || "").trim() };
+    });
+    persistRowData(next);
+    try {
+      for (const { playlist, previousMaster } of changes) {
+        const meta = next[playlistKey(playlist)];
+        await Promise.all([
+          saveAdsSettingsToDatabase(playlist.id, playlist.name, meta),
+          saveAdsMetaToDatabase(playlist.id, meta, playlist.name),
+        ]);
+        if (previousMaster.toLowerCase() !== masterName.toLowerCase()) {
+          await ensureMasterPlaylistInManager(masterName, playlist);
+          if (previousMaster) {
+            await removeOldMasterPlaylistFromManager(previousMaster, playlist);
+          }
+        }
+      }
+      setSelectedRows({});
+      setLastSelectedRowIndex(null);
+    } catch (error) {
+      console.error("Could not apply master playlist to all selected rows", error);
+      setBulkMasterError("Some master playlist updates could not be saved. Please retry.");
+    } finally {
+      setBulkMasterSaving(false);
+    }
   };
 
   const openAdModal = (playlist: PlaylistRow, adIndex?: number) => {
@@ -3152,6 +3194,22 @@ export default function AdsPage() {
                   </option>
                 ))}
               </select>
+              <select
+                value=""
+                disabled={bulkMasterSaving}
+                onChange={(e) => {
+                  const master = e.target.value;
+                  if (master) void applyMasterToSelected(master);
+                }}
+                className="h-10 max-w-[240px] rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-sm font-semibold text-white outline-none focus:border-green-500 disabled:opacity-50"
+                title="Assign a master playlist to all selected playlists"
+                aria-label="Change master playlist for selected playlists"
+              >
+                <option value="">{bulkMasterSaving ? "Saving masters…" : "Change Master Playlist…"}</option>
+                {masterOptions.map((master) => (
+                  <option key={master} value={master}>{master}</option>
+                ))}
+              </select>
               <button
                 type="button"
                 onClick={openBulkAdModal}
@@ -3178,6 +3236,10 @@ export default function AdsPage() {
                 <EyeIcon />
               </button>
             </>
+          ) : null}
+
+          {bulkMasterError ? (
+            <span role="alert" className="text-xs text-red-400">{bulkMasterError}</span>
           ) : null}
 
           {selectedAdKeys.length > 0 ? (
