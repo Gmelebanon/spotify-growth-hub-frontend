@@ -822,6 +822,8 @@ function loadPlaylistManagerItemsFromLocalStorage() {
   if (typeof window === "undefined") return [] as Array<Record<string, unknown>>;
 
   const keys = [
+    "nerd-engine-playlist-manager-global",
+    "master_playlists",
     "nerd-engine-playlist-manager-state",
     "playlist-manager-state",
     "nerd-engine-master-playlists",
@@ -936,6 +938,8 @@ function persistPlaylistManagerStateLocally(nextState: Record<string, unknown>) 
   if (typeof window === "undefined") return;
 
   const stateKeys = [
+    "nerd-engine-playlist-manager-global",
+    "master_playlists",
     "nerd-engine-playlist-manager-state",
     "playlist-manager-state",
   ];
@@ -2020,6 +2024,11 @@ export default function AdsPage() {
       return;
     }
 
+    if (allAccountQueries.some((query) => query.isPending || query.isFetching || query.isError)) {
+      alert("Wait for all accounts' playlists to finish loading successfully before backfilling.");
+      return;
+    }
+
     const confirmed = window.confirm(
       "This scans every playlist's currently-saved Master value and links it " +
         "in Playlist Manager. Existing links are left as-is; only playlists " +
@@ -2027,8 +2036,30 @@ export default function AdsPage() {
     );
     if (!confirmed) return;
 
-    const currentState =
-      ((playlistManagerStateQuery.data as Record<string, unknown> | null | undefined) ?? {}) || {};
+    // Always use the latest server state. A cached React Query snapshot may
+    // predate a recent import and would overwrite it with stale data.
+    const latestState = await fetchLatestPlaylistManagerState();
+    if (!latestState) {
+      alert("Could not load the latest Playlist Manager state. Nothing was changed.");
+      return;
+    }
+    const currentState = latestState;
+
+    // The table's local rowData can be stale or empty before settings hydrate.
+    // Read persisted per-playlist Master assignments from the backend as well.
+    let savedSettingsRows: Awaited<ReturnType<typeof fetchAdsSettingsFromDatabase>> = [];
+    try {
+      savedSettingsRows = await fetchAdsSettingsFromDatabase();
+    } catch (error) {
+      console.error("Could not load saved playlist master assignments", error);
+      alert("Could not load saved playlist settings. Backfill was cancelled to avoid missing assignments.");
+      return;
+    }
+    const settingsByPlaylistId = new Map(
+      savedSettingsRows
+        .filter((row) => row.playlist_id || row.spotify_id)
+        .map((row) => [String(row.playlist_id || row.spotify_id), row]),
+    );
 
     let workingSavedMasterPlaylists = Array.isArray(currentState.savedMasterPlaylists)
       ? [...(currentState.savedMasterPlaylists as Record<string, unknown>[])]
@@ -2042,7 +2073,20 @@ export default function AdsPage() {
 
     for (const playlist of playlists) {
       const key = playlistKey(playlist);
-      const masterName = String(rowData[key]?.master || "").trim();
+      const savedSettingsRow = [
+        String(playlist.id),
+        String(playlist.spotify_id || ""),
+        String(playlist.spotify_playlist_id || ""),
+        getPlaylistId(playlist),
+      ]
+        .map((id) => settingsByPlaylistId.get(id))
+        .find(Boolean);
+      const persistedMaster = savedSettingsRow
+        ? String(rowMetaFromSettingsRow(savedSettingsRow).master || "").trim()
+        : "";
+      const masterName = String(
+        persistedMaster || rowData[key]?.master || getDefaultRowData(playlist).master || "",
+      ).trim();
       if (!masterName) continue;
 
       const nameKey = masterName.toLowerCase();
@@ -2108,8 +2152,8 @@ export default function AdsPage() {
       linkedCount += 1;
     }
 
-    if (linkedCount === 0) {
-      alert("Nothing to backfill — every playlist with a Master set is already linked.");
+    if (linkedCount === 0 && createdMasterCount === 0) {
+      alert("Nothing to backfill — no additional saved Master assignments were found among loaded playlists.");
       return;
     }
 
@@ -2312,34 +2356,67 @@ export default function AdsPage() {
       }
     };
 
-    // Only show playlists that were intentionally saved in Playlist Manager.
-    // Do not include synced/imported/all playlist arrays here, otherwise the
-    // Master dropdown becomes a full playlist list again.
-    pushSavedArray(state?.savedPlaylists);
-    pushSavedArray(state?.saved_playlists);
+    // Playlist Manager stores its actual Master dropdown choices here.
+    // Do not include synced playlists, which are children rather than masters.
     pushSavedArray(state?.savedMasterPlaylists);
     pushSavedArray(state?.saved_master_playlists);
     pushSavedArray(state?.masterPlaylists);
     pushSavedArray(state?.master_playlists);
 
-    const localSavedItems = loadPlaylistManagerItemsFromLocalStorage().filter((item) => {
-      const source = String(item.source ?? item.type ?? item.kind ?? "").toLowerCase();
-      return (
-        source.includes("saved") ||
-        source.includes("master") ||
-        Boolean(item.saved) ||
-        Boolean(item.isSaved) ||
-        Boolean(item.is_saved)
-      );
-    });
+    // Playlist Manager also writes the same master list under "master_playlists"
+    // and its full state under "nerd-engine-playlist-manager-global".
+    // This is important when the backend state has not loaded yet.
+    if (typeof window !== "undefined") {
+      for (const key of ["master_playlists", "nerd-engine-playlist-manager-global"]) {
+        try {
+          const raw = window.localStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            pushSavedArray(parsed);
+          } else if (parsed && typeof parsed === "object") {
+            pushSavedArray(parsed.savedMasterPlaylists);
+          }
+        } catch {
+          // Ignore malformed local cache.
+        }
+      }
+    }
 
-    const names = [...savedItems, ...localSavedItems]
+    const names = savedItems
       .map(readPlaylistManagerName)
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
     return uniqueValues(names);
   }, [playlistManagerStateQuery.data]);
+  // Resolve Master from the Playlist Manager's saved links as a fallback.
+  // A playlist can be correctly linked in Manager while its ads_meta.master_playlist
+  // is blank; filtering only the Ads metadata would incorrectly hide that row.
+  const managerMasterByPlaylist = useMemo(() => {
+    const state = playlistManagerStateQuery.data as Record<string, unknown> | null | undefined;
+    const masters = Array.isArray(state?.savedMasterPlaylists)
+      ? (state.savedMasterPlaylists as Record<string, unknown>[])
+      : [];
+    const synced = Array.isArray(state?.syncedPlaylists)
+      ? (state.syncedPlaylists as Record<string, unknown>[])
+      : [];
+    const names = new Map(masters.map((item) => [String(item.id), String(item.name || "")]));
+    const result = new Map<string, string>();
+    for (const item of synced) {
+      const masterName = names.get(String(item.masterPlaylistId || ""));
+      if (masterName && item.playlistId != null) {
+        result.set(`${String(item.accountId ?? 0)}-${String(item.playlistId)}`, masterName);
+      }
+    }
+    return result;
+  }, [playlistManagerStateQuery.data]);
+
+  const getEffectiveMaster = (playlist: PlaylistRow) =>
+    String(getRowData(playlist).master || "").trim() ||
+    managerMasterByPlaylist.get(`${String(playlist.account_id ?? 0)}-${String(playlist.id)}`) ||
+    "";
+
   const listedCountries = useMemo(
     () =>
       uniqueValues(playlists.map((playlist) => getRowData(playlist).country)),
@@ -2364,7 +2441,7 @@ export default function AdsPage() {
           getRowData(p).category,
           getRowData(p).genre,
           getRowData(p).country,
-          getRowData(p).master,
+          getEffectiveMaster(p),
         ]
           .join(" ")
           .toLowerCase()
@@ -2380,7 +2457,7 @@ export default function AdsPage() {
     if (filters.genre)
       data = data.filter((p) => getRowData(p).genre === filters.genre);
     if (filters.master)
-      data = data.filter((p) => getRowData(p).master === filters.master);
+      data = data.filter((p) => getEffectiveMaster(p).toLowerCase() === filters.master.toLowerCase());
     if (filters.lastUpdate !== "all") {
       const days =
         filters.lastUpdate === "today"
@@ -2614,7 +2691,8 @@ export default function AdsPage() {
   };
 
   const applyMasterToSelected = async (masterName: string) => {
-    if (!masterName || bulkMasterSaving) return;
+    if (bulkMasterSaving) return;
+    const normalizedMasterName = masterName === "__unassigned__" ? "" : masterName.trim();
     const targets = filtered.filter((playlist) => selectedRows[playlistKey(playlist)]);
     if (!targets.length) return;
 
@@ -2624,7 +2702,7 @@ export default function AdsPage() {
     const changes = targets.map((playlist) => {
       const key = playlistKey(playlist);
       const previous = { ...getDefaultRowData(playlist), ...next[key] };
-      next[key] = { ...previous, master: masterName };
+      next[key] = { ...previous, master: normalizedMasterName };
       return { playlist, previousMaster: String(previous.master || "").trim() };
     });
     persistRowData(next);
@@ -2635,8 +2713,10 @@ export default function AdsPage() {
           saveAdsSettingsToDatabase(playlist.id, playlist.name, meta),
           saveAdsMetaToDatabase(playlist.id, meta, playlist.name),
         ]);
-        if (previousMaster.toLowerCase() !== masterName.toLowerCase()) {
-          await ensureMasterPlaylistInManager(masterName, playlist);
+        if (previousMaster.toLowerCase() !== normalizedMasterName.toLowerCase()) {
+          if (normalizedMasterName) {
+            await ensureMasterPlaylistInManager(normalizedMasterName, playlist);
+          }
           if (previousMaster) {
             await removeOldMasterPlaylistFromManager(previousMaster, playlist);
           }
@@ -3206,6 +3286,8 @@ export default function AdsPage() {
                 aria-label="Change master playlist for selected playlists"
               >
                 <option value="">{bulkMasterSaving ? "Saving masters…" : "Change Master Playlist…"}</option>
+                <option value="__unassigned__">Master</option>
+                {masterOptions.length === 0 ? <option disabled value="__none">No saved Master Playlists found</option> : null}
                 {masterOptions.map((master) => (
                   <option key={master} value={master}>{master}</option>
                 ))}
