@@ -1677,8 +1677,10 @@ export default function AdsPage() {
       return payload?.state ?? null;
     },
     retry: false,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
+    refetchInterval: 15_000,
   });
 
   const playlists = useMemo(() => {
@@ -2087,7 +2089,7 @@ export default function AdsPage() {
       const masterName = String(
         persistedMaster || rowData[key]?.master || getDefaultRowData(playlist).master || "",
       ).trim();
-      if (!masterName) continue;
+      if (!masterName || masterName.toLowerCase() === "master") continue;
 
       const nameKey = masterName.toLowerCase();
       let masterEntry = workingSavedMasterPlaylists.find(
@@ -2153,7 +2155,8 @@ export default function AdsPage() {
     }
 
     if (linkedCount === 0 && createdMasterCount === 0) {
-      alert("Nothing to backfill — no additional saved Master assignments were found among loaded playlists.");
+      await playlistManagerStateQuery.refetch();
+      alert("No missing assignments to backfill. Playlist Manager links are already shown automatically in the Master column and filter once saved. If you just imported playlists, wait until Playlist Manager displays ✓ Saved, then return here or refresh.");
       return;
     }
 
@@ -2404,26 +2407,31 @@ export default function AdsPage() {
     const result = new Map<string, string>();
     for (const item of synced) {
       const masterName = names.get(String(item.masterPlaylistId ?? ""));
-      const playlistId = item.playlistId ?? item.playlist_id ?? item.spotifyPlaylistId;
-      if (!masterName || !playlistId) continue;
+      if (!masterName) continue;
       const accountId = item.accountId ?? item.account_id;
-      if (accountId !== undefined && accountId !== null && String(accountId) !== "") {
-        result.set(`${String(accountId)}-${String(playlistId)}`, masterName);
-      } else {
-        // Only use the ID-only fallback when the Manager entry has no account.
-        result.set(String(playlistId), masterName);
+      const playlistIds = [item.playlistId, item.playlist_id, item.spotifyId, item.spotify_id]
+        .filter((value) => value !== null && value !== undefined && String(value).trim());
+      for (const id of playlistIds) {
+        // Database playlist IDs are unique within an account. Spotify IDs are
+        // globally unique. Prefer account-scoped lookup when possible.
+        if (accountId !== undefined && accountId !== null && String(accountId) !== "") {
+          result.set(`${String(accountId)}-${String(id)}`, masterName);
+        }
+        result.set(`spotify:${String(id)}`, masterName);
       }
     }
     return result;
   }, [playlistManagerStateQuery.data]);
 
   const getEffectiveMaster = (playlist: PlaylistRow) => {
-    const managerMaster =
-      managerMasterByPlaylist.get(`${String(playlist.account_id ?? "")}-${String(playlist.id)}`) ??
-      managerMasterByPlaylist.get(String(playlist.id));
-    if (managerMaster) return managerMaster;
+    const ids = [playlist.id, playlist.spotify_id, playlist.spotify_playlist_id]
+      .filter((value) => value !== null && value !== undefined && String(value).trim());
+    for (const id of ids) {
+      const linked = managerMasterByPlaylist.get(`${String(playlist.account_id ?? "")}-${String(id)}`)
+        ?? managerMasterByPlaylist.get(`spotify:${String(id)}`);
+      if (linked) return linked;
+    }
     const savedMaster = String(getRowData(playlist).master || "").trim();
-    // 'Master' is the empty dropdown label, not an assigned master playlist.
     return savedMaster.toLowerCase() === "master" ? "" : savedMaster;
   };
 
@@ -3398,7 +3406,7 @@ export default function AdsPage() {
             type="button"
             onClick={backfillAllMasterPlaylistsToManager}
             className="h-10 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-xs font-semibold text-zinc-300 hover:border-green-500 hover:text-green-400"
-            title="Link every playlist's already-saved Master value into Playlist Manager (one-time catch-up)"
+            title="Repair legacy saved Master assignments. Existing Playlist Manager links appear automatically."
           >
             Backfill Masters
           </button>
