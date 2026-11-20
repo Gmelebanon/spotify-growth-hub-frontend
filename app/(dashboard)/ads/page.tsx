@@ -2390,9 +2390,8 @@ export default function AdsPage() {
 
     return uniqueValues(names);
   }, [playlistManagerStateQuery.data]);
-  // Resolve Master from the Playlist Manager's saved links as a fallback.
-  // A playlist can be correctly linked in Manager while its ads_meta.master_playlist
-  // is blank; filtering only the Ads metadata would incorrectly hide that row.
+  // Playlist Manager is authoritative for saved master/child relationships.
+  // Only match real Spotify playlist IDs, never playlist titles or generic labels.
   const managerMasterByPlaylist = useMemo(() => {
     const state = playlistManagerStateQuery.data as Record<string, unknown> | null | undefined;
     const masters = Array.isArray(state?.savedMasterPlaylists)
@@ -2401,21 +2400,32 @@ export default function AdsPage() {
     const synced = Array.isArray(state?.syncedPlaylists)
       ? (state.syncedPlaylists as Record<string, unknown>[])
       : [];
-    const names = new Map(masters.map((item) => [String(item.id), String(item.name || "")]));
+    const names = new Map(masters.map((item) => [String(item.id), readPlaylistManagerName(item)]));
     const result = new Map<string, string>();
     for (const item of synced) {
-      const masterName = names.get(String(item.masterPlaylistId || ""));
-      if (masterName && item.playlistId != null) {
-        result.set(`${String(item.accountId ?? 0)}-${String(item.playlistId)}`, masterName);
+      const masterName = names.get(String(item.masterPlaylistId ?? ""));
+      const playlistId = item.playlistId ?? item.playlist_id ?? item.spotifyPlaylistId;
+      if (!masterName || !playlistId) continue;
+      const accountId = item.accountId ?? item.account_id;
+      if (accountId !== undefined && accountId !== null && String(accountId) !== "") {
+        result.set(`${String(accountId)}-${String(playlistId)}`, masterName);
+      } else {
+        // Only use the ID-only fallback when the Manager entry has no account.
+        result.set(String(playlistId), masterName);
       }
     }
     return result;
   }, [playlistManagerStateQuery.data]);
 
-  const getEffectiveMaster = (playlist: PlaylistRow) =>
-    String(getRowData(playlist).master || "").trim() ||
-    managerMasterByPlaylist.get(`${String(playlist.account_id ?? 0)}-${String(playlist.id)}`) ||
-    "";
+  const getEffectiveMaster = (playlist: PlaylistRow) => {
+    const managerMaster =
+      managerMasterByPlaylist.get(`${String(playlist.account_id ?? "")}-${String(playlist.id)}`) ??
+      managerMasterByPlaylist.get(String(playlist.id));
+    if (managerMaster) return managerMaster;
+    const savedMaster = String(getRowData(playlist).master || "").trim();
+    // 'Master' is the empty dropdown label, not an assigned master playlist.
+    return savedMaster.toLowerCase() === "master" ? "" : savedMaster;
+  };
 
   const listedCountries = useMemo(
     () =>
@@ -2521,6 +2531,7 @@ export default function AdsPage() {
     accounts,
     hiddenRows,
     hiddenMode,
+    managerMasterByPlaylist,
   ]);
 
   const rowsPerPage = 120;
@@ -3859,7 +3870,7 @@ export default function AdsPage() {
                       </div>
                       <div className="px-2">
                         <AdsSelect
-                          value={data.master}
+                          value={getEffectiveMaster(playlist)}
                           placeholder="Master"
                           options={masterOptions}
                           onChange={(value) =>
